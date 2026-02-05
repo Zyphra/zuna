@@ -7,11 +7,8 @@ This tutorial shows how to preprocess EEG data using Zuna.
 import zuna
 from zuna.preprocessing import process_directory
 
-# INPUT_DIR = "/path/to/your/raw/files"      # Folder with .fif files
-# OUTPUT_DIR = "/path/to/save/pt/files"      # Where to save .pt files
-
-INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/jonas01"      # Folder with .fif files
-OUTPUT_DIR = "jonas_soft/"      # Where to save .pt files
+INPUT_DIR = "data/1_fif_input"      # Folder with raw .fif files
+OUTPUT_DIR = "data/2_pt_input"      # Where to save .pt files
 
 # IMPORTANT: Your input files MUST already have montages set with 3D channel positions
 # See MNE for further infos: https://mne.tools/stable/generated/mne.channels.make_standard_montage.html
@@ -23,7 +20,7 @@ PROCESS_CONFIG = {
     'drop_bad_epochs': False,
     'apply_notch_filter': False,
     'apply_highpass_filter': True,
-    'save_incomplete_batches': False,       # Save even if < 64 epochs
+    'save_incomplete_batches': True,       # Save even if < 64 epochs
     'min_epochs_to_save': 1,               # Minimum epochs required
     'target_sfreq': 256.0,
     'epoch_duration': 5.0,
