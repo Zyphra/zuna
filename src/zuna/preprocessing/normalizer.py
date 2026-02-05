@@ -179,3 +179,4 @@ class Normalizer:
             data_reconstructed = data_reconstructed * norm_params['global_std'] + norm_params['global_mean']
 
         return data_reconstructed
+

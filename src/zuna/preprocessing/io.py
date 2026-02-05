@@ -174,7 +174,9 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
 
 def epochs_to_list(epoch_data: np.ndarray,
                    channel_positions: np.ndarray,
-                   remove_all_zero: bool = True) -> tuple[List[np.ndarray], List[np.ndarray]]:
+                   remove_all_zero: bool = True,
+                   zero_channels: set = None,
+                   channel_names: List[str] = None) -> tuple[List[np.ndarray], List[np.ndarray]]:
     """
     Convert epoch array to list format, optionally removing all-zero entries.
 
@@ -186,6 +188,10 @@ def epochs_to_list(epoch_data: np.ndarray,
         Channel positions (n_channels, 3)
     remove_all_zero : bool
         Whether to remove all-zero epochs/channels
+    zero_channels : set, optional
+        Set of channel names to zero out (for bad channels from raw.info['bads'])
+    channel_names : list of str, optional
+        List of channel names (must be provided if zero_channels is given)
 
     Returns
     -------
@@ -194,6 +200,12 @@ def epochs_to_list(epoch_data: np.ndarray,
     positions_list : list of np.ndarray
         List of corresponding position arrays
     """
+    # Zero out specified channels (bad channels from raw)
+    if zero_channels and channel_names:
+        for ch_idx, ch_name in enumerate(channel_names):
+            if ch_name in zero_channels:
+                epoch_data[:, ch_idx, :] = 0.0
+
     epochs_list = []
     positions_list = []
 

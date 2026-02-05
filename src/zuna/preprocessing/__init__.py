@@ -5,6 +5,7 @@ from .config import ProcessingConfig
 from .processor import EEGProcessor
 from .io import save_pt, load_pt, pt_to_raw
 from .batch import process_directory
+from .interpolation import upsample_channels
 
 __all__ = [
     'ProcessingConfig',
@@ -13,4 +14,5 @@ __all__ = [
     'load_pt',
     'pt_to_raw',
     'process_directory',
+    'upsample_channels',
 ]

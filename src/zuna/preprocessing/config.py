@@ -73,6 +73,12 @@ class ProcessingConfig:
     # Reversibility
     save_normalization_params: bool = True
 
+    # Bad channel handling
+    zero_bad_channels_from_raw: bool = True  # Zero channels marked as bad in raw.info['bads']
+
+    # File chunking
+    max_duration_minutes: float = 10.0  # Split files longer than this into chunks
+
     def __post_init__(self):
         """Validate configuration."""
         if self.target_sfreq <= 0:

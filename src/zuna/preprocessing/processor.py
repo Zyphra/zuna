@@ -61,6 +61,9 @@ class EEGProcessor:
 
         raw = raw.copy()  # Don't modify original
 
+        # Track bad channels from original raw.info['bads'] (if enabled)
+        channels_marked_bad_in_raw = set(raw.info['bads']) if self.config.zero_bad_channels_from_raw else set()
+
         # Get original info for metadata
         orig_sfreq = float(raw.info['sfreq'])
         orig_n_channels = len(raw.ch_names)
@@ -130,8 +133,13 @@ class EEGProcessor:
         )
 
         # Convert to list format (remove all-zero channels/epochs)
+        # Zero out channels that were marked bad in the original raw file
         epochs_list, positions_list = epochs_to_list(
-            epoch_data_cleaned, channel_positions, remove_all_zero=True
+            epoch_data_cleaned,
+            channel_positions,
+            remove_all_zero=True,
+            zero_channels=channels_marked_bad_in_raw,
+            channel_names=raw.ch_names
         )
 
         # Check if we have enough epochs to save
@@ -153,6 +161,7 @@ class EEGProcessor:
             'channel_names': raw.ch_names,
             'channels_dropped_no_coords': channels_dropped_no_coords,
             'bad_channels': sorted(list(bad_channels)),
+            'channels_zeroed_from_raw': sorted(list(channels_marked_bad_in_raw)),
             'notch_frequencies': notch_freqs,
             'n_epochs_original': len(epochs),
             'n_epochs_saved': len(epochs_list),

@@ -1,21 +1,28 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+
 
 [project]
 name = "zuna"
-version = "0.1.0"
-description = "EEG Foundation Model and Preprocessing Pipeline"
+version = "0.0.1"
+description = "Foundation model for EEG reconstruction and interpolation"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "Apache-2.0"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Christopher Warner", email = "chris@zyphra.com"},
+    {name = "Jonas Mago"},
+    {name = "JR Huml"},
+    {name = "Beren Millidge", email = "beren@zyphra.com"}
 ]
+
+keywords = ["eeg", "foundation-model", "neuroscience", "preprocessing"]
+
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -24,33 +31,16 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 
+#CHRIS TODO
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "mne>=1.0.0",
     "torch>=1.9.0",
+    "joblib>=1.0.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov",
-    "black",
-    "ruff",
-]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/zuna"
-Repository = "https://github.com/yourusername/zuna.git"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.black]
-line-length = 100
-target-version = ['py38']
-
-[tool.ruff]
-line-length = 100
-select = ["E", "F", "W", "I"]
-ignore = []
+Homepage = "https://www.zyphra.com"
+Repository = "https://github.com/Zyphra/zuna"

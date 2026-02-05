@@ -24,22 +24,42 @@ pip install -e .
 
 ## Quick Start - Preprocessing
 
+**⚠️ REQUIREMENT**: Your raw EEG files **must** have montages set with 3D channel positions before preprocessing.
+
 ```python
 import zuna
 import mne
 
-# 1. Load your EEG data
+# 1. Load your EEG data (must have montage with 3D positions)
 raw = mne.io.read_raw_fif('your_data.fif', preload=True)
 
-# 2. Set montage (REQUIRED - provides 3D coordinates)
-montage = mne.channels.make_standard_montage('standard_1005')
-raw.set_montage(montage)
+# 2. Verify montage is set
+if raw.get_montage() is None:
+    raise ValueError("File must have montage set!")
 
 # 3. Process to PT format
 metadata = zuna.raw_to_pt(raw, 'output.pt')
 
 # 4. Later, reconstruct back to Raw
 raw_reconstructed = zuna.pt_to_raw('output.pt')
+```
+
+### Setting Montages (if needed)
+
+If your files don't have montages, you'll need to set them first:
+
+```python
+import mne
+
+# Load data
+raw = mne.io.read_raw_fif('data.fif', preload=True)
+
+# Set standard montage
+montage = mne.channels.make_standard_montage('standard_1005')
+raw.set_montage(montage)
+
+# Save with montage
+raw.save('data_with_montage.fif', overwrite=True)
 ```
 
 ## Configuration Options
