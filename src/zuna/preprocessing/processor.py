@@ -142,6 +142,19 @@ class EEGProcessor:
             channel_names=raw.ch_names
         )
 
+        # Apply upsampling if configured
+        channel_names_final = list(raw.ch_names)  # Convert to list for potential modification
+        if self.config.upsample_to_channels is not None and len(epochs_list) > 0:
+            from .interpolation import upsample_channels
+            current_n_channels = len(channel_names_final)
+            if current_n_channels < self.config.upsample_to_channels:
+                epochs_list, positions_list, channel_names_final = upsample_channels(
+                    epochs_list,
+                    positions_list,
+                    channel_names_final,
+                    target_n_channels=self.config.upsample_to_channels
+                )
+
         # Check if we have enough epochs to save
         if not self.config.save_incomplete_batches:
             if len(epochs_list) < self.config.epochs_per_file:
@@ -156,9 +169,9 @@ class EEGProcessor:
             'original_sfreq': orig_sfreq,
             'resampled_sfreq': self.config.target_sfreq,
             'original_n_channels': orig_n_channels,
-            'final_n_channels': len(raw.ch_names),
+            'final_n_channels': len(channel_names_final),
             'original_duration_sec': orig_duration,
-            'channel_names': raw.ch_names,
+            'channel_names': channel_names_final,
             'channels_dropped_no_coords': channels_dropped_no_coords,
             'bad_channels': sorted(list(bad_channels)),
             'channels_zeroed_from_raw': sorted(list(channels_marked_bad_in_raw)),
