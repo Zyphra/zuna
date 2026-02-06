@@ -1,0 +1,91 @@
+model:
+  dim: 1024
+  n_layers: 16
+  head_dim: 64
+  seqlen_t: false
+  huber_c: null # (CW) - was 0.1 [null uses MSE]
+  input_dim: 32 #128 #131 #
+  encoder_input_dim: 32 #128 #131 #
+  encoder_output_dim: 32 #128 #131 # # input_dim*2  # (CW) - "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
+  encoder_latent_downsample_factor: 1   # (CW) - effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
+
+  encoder_sliding_window: 65536 #2048 #256 #512 #256 #1024 #128           # (CW) - default is 128 (2x decoder sliding windows for CR=1)
+  sliding_window: 65536 #2048 #256 #1024 #128                   # (CW) - default is 128
+  xattn_sliding_window: 65536 #2048 #256 #64 #32                # (CW) - default is 32
+  max_seqlen: 50 #40 #10 #256 #1100 #16384                 # (CW) - trying to allow ROPE to work with longer seqs when encoder_latent_downsample_factor=1. 
+
+  adaptive_loss_weighting: true  # (CW) - set to true to try to fix GradNorm Spikes.
+  num_fine_time_pts: 32 #128
+  rope_dim: 4 # 0 = NoPE, 1 = 1D-RoPE in seq-dim, 4 = 4D-RoPE in {x,y,z,tc}.
+  rope_theta: 10000.0 #10000.0 # Default = 10000.0 - too big when max_seqlen=40.
+
+  tok_idx_type: "{x,y,z,tc}"  # null, "t_coarse", "chan_id", "stack_arange_seqlen", "{x,y,z,tc}" 
+  dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EncoderDecoder.sample (use in tandem with NoPE)
+
+  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for z initialization in model.sample .
+
+  dropout_type: "zero" # {"zero", "learnable"}
+
+  # ffn_dim_multiplier: 0.7
+  # encoder_hidden_dim: 2048
+
+  # decoder_repa_index: 3
+  # encoder_repa_index: 10
+  # repa_dim: 768
+  # repa_loss_fn: huberweighted
+
+data:
+  use_b2: true # If true, use Backblaze B2 for dataset loading, otherwise use local filesystem.
+
+  # data_dir: /workspace/bci/data/mmap_june16_padded_fp32_HPF_chunked2
+  # data_dir: /workspace/bci/data/mmap_june16_padded_fp32_HPF_chunked2_eval
+  # data_dir: /workspace/bci/data/tmp_tuh
+  # data_dir: /workspace/bci/data/tmp_tuh_eval
+  # data_dir: /workspace/bci/data/pt3d/v3/train/tuh
+  # data_dir: /workspace/bci/data/pt3d/v3/train/one
+  # data_dir: /workspace/bci/data/pt3d/v3/train  
+  # data_dir: /workspace/bci/data/pt3d/v3/overfit/tuh
+  # data_dir: /workspace/bci/data/pt3d/v4/train/tuh
+  # data_dir: /workspace/bci/data/pt3d/v4/train
+  # data_dir: /workspace/bci/data/pt3d/v4/eval/tuh # ds000000_000808_*.pt files only. (11k samples)
+
+  # data_dir: /workspace/bci/data/eval2/Zhou2016/ # dataset locally.
+  data_dir: datasets/v5/train/                  # dataset on B2. 
+
+  glob_filter: "**/*.pt" # this filters the dataset to only contain files with this string in it.
+  chan_num_filter: null # null or integer number of channels we want in each sample
+  sample_rate: 256 #512 #256
+  seq_len: 1280 #2560 #1280
+  num_fine_time_pts: 32 #128
+  use_coarse_time: "B" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals.
+  cat_chan_xyz_and_eeg: false #false #
+  dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
+  randomly_permute_sequence: false #true
+  channel_dropout_prob: 0.90 # Probability of applying channel dropout to the EEG signal during training.
+  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for stft noise schedule.
+  masked_in_decoder: false # (SHOULD NOT MATTER IN EVAL.) - If true, mask out channels in decoder input when channel is dropped. (true works, false does not)
+
+  num_bins_discretize_xyz_chan_pos: 50 # Number of bins to discretize channel positions to use in 4d-RoPE. # 40 with "old" xyz_extremes, 100 with "thirteens" xyz_extremes
+  chan_pos_xyz_extremes_type: "twelves" # "old" for v4 dataset or "thirteens" or "twelves" for v5 dataset
+
+  # data_norm: 1 #5 #1 # (CW) - this is the norm to divide the data by, to normalize it to [-1,1] range. (1 for TUH data, 5 for OpenNeuro data.)
+  batch_size: 1 #64 #1024 # 32              # (CW) - editted this for debug. KEEP AT 1 NOW. PACKING IN DATALOADER!
+  target_packed_seqlen: 10000 #4 # 32768              # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  # do_N_epochs: None
+  num_workers: 0              # (CW) - editted this for debug.
+  prefetch_factor: null          # (CW) - editted this for debug.
+  persistent_workers: false    # (CW) - added this. defaults to true
+  pin_memory: false            # (CW) - added this. defaults to true
+  diffusion_forcing: false
+  shuffle: true              # (CW) - trying to pin down is bad data is causing GradNorm explosion.
+  seed: 316                   # (CW) - seed for data shuffling (int or null)
+
+checkpoint:
+
+  init_ckpt_path: /workspace/bci/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000
+  # init_ckpt_path: /workspace/bci/checkpoints/bci/bci_AY2l_bigrun14/checkpoints/0000104000 # LR=VARIABLE, (eeg_sig_norm = 10.0, eeg_sig_clip = 1.0) 4D-{x,y,z,tc}-RoPE + 0.9-(.8/.2)-chan-Dropout-Zeros + UnmaskedInDecoder. GradNormClip=200, RoPE_theta=10k. Optim.betas = (0.9,0.95). ALW on. Encoder_mmd_weight= 1e-2. Model_dim=1024. Train on v5/train unfiltered. noise_sigma=0.1. xyz_extremes=[-.13,+.13] w/ num_bins=max_seqlen=100  Sliding_windows=65536. tc=40. tf=input_dims=32. Target_packed_seqlen=15000. 2 nodes * 1 grad_acc for 100k steps.  
+  # init_ckpt_path: /workspace/bci/checkpoints/bci/bci_AY2l_bigrun13/checkpoints/0000035000 # LR=1e-4, (eeg_sig_norm = 10.0, eeg_sig_clip = 1.0) 4D-{x,y,z,tc}-RoPE + 0.9-(.8/.2)-chan-Dropout-Zeros + UnmaskedInDecoder. GradNormClip=200, RoPE_theta=10k. Optim.betas = (0.9,0.95). ALW on. Encoder_mmd_weight= 1e-2. Model_dim=1024. Train on v5/train unfiltered. noise_sigma=0.1. xyz_extremes=[-.13,+.13] w/ num_bins=max_seqlen=100  Sliding_windows=65536. tc=40. tf=input_dims=32. Target_packed_seqlen=15000. 2 nodes * 1 grad_acc for 50k steps.  
+  # init_ckpt_path: /workspace/bci/checkpoints/bci/bci_AY2l_bigrun10/checkpoints/0000050000 # LR=1e-4, (eeg_sig_norm = 1.0, eeg_sig_clip = None) 4D-{x,y,z,tc}-RoPE + 0.9-(.8/.2)-chan-Dropout-Zeros + UnmaskedInDecoder. GradNormClip=200, RoPE_theta=10k. Optim.betas = (0.9,0.95). ALW on. Encoder_mmd_weight= 1e-2. Model_dim=1024. Train on v5/train unfiltered. noise_sigma=1.0. xyz_extremes=[-.13,+.13] w/ num_bins=max_seqlen=100  Sliding_windows=65536. tc=40. tf=input_dims=32. Target_packed_seqlen=15000. 1 node * 1 grad_acc for 50k steps.  
+
+dump_dir: /workspace/bci/checkpoints/bci/bci_AY2l_eval
+name: bci_AY2l_eval
