@@ -45,12 +45,14 @@ from torch.distributed._tensor import DTensor
 from lingua.args import dataclass_from_dict, dump_config, flatten_dict
 from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
-from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
+# from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
+from .utils_pt_mne import interpolate_signals_with_mne #JM
 
-from apps.AY2latent_bci.eeg_data import (
-    # EEGDataset_v2, 
-    EEGProcessor, 
-    BCIDatasetArgs, 
+# from apps.AY2latent_bci.eeg_data import (  #JM
+from .eeg_data import (  #JM
+    # EEGDataset_v2,
+    EEGProcessor,
+    BCIDatasetArgs,
     # create_dataloader,
     create_dataloader_v2,
     chop_and_reshape_signals, # for debug
