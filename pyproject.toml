@@ -31,14 +31,49 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 
-#CHRIS TODO
+# surely some of these are unnecessary (CW)
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "mne>=1.0.0",
     "torch>=1.9.0",
     "joblib>=1.0.0",
+    "omegaconf",
+    "msgspec",
+    "rouge-score",
+    "sacrebleu",
+    "sentencepiece",
+    "tiktoken",
+    "fsspec",
+    "blobfile",
+    "wandb",
+    "viztracer", 
+    "lm-eval", 
+    "pynvml", 
+    "datatrove", 
+    "orjson", 
+    "transformers", 
+    "huggingface-hub", 
+    "einops", 
+    "einx", 
+    "vector-quantize-pytorch", 
+    "argbind", 
+    "pyloudnorm", 
+    "soundfile", 
+    "julius", 
+    "torch_stoi", 
+    "tensorboard", 
+    "flatten-dict", 
+    "randomname", 
+    "ffmpy", 
+    "importlib-resources", 
+    "omegaconf", 
+    "schedulefree", 
+    "boto3", 
+    "python-dotenv",
 ]
+
+
 
 
 [project.urls]
