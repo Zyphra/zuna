@@ -79,6 +79,9 @@ class ProcessingConfig:
     # File chunking
     max_duration_minutes: float = 10.0  # Split files longer than this into chunks
 
+    # Channel upsampling
+    upsample_to_channels: Optional[int] = None  # If set, upsample to this many channels (e.g., 128)
+
     def __post_init__(self):
         """Validate configuration."""
         if self.target_sfreq <= 0:
