@@ -99,6 +99,9 @@ def _process_single_file(
             # Process
             epochs_list, positions_list, metadata = processor.process(chunk_raw)
 
+            # Add original filename to metadata for reconstruction
+            metadata['original_filename'] = file_path.name
+
             if len(epochs_list) == 0:
                 chunk_results.append({
                     'success': False,
