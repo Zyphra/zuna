@@ -2,11 +2,9 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-
-
 [project]
 name = "zuna"
-version = "0.0.1"
+version = "0.0.2"
 description = "Foundation model for EEG reconstruction and interpolation"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -31,7 +29,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 
-# surely some of these are unnecessary (CW)
+
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
@@ -39,40 +37,31 @@ dependencies = [
     "torch>=1.9.0",
     "joblib>=1.0.0",
     "omegaconf",
-    "msgspec",
-    "rouge-score",
-    "sacrebleu",
     "sentencepiece",
     "tiktoken",
     "fsspec",
     "blobfile",
     "wandb",
-    "viztracer", 
-    "lm-eval", 
-    "pynvml", 
-    "datatrove", 
-    "orjson", 
+    "lm-eval",
+    "pynvml",
     "transformers", 
     "huggingface-hub", 
     "einops", 
-    "einx", 
     "vector-quantize-pytorch", 
-    "argbind", 
-    "pyloudnorm", 
-    "soundfile", 
-    "julius", 
-    "torch_stoi", 
-    "tensorboard", 
-    "flatten-dict", 
-    "randomname", 
-    "ffmpy", 
-    "importlib-resources", 
-    "omegaconf", 
     "schedulefree", 
     "boto3", 
     "python-dotenv",
+    "ipython"
 ]
 
+
+# Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src", "src/zuna/inference/AY2l/lingua"]
+include = ["zuna*", "lingua*", "apps*"]
 
 
 

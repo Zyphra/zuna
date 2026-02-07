@@ -13,6 +13,51 @@ Requirements:
     - Model checkpoint (download or path to trained model)
 """
 
+
+
+
+import json
+import torch
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file as safe_load
+
+from lingua.args import dataclass_from_dict
+from apps.AY2latent_bci.transformer import EncoderDecoder, DecoderTransformerArgs
+
+# In your shell, set your HF_TOKEN environment variable: 
+# export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+
+
+REPO_ID = "Zyphra/ZUNA"
+WEIGHTS = "model-00001-of-00001.safetensors"
+CONFIG  = "config.json"  
+
+# model arch
+config_path = hf_hub_download(repo_id=REPO_ID, filename=CONFIG, token=True)
+with open(config_path, "r") as f:
+    config_dict = json.load(f)
+
+# build model
+model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
+model = EncoderDecoder(model_args)
+
+# download weights, load them into EncoderDecoder
+weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+state_dict = safe_load(weights_path, device="cpu")
+
+# remove .model prefix from keys
+state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+
+model.load_state_dict(state_dict, strict=True)
+model.eval()
+
+
+
+import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+################################################################################
+################################################################################    
+
 import sys
 import os
 from pathlib import Path

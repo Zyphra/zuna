@@ -41,15 +41,23 @@ from torch.optim import lr_scheduler
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed._tensor import DTensor
 
+
+# To load model from HuggingFace.
+import json
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file as safe_load
+
+
+
 # from lingua.apps.AY2latent.data_lean import STFTProcessor
 from lingua.args import dataclass_from_dict, dump_config, flatten_dict
 from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
-# from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
-from .utils_pt_mne import interpolate_signals_with_mne #JM
+from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
+# from .utils_pt_mne import interpolate_signals_with_mne #JM
 
-# from apps.AY2latent_bci.eeg_data import (  #JM
-from .eeg_data import (  #JM
+from apps.AY2latent_bci.eeg_data import (  #JM
+# from .eeg_data import (  #JM
     # EEGDataset_v2,
     EEGProcessor,
     BCIDatasetArgs,
@@ -448,7 +456,7 @@ def plot_compare_eeg_signal(data,
 
 
     # (CW) - try to use dark background for plots.
-    if True:
+    if False:
         plt.style.use('dark_background')
 
     plt.savefig(f"{dir_base}/eeg_signal_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
@@ -1363,7 +1371,7 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                                         reconst=model_signal_output_unwrapped[samp],
                                         mse_value=MSE_samp_EEG_sig[samp],
                                         eeg_signal=eeg_signal_unwrapped[samp],
-                                        mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None,
+                                        # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
                                         fs=fs,
                                         batch=batch_cntr,
                                         sample=samp,
@@ -1424,6 +1432,34 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                                     fname_tag=""+fname_suptag,
                                     dir_base=dir_base,
                 )
+
+
+def compare_models_weight_by_weight(model, model2, rtol=1e-5, atol=1e-8):
+    """Compare two models parameter-by-parameter. Returns (all_match, list of mismatches)."""
+    sd1, sd2 = model.state_dict(), model2.state_dict()
+    keys1, keys2 = set(sd1.keys()), set(sd2.keys())
+    if keys1 != keys2:
+        only_1 = keys1 - keys2
+        only_2 = keys2 - keys1
+        return False, {
+            "only_in_first": list(only_1),
+            "only_in_second": list(only_2),
+        }
+    mismatches = []
+    for name in sd1:
+        p1, p2 = sd1[name], sd2[name]
+        if p1.shape != p2.shape:
+            mismatches.append((name, "shape", str(p1.shape), str(p2.shape)))
+            continue
+        if not torch.allclose(p1.float(), p2.float(), rtol=rtol, atol=atol):
+            diff = (p1.float() - p2.float()).abs()
+            mismatches.append((
+                name,
+                "values",
+                f"max_diff={diff.max().item():.6e} mean_diff={diff.mean().item():.6e}",
+                None,
+            ))
+    return len(mismatches) == 0, mismatches
 
 
 #
@@ -1600,9 +1636,71 @@ def evaluate(args: TrainArgs):
         #     )
         # )
 
+        
 
-        # print("After loading model from checkpoint, before creating dataloader.")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
+        
+        
+
+        if False:
+
+            print("LOAD THE MODEL FROM HUGGINGFACE.")
+            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+            # In your shell, set your HF_TOKEN environment variable: 
+            # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+
+            REPO_ID = "Zyphra/ZUNA"
+            WEIGHTS = "model-00001-of-00001.safetensors"
+            CONFIG  = "config.json"  
+
+            # model arch
+            config_path = hf_hub_download(repo_id=REPO_ID, filename=CONFIG, token=True)
+            with open(config_path, "r") as f:
+                config_dict = json.load(f)
+
+            del model # (CW) - delete the model if it exists.
+
+            # build model
+            model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
+            with torch.device("meta"):
+                model = EncoderDecoder(model_args)
+
+            # download weights, load them into EncoderDecoder
+            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+            state_dict = safe_load(weights_path, device="cpu")
+
+            # remove .model prefix from keys
+            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+
+
+            model_param_count = get_num_params(model)
+            model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+            model.encoder = torch.compile(model.encoder)
+            model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
+
+
+
+            # print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
+            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
+
+            # # Check that model and model2 have the same weights:
+            # all_match, result = compare_models_weight_by_weight(model, model2)
+            # if all_match:
+            #     print("All weights match (within rtol=1e-5, atol=1e-8).")
+            # else:
+            #     if isinstance(result, dict):
+            #         print("Key sets differ:", result)
+            #     else:
+            #         print("Mismatches:")
+            #         for t in result:
+            #             print(f"  {t}")
+
+
+
+
 
         # args.data.load_csv() (CW) - old audio stuff.
         print("Entering create dataloader on rank", dp_rank)
@@ -1672,13 +1770,6 @@ def evaluate(args: TrainArgs):
 
         # print(f"After loading in model")
         # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-        # Trying to print out how information is flowing through the model.
-        if False:
-            for xxx in model.decoder.named_modules():
-                print(f"{xxx=}")
-
 
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
@@ -1760,15 +1851,7 @@ def evaluate(args: TrainArgs):
             # if batch_cntr < 3:
             #     continue
 
-            # NOTE: Doing channel masking based on freq_mask input into EncoderDecoder.forward in transformer.py 
-            mask_bad_chans = False # (CW) - There shouldnt be any more zero'ed out channels. 
-            if mask_bad_chans:
-                print(f"Masking out any bad (all zero) channels.")
-                bad_mask = batch['eeg_signal'].abs().sum(axis=1)!=0 # mask out channels that are ALL ZERO --> freq_masks [B,1,C] that is [0 if bad, 1 if good]
-                batch['freq_masks'] = bad_mask.unsqueeze(2).int() # [B,C,1]  
-
             eeg_signal = batch['eeg_signal']
-
             # batch_ids = batch.pop('ids', None)
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
@@ -1821,7 +1904,8 @@ def evaluate(args: TrainArgs):
                     sample_steps=sample_steps,
                 )    
 
-
+            print(f"After model.sample")
+            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
 
             ## "Encoder Consistency": Compute MSE between latent representations encoder builds from raw-data and model reconstructions
             if compute_encoder_consistency:
@@ -2067,32 +2151,33 @@ def evaluate(args: TrainArgs):
 
 
             # Here if you want to only do a certain number of batches (like for making a couple plots))
-            if batch_cntr >= num_batches:
-                break
-
-            # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
-            # if epoch > 1:
+            # if batch_cntr >= num_batches:
             #     break
 
-        ## Display Stats of reconstruction-based metrics across batches of data
-        try:
-            print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.key_prefix} with channel dropout rate {args.data.channel_dropout_prob}") # backblaze path in EEGDataset_b2
-        except:
-            print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.memmap_paths[0].parts[5]} with channel dropout rate {args.data.channel_dropout_prob}") # local path in EEGDataset_v2
+            # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
+            if epoch > 1:
+                break
 
-        print("\nMAE:")
-        print(f"\tZUNA recon: (mean +/- std) ({np.array(MAE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_sig_do_list).std():.4f})")
-        print(f"\tmne interp: (mean +/- std) ({np.array(MAE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_mne_do_list).std():.4f})")
-        print("NMSE:")
-        print(f"\tZUNA recon: (mean +/- std) ({np.array(NMSE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_sig_do_list).std():.4f})")
-        print(f"\tmne  interp: (mean +/- std) ({np.array(NMSE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_mne_do_list).std():.4f})")
-        print("SNR:")
-        print(f"\tZUNA recon: (mean +/- std) ({np.array(SNR_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_sig_do_list).std():.4f})")
-        print(f"\tmne interp: (mean +/- std) ({np.array(SNR_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_mne_do_list).std():.4f})")
-        # print("PCC:") 
-        # print(f"\tZUNA recon: (mean +/- std) ({np.array(PCC_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_sig_do_list).std():.4f})")
-        # print(f"\tmne interp: (mean +/- std) ({np.array(PCC_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_mne_do_list).std():.4f})")
-        print(f"\n\n")
+        ## Display Stats of reconstruction-based metrics across batches of data
+        if False:
+            try:
+                print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.key_prefix} with channel dropout rate {args.data.channel_dropout_prob}") # backblaze path in EEGDataset_b2
+            except:
+                print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.memmap_paths[0].parts[5]} with channel dropout rate {args.data.channel_dropout_prob}") # local path in EEGDataset_v2
+
+            print("\nMAE:")
+            print(f"\tZUNA recon: (mean +/- std) ({np.array(MAE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_sig_do_list).std():.4f})")
+            print(f"\tmne interp: (mean +/- std) ({np.array(MAE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_mne_do_list).std():.4f})")
+            print("NMSE:")
+            print(f"\tZUNA recon: (mean +/- std) ({np.array(NMSE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_sig_do_list).std():.4f})")
+            print(f"\tmne  interp: (mean +/- std) ({np.array(NMSE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_mne_do_list).std():.4f})")
+            print("SNR:")
+            print(f"\tZUNA recon: (mean +/- std) ({np.array(SNR_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_sig_do_list).std():.4f})")
+            print(f"\tmne interp: (mean +/- std) ({np.array(SNR_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_mne_do_list).std():.4f})")
+            # print("PCC:") 
+            # print(f"\tZUNA recon: (mean +/- std) ({np.array(PCC_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_sig_do_list).std():.4f})")
+            # print(f"\tmne interp: (mean +/- std) ({np.array(PCC_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_mne_do_list).std():.4f})")
+            print(f"\n\n")
 
         print("After looping over dataloader")
         import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
