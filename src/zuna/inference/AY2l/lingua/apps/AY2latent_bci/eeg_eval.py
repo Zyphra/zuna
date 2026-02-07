@@ -1904,8 +1904,8 @@ def evaluate(args: TrainArgs):
                     sample_steps=sample_steps,
                 )    
 
-            print(f"After model.sample")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
+            # print(f"After model.sample")
+            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
 
             ## "Encoder Consistency": Compute MSE between latent representations encoder builds from raw-data and model reconstructions
             if compute_encoder_consistency:
