@@ -10,20 +10,11 @@
 #   >> CUDA_VISIBLE_DEVICES=0 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
-import numpy as np
-from scipy.signal import welch, hilbert
-from scipy.fft import rfft, rfftfreq
-from scipy.stats import skew, kurtosis
-import matplotlib.pyplot as plt
-from matplotlib.colors import to_hex
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-
-
 from copy import deepcopy
 import gc
 import logging
 import os
-import sys
+# import sys
 import time
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
@@ -36,11 +27,10 @@ from omegaconf import OmegaConf
 import torch
 import torch.distributed
 import torch.nn.functional as F
-# import xformers.profiler
 from torch.optim import lr_scheduler
 from torch.distributed.checkpoint.stateful import Stateful
-from torch.distributed._tensor import DTensor
-
+# from torch.distributed._tensor import DTensor
+import matplotlib.pyplot as plt
 
 # To load model from HuggingFace.
 import json
@@ -48,20 +38,14 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file as safe_load
 
 
-
-# from lingua.apps.AY2latent.data_lean import STFTProcessor
 from lingua.args import dataclass_from_dict, dump_config, flatten_dict
 from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
-from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
-# from .utils_pt_mne import interpolate_signals_with_mne #JM
+from utils_pt_mne import interpolate_signals_with_mne
 
-from apps.AY2latent_bci.eeg_data import (  #JM
-# from .eeg_data import (  #JM
-    # EEGDataset_v2,
+from apps.AY2latent_bci.eeg_data import (
     EEGProcessor,
     BCIDatasetArgs,
-    # create_dataloader,
     create_dataloader_v2,
     chop_and_reshape_signals, # for debug
     invert_reshape_signals,
@@ -71,15 +55,11 @@ from lingua.distributed import (
     DistributedArgs,
     EnvironmentArgs,
     init_signal_handler,
-    dist_mean_dict,
     get_device_mesh,
     get_is_master,
     get_world_size,
-    parallelize_model,
     setup_env,
     setup_torch_distributed,
-    clean_env,
-    requeue_slurm_job,
     check_model_value_range,
 )
 from lingua.logger import init_logger
@@ -90,25 +70,16 @@ from lingua.metrics import (
     get_num_params,
 )
 from lingua.optim import OptimArgs, build_optimizer
-# from lingua.profiling import ProfilerArgs #, maybe_run_profiler (CW)
-# from lingua.tokenizer import build_tokenizer
 from apps.AY2latent_bci.transformer import (
     DecoderTransformerArgs,
     EncoderDecoder,
-    get_num_flop_per_token,
-    build_fsdp_grouping_plan,
-    # tp_parallelize,
-    get_no_recompute_ops,
 )
 from lingua.probe import AutoProbeD
 from lingua.stool import StoolArgs, launch_job
 
-import wandb
 from dotenv import load_dotenv
 load_dotenv() # Load WANDB_API_KEY from .env file
 
-from torch._dynamo.decorators import mark_static_address
-import functools
 logger = logging.getLogger()
 
 LOAD_THE_MODEL = True           # Flag to load model onto GPU or not. If False, just explore data.
@@ -121,9 +92,6 @@ class TrainArgs:
     dump_dir: str = ""
 
     seed: int = 42
-
-    # Number of gradient accumulation steps
-    # Total batch size is batch_size*grad_acc_steps
     grad_acc_steps: int = 1
 
     gc_collect_freq: int = 1000
@@ -139,7 +107,6 @@ class TrainArgs:
     env: EnvironmentArgs = field(default_factory=EnvironmentArgs)
 
     checkpoint: CheckpointArgs = field(default_factory=CheckpointArgs)
-    # profiling: ProfilerArgs = field(default_factory=ProfilerArgs) (CW)
     logging: LoggingArgs = field(default_factory=LoggingArgs)
 
     # If set to None, eval is run locally otherwise it launches a new job with the given number of gpus
@@ -160,10 +127,6 @@ class TrainArgs:
 
 # @torch.compile()
 def process_batch_data(batch, data_processor, loss_weights,):
-
-    # print(f"Dawgg, process_batch_data")
-    # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
     with torch.no_grad():
         batch = data_processor.process(**batch)
 
@@ -175,20 +138,17 @@ class TrainState(Stateful):
     step: int  # Nb of steps taken by the optimizer
     acc_step: int  # Nb of accumulation steps done since last optimizer step
     scheduler: lr_scheduler.LambdaLR
-    # data_loader_state: PackTokensState
 
     def state_dict(self) -> Dict[str, Any]:
         return {
             "step": self.step,
             "acc_step": self.acc_step,
-            # "data_loader_state": self.data_loader_state,
             "scheduler": self.scheduler.state_dict(),
         }
 
     def load_state_dict(self, state_dict):
         self.step = state_dict["step"]
         self.acc_step = state_dict["acc_step"]
-        # self.data_loader_state = PackTokensState(**state_dict["data_loader_state"])
         self.scheduler.load_state_dict(state_dict["scheduler"])
 
 def validate_train_args(args: TrainArgs,):
@@ -198,14 +158,9 @@ def validate_train_args(args: TrainArgs,):
         logger.info(f"Setting checkpoint path to {str(Path(args.dump_dir) / 'checkpoints')}")
         args.checkpoint.path = str(Path(args.dump_dir) / "checkpoints")
 
-    # (CW) - if using local filesystem, check if data_dir exists.
+    # if using local filesystem, check if data_dir exists.
     if not args.data.use_b2:
-        assert os.path.exists(args.data.data_dir), f"{args.data.data_dir} doesn't exist" # (CW) - replaced with this (NEWEST)
-    #
-    # assert os.path.exists(args.data.data_path), f"{args.data.data_path} doesn't exist" # (CW) - was this first
-    #
-    # for data_path in args.data.data_paths:
-    #     assert os.path.exists(data_path), f"{data_path} doesn't exist" # (CW) - replaced with this second (OLD)
+        assert os.path.exists(args.data.data_dir), f"{args.data.data_dir} doesn't exist"
 
     if (
         args.distributed.dp_replicate
@@ -237,21 +192,10 @@ def validate_train_args(args: TrainArgs,):
                 and args.distributed.dp_replicate == get_world_size()
             )
 
-    # args.model.max_seqlen = 4096 # (CW) int(args.data.sample_duration_seconds * args.data.sample_rate)
-    #                              # this needs to be bigger than 1280*1.5 to include registers.
-
     if args.distributed.tp_size == 1:
         logger.warning(
             "Tensor parallelism has not been tested for a while, use at your own risk"
         )
-
-    ## (CW)
-    # assert (
-    #     args.probe_freq != args.profiling.mem_steps
-    # ), "Don't profile during probe step"
-    # assert (
-    #     args.probe_freq != args.profiling.profile_steps
-    # ), "Don't profile during probe step"
 
     if args.logging.wandb is not None:
         args.logging.wandb.name = args.name
@@ -272,13 +216,6 @@ def set_preemption_flag(signum, frame):
     preemption_flag["flag"] = True
 
 
-def every_n_steps(train_state, freq, acc_step=None, acc_freq=None):
-    test = train_state.step % freq == 0
-    if acc_step is not None:
-        test = test and (train_state.acc_step == acc_step)
-    elif acc_freq is not None:
-        test = test and ((train_state.acc_step % acc_freq) == 0)
-    return test
 
 
 def plot_compare_eeg_signal(data,
@@ -300,23 +237,19 @@ def plot_compare_eeg_signal(data,
     reconst = reconst.T
     if eeg_signal is not None:
         eeg_signal = eeg_signal.T
+    if mne_reconstruction is not None:
+        mne_reconstruction = mne_reconstruction.T
 
     num_t, chans = data.shape
     t = np.arange(num_t) #/ fs
     print(f"\teeg: {chans=}, {num_t=}")
 
-    # dim = int(np.ceil(np.sqrt(chans)))
     best_div = get_best_divisors(chans, max_pad=10)
     dimx, dimy = best_div
     fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12))
 
     pct_dropout = (np.abs(data).sum(axis=0)==0).sum()/chans
     where_dropout = np.abs(data).sum(axis=0)==0
-
-    if mne_reconstruction is not None:
-        #Transpose MNE reconstruction from (channels, times) to (times, channels)
-        mne_reconstruction = mne_reconstruction.T
-
 
     if dimx==dimy==1:
         # Single-channel case: (copy-pasted-edited from multi-chan below).
@@ -350,7 +283,6 @@ def plot_compare_eeg_signal(data,
                     if mne_reconstruction is not None and where_dropout[ch]:
                         axes[i, j].plot(t, mne_reconstruction[:, ch], linestyle="-", color="magenta", linewidth=0.5, alpha=0.4)
                     axes[i, j].set_xlim(t[0],t[-1])
-                    # axes[i, j].set_ylim(-0.3,0.3) # hardcoded. Comment out.
                     axes[i, j].tick_params(axis='x', labelsize=10)
                     axes[i, j].tick_params(axis='y', labelsize=10)
                     axes[i, j].grid(True)
@@ -375,7 +307,6 @@ def plot_compare_eeg_signal(data,
     fig.text(0.22, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
     fig.text(0.25, 0.97, "mne", ha='center', va='center', fontsize=16, fontweight='bold', color='magenta')
     plt.suptitle(f"EEG{fname_tag} - ({batch=}, {idx=}, {sample=}) - %dropped={pct_dropout:0.3f}", fontsize=16, fontweight='bold')
-
 
     plt.savefig(f"{dir_base}/eeg_signal_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
     plt.close()
@@ -414,13 +345,11 @@ def get_best_divisors(chans, max_pad=0):
             div_diff_best = div_diff
             winner_best_div = best_div
 
-        # print(f"With chans = {chans}+{pad}: {best_div=}, {div_diff=}")
-
     return winner_best_div
 
 
 
-def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args):
+def unwrap_all_the_signals(model_output, batch, args):
     """
     Unwrap the signals from the model output, latent data, and latent recon.
 
@@ -428,8 +357,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
 
     Inputs:
     - model_output: [B, seqlen, latent_dim]
-    - latent_data: [B, seqlen, latent_dim] or None
-    - latent_recon: [B, seqlen, latent_dim] or None
     - batch: dict -> batch.keys() = ['encoder_input', 'decoder_input', 'target', 't', \
                                     'eeg_signal', 'chan_pos', 'chan_pos_discrete', \
                                     'chan_id', 'seq_lens', 't_coarse']
@@ -443,8 +370,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
     - model_position_output_unwrapped: list of numpy arrays, each of shape [num_chans, tc, 3]
     - eeg_signal_unwrapped: list of numpy arrays, each of shape [num_chans, tc, tf]
     - channel_id_unwrapped: list of numpy arrays, each of shape [num_chans, tc]
-    - latent_data_unwrapped: list of numpy arrays, each of shape [num_chans, tc, latent_dim]
-    - latent_recon_unwrapped: list of numpy arrays, each of shape [num_chans, tc, latent_dim]
     - t_coarse_unwrapped: list of numpy arrays, each of shape [num_chans, tc]
     """
 
@@ -459,12 +384,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
 
     print(f"{model_input.shape=}")
     print(f"{model_output.shape=}")
-
-    if latent_data is not None and latent_recon is not None:
-        print(f"{latent_recon.shape=}")
-        print(f"{latent_data.shape=}")
-        latent_data_unwrapped = []
-        latent_recon_unwrapped = []
 
     model_signal_input_unwrapped = []
     model_signal_output_unwrapped = []
@@ -499,9 +418,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
             eeg_sig = eeg_signal[seqlen_accum:seqlen_accum+seqlen, :]       # tf eeg-signals without channel dropout
             mod_out_pos = torch.zeros_like(mod_in_pos)                      # {x,y,z} position channels - not modeled, so just put zeros here.
             mod_out_sig = model_output.squeeze(0)[seqlen_accum:seqlen_accum+seqlen, :] # tf eeg-signals
-            
-        lat_data = latent_data.squeeze(0)[seqlen_accum:seqlen_accum+seqlen, :] if latent_data is not None else None # latent computed from eeg_signals
-        lat_recon = latent_recon.squeeze(0)[seqlen_accum:seqlen_accum+seqlen, :] if latent_recon is not None else None # latent recomputed from reconstructed signals
 
         t_coarse = batch['t_coarse'][seqlen_accum:seqlen_accum+seqlen, :] if batch['t_coarse'] is not None else None
         chan_id = batch['chan_id'][seqlen_accum:seqlen_accum+seqlen, :] if batch['chan_id'] is not None else None
@@ -535,18 +451,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
                                                 tf=tf,
                                                 use_coarse_time=args.data.use_coarse_time,
             )
-            lat_data_unwrapt, _, _, _, _ = invert_reshape_signals(
-                                                sig_reshaped=lat_data,
-                                                num_chans=num_chans, 
-                                                tf=tf+3 if args.data.cat_chan_xyz_and_eeg else tf,
-                                                use_coarse_time=args.data.use_coarse_time,
-            )
-            lat_recon_unwrapt, _, _, _, _ = invert_reshape_signals(
-                                                sig_reshaped=lat_recon,
-                                                num_chans=num_chans, 
-                                                tf=tf+3 if args.data.cat_chan_xyz_and_eeg else tf,
-                                                use_coarse_time=args.data.use_coarse_time,
-            )
         else:
             print(f"Dont understand {args.data.use_coarse_time=}")
 
@@ -557,8 +461,6 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
         model_position_output_unwrapped.append(mod_out_pos_unwrapt.cpu().numpy())
         eeg_signal_unwrapped.append(eeg_sig_unwrapt.cpu().numpy())
         channel_id_unwrapped.append(chan_id_unwrapt.cpu().numpy())
-        latent_data_unwrapped.append(lat_data_unwrapt.cpu().numpy())
-        latent_recon_unwrapped.append(lat_recon_unwrapt.cpu().numpy())
         try:
             t_coarse_unwrapped.append(tc_unwrapt.cpu().numpy())
         except:
@@ -608,31 +510,7 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
             model_position_output_unwrapped, \
             eeg_signal_unwrapped, \
             channel_id_unwrapped, \
-            latent_data_unwrapped, \
-            latent_recon_unwrapped, \
             t_coarse_unwrapped
-
-
-
-def compute_sig_FFT(signal_unwrapped, fs):
-    """
-    Compute FFT of a list of signals (each element is a sample).
-    """
-    fft_signal_unwrapped = []
-    for samp in range(len(signal_unwrapped)):
-        model_in_sig = signal_unwrapped[samp]
-        #
-        num_t = model_in_sig.shape[-1]
-        freqs = rfftfreq(num_t, 1/fs)
-        #
-        fft_data = np.abs(rfft(model_in_sig, axis=1))
-        data_norms = np.linalg.norm(fft_data, axis=1) 
-        fft_data = fft_data / (data_norms[:, np.newaxis] + 1e-6)
-        #
-        fft_signal_unwrapped.append(fft_data)
-    
-    return fft_signal_unwrapped, freqs
-
 
 
 
@@ -716,18 +594,28 @@ def compare_models_weight_by_weight(model, model2, rtol=1e-5, atol=1e-8):
 
 
 def evaluate(args: TrainArgs):
-    print('In evaluate boo!')
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+    plot_eeg_signal_samples = True      # Plot raw eeg for data and model reconstruction for single samples
+    print_batch_stats = False
+    compute_mne_interpolated_signals = True
+
+    sample_steps = 50    # for diffusion process in .sample - Default is 50
+    cfg = 1.0            # for diffusion process in .sample - Default is 1.0 (i.e., no cfg)
+
+    num_batches = 5
+    batch_cntr = 0
+
+    dir_base = 'figures/' + '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]) + f'/cfg{cfg}'
+    print(f"Saving output figures to: {dir_base=}")
+    os.makedirs(dir_base, exist_ok=True)
 
     fs = args.data.sample_rate
     num_t = args.data.seq_len
 
 
     with ExitStack() as context_stack:
-        ## tokenizer = build_tokenizer(args.data.tokenizer.name, args.data.tokenizer.path)
         validate_train_args(
             args,
-            # tokenizer.n_words,
         )
 
         if get_is_master():
@@ -756,49 +644,17 @@ def evaluate(args: TrainArgs):
         torch.manual_seed(args.seed)
         logger.info("Building model")
 
-        # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
-        
         if LOAD_THE_MODEL:
             with torch.device("meta"):
                 model = EncoderDecoder(args.model)
 
             logger.info("Model is built !")
-
             model_param_count = get_num_params(model)
 
-
-            # (CW) - DO NOT NEED TO SHARD MODEL FOR INFERENCE
-            # model = parallelize_model(
-            #     model,
-            #     world_mesh,
-            #     args.model,
-            #     args.distributed,
-            #     fsdp_grouping_plan=[],#build_fsdp_grouping_plan(args.model),
-            #     # fsdp_grouping_plan=build_fsdp_grouping_plan(args.model),
-            #     # tp_parallelize=tp_parallelize,
-            #     no_recompute_ops=None,#get_no_recompute_ops(),
-            # )
-
-            # model = torch.compile(model)              # <-- this does not work. InductorError: LoweringException: AttributeError: 'Symbol' object has no attribute 'get_device'
-
-            model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+            model.sample = torch.compile(model.sample)
             model.encoder = torch.compile(model.encoder)
-
-            # Once we shard the model on different gpus we can actually initialize the model
-            # First we create empty tensors of the correct shapes
             model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
-            # Then we init the model. Please make sure this function initializes *ALL* parameters
-            # and buffers, otherwise you will have random values in the unitialized tensors
-            # which will silently fail (give nan gradients for example)
 
-
-            # print(f"Before: {model.encoder.dropout_vec=}")
-
-            # logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-            # load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") 
-            # logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-            # check_model_value_range(model, range=10.0, std=1.0)
-            ##(CW. Replace below with above)
             if args.checkpoint.init_ckpt_path:
                 with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
                     torch.manual_seed(args.model.seed)
@@ -806,9 +662,6 @@ def evaluate(args: TrainArgs):
                 check_model_value_range(model, range=10.0, std=1.0)
                 logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
                 load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                # model.encoder.rope_embeddings.reset_parameters() # For RoPe initialization since it's a buffer it might not be loaded
-                # model.decoder.rope_embeddings.reset_parameters() # For RoPe initialization since it's a buffer it might not be loaded
-                # model.decoder.t_embedder.reset_parameters(args.model.init_base_std)
                 logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
                 check_model_value_range(model, range=10.0, std=1.0)
             else:
@@ -878,18 +731,10 @@ def evaluate(args: TrainArgs):
             metric_logger = context_stack.enter_context(
                 MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
         )
-        # data_loader = context_stack.enter_context(
-        #     create_dataloader(
-        #         args.data,
-        #     )
-        # )
 
         
 
-        
-        
-
-        if False:
+        if True:
 
             print("LOAD THE MODEL FROM HUGGINGFACE.")
             import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
@@ -912,6 +757,9 @@ def evaluate(args: TrainArgs):
             model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
             with torch.device("meta"):
                 model = EncoderDecoder(model_args)
+
+            device = torch.cuda.current_device()
+            model = model.to_empty(device=device)
 
             # download weights, load them into EncoderDecoder
             weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
@@ -966,20 +814,17 @@ def evaluate(args: TrainArgs):
             # dataloader.sampler.set_epoch(epoch)
             print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
 
-            eeg_sig_norm = 10.0 # (CW) - normalization factor for eeg signal.
-            eeg_sig_clip = 1.0 #None  # (CW) - clipping factor for eeg signal.
+            eeg_sig_norm = 10.0 # normalization factor for eeg signal.
+            eeg_sig_clip = 1.0 #None  # clipping factor for eeg signal.
 
             while True:
                 epoch += 1
                 logger.info(f"Starting epoch: {epoch}")
                 for idx,batch in enumerate(dataloader):
 
-                    # print(f"Inside make_batch_iterator: {batch.keys()=}, {batch['eeg_signal'].shape=}")
-                    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
                     eeg_signal = batch['eeg_signal']
 
-                    eeg_signal = eeg_signal/eeg_sig_norm # (CW) - Divide by eeg_sig_norm to normalize the data and change its STD.
+                    eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
 
                     if eeg_sig_clip is not None:
                         print(f"Clipping input at +/-{eeg_sig_clip}")
@@ -1000,15 +845,10 @@ def evaluate(args: TrainArgs):
                 # dataloader.sampler.set_epoch(epoch)
                 print("Finished epoch", epoch)
 
-
-
         batch_iterator = make_batch_iterator(data_loader)
         print("Entering create batch iterator on rank", dp_rank)
 
-        torch_profiler = None #context_stack.enter_context(
-        #     maybe_run_profiler(args.dump_dir, model, args.profiling)
-        # )
-
+        torch_profiler = None
         #make sure all model parameters require gradients
         if LOAD_THE_MODEL:
             for p in model.parameters():
@@ -1016,32 +856,11 @@ def evaluate(args: TrainArgs):
 
         data_processor = EEGProcessor(args.data).to(torch.cuda.current_device())
 
-        # print(f"After loading in model")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-        #
-        # (2). Here, run EEG data through autoencoder model and compare model input with model output
-        #       TO DO: Compare dec_out to batch['encoder_input'] or eeg_signal.
-        #
 
-        plot_eeg_signal_samples = True      # Plot raw eeg for data and model reconstruction for single samples
-        plot_eeg_position_samples = False #True   # Scatter eeg channel position GT vs reconstruction for single samples
-        plot_fft_samples = False #True             # Plot fft of eeg for data and model reconstruction for single samples
-        plot_latent_samples = False #True
-        compute_encoder_consistency = True
-        compute_reconstruction_metrics_stats_across_dataset = True
 
-        sample_steps = 50    # for diffusion process in .sample - Default is 50
-        cfg = 1.0            # for diffusion process in .sample - Default is 1.0 (i.e., no cfg)
-
-        dir_base = 'figures/' + '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]) + f'/cfg{cfg}'
-        print(f"Saving output figures to: {dir_base=}")
-        os.makedirs(dir_base, exist_ok=True)
 
         # Loop through batches of data from dataloader and gather up mean & std of data
-        print_batch_stats = False
         if print_batch_stats:
             batch_mean = []
             batch_std = []
@@ -1063,35 +882,7 @@ def evaluate(args: TrainArgs):
             import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
-
-        num_batches = 5
-        batch_cntr = 0
-
-        
-
-        if compute_reconstruction_metrics_stats_across_dataset:
-            MAE_samp_EEG_sig_do_list = []
-            NMSE_samp_EEG_sig_do_list = []
-            SNR_samp_EEG_sig_do_list = []
-            PCC_samp_EEG_sig_do_list = []
-            #
-            MAE_samp_EEG_mne_do_list = []
-            NMSE_samp_EEG_mne_do_list = []
-            SNR_samp_EEG_mne_do_list = []
-            PCC_samp_EEG_mne_do_list = []
-            #
-            MAE_samp_EEG_sig_nodo_list = []
-            NMSE_samp_EEG_sig_nodo_list = []
-            SNR_samp_EEG_sig_nodo_list = []
-            PCC_samp_EEG_sig_nodo_list = []
-            #
-            MAE_samp_EEG_mne_nodo_list = [] 
-            NMSE_samp_EEG_mne_nodo_list = []
-            SNR_samp_EEG_mne_nodo_list = []
-            PCC_samp_EEG_mne_nodo_list = []
-
-
-
+    
         while True:
             batch = next(batch_iterator)     
             batch_cntr += 1
@@ -1103,11 +894,6 @@ def evaluate(args: TrainArgs):
             # batch_ids = batch.pop('ids', None)
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
-            
-            # print(f"Making plots for raw vs reconstruction for {batch_idx=}, {batch_dataset_id=}") 
-
-            # batch, loss_weights_batch = process_batch_data_compiled(batch, train_state.step) # (CW) - was this
-            # batch, loss_weights_batch = process_batch_data(batch, train_state.step)   # - option 2 (CW) - maybe change to noncompiled version ???
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
             
@@ -1138,10 +924,6 @@ def evaluate(args: TrainArgs):
                 print(f"Dont understand {args.model.tok_idx_type=} and {args.model.rope_dim}")
                 die 
 
-            # print(f"{args.model.tok_idx_type=} and {args.model.rope_dim=}")
-
-            # print(f"Before model.sample")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
 
             with torch.no_grad():
                 z, inference_at_step = model.sample(
@@ -1152,36 +934,7 @@ def evaluate(args: TrainArgs):
                     sample_steps=sample_steps,
                 )    
 
-            # print(f"After model.sample")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
-
-            ## "Encoder Consistency": Compute MSE between latent representations encoder builds from raw-data and model reconstructions
-            if compute_encoder_consistency:
-                # Push reconstruction and original data back through encoder into latent space
-                with torch.no_grad():
-                    latent_data, _ = model.encoder(
-                                            token_values=batch['encoder_input'].unsqueeze(0), 
-                                            seq_lens=batch['seq_lens'],
-                                            tok_idx=tok_idx,
-                    )
-                    latent_recon, _ = model.encoder(
-                                            token_values=z, #z_masked, 
-                                            seq_lens=batch['seq_lens'],
-                                            tok_idx=tok_idx,
-                    )
-            else:
-                latent_data, latent_recon = None, None
-
-            # print(f"After drawing samples from model and getting latents from encoder.")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
-
-
-
             # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #     
-
-            # model_output = z #.cpu().float().numpy() 
-            # model_input = batch['encoder_input'] #.cpu().numpy()        # Includes channel dropout
-            # eeg_signal = batch['eeg_signal'] #.cpu().numpy() # TO DO.   # Original eeg signal without channel dropout
 
             signals_to_plot = []
             # signals_to_plot = inference_at_step # [ inference_at_step[-2] ] # UNCOMMENT IF YOU WANT TO PLOT THE INTERMEDIATE STEPS OF THE DIFFUSION PROCESS
@@ -1205,11 +958,7 @@ def evaluate(args: TrainArgs):
                 model_position_output_unwrapped, \
                 eeg_signal_unwrapped, \
                 channel_id_unwrapped, \
-                latent_data_unwrapped, \
-                latent_recon_unwrapped, \
                 t_coarse_unwrapped = unwrap_all_the_signals(model_output=z, 
-                                                            latent_data=latent_data, 
-                                                            latent_recon=latent_recon, 
                                                             batch=batch, 
                                                             args=args)    
 
@@ -1221,19 +970,20 @@ def evaluate(args: TrainArgs):
                 # chan_pos = model_position_input_unwrapped[0].reshape(-1,tc,3)[:,0,:] #channel position requires this reshape
                 
 
-                #jm - Prepare channel positions for MNE
-                chan_pos_list = [model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :] for i in range(len(model_signal_input_unwrapped))]
-                #jm - Apply MNE interpolation to dropped-out channels
-                mne_interpolated_signals = interpolate_signals_with_mne(
-                    signals=model_signal_input_unwrapped,
-                    channel_positions=chan_pos_list,
-                    sampling_rate=fs,
-                    mark_zero_variance=True
-                )
-
+                # Apply MNE interpolation to dropped-out channels
+                if compute_mne_interpolated_signals:
+                    chan_pos_list = [model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :] for i in range(len(model_signal_input_unwrapped))]
+                    #
+                    mne_interpolated_signals = interpolate_signals_with_mne(
+                        signals=model_signal_input_unwrapped,
+                        channel_positions=chan_pos_list,
+                        sampling_rate=fs,
+                        mark_zero_variance=True
+                    )
+                else:
+                    mne_interpolated_signals = None
 
                 # Plot signals
-                # fname_suptag=""
                 plot_unwrapped_signals(model_signal_input_unwrapped, 
                                         model_signal_output_unwrapped, 
                                         eeg_signal_unwrapped, 
