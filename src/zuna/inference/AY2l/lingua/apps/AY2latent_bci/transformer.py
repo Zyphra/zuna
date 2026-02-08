@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from math import inf
 from typing import Optional, Tuple, Union, List
 from copy import deepcopy
-# from audiotools.ml import layers
 import torch
 from torch import nn
 from torch.nn import Parameter
@@ -16,27 +15,13 @@ from torch.nn.attention.flex_attention import (
     noop_mask,
 )
 
-torch._dynamo.config.capture_scalar_outputs = True # to fix graph breaks due to .item() in create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
+torch._dynamo.config.capture_scalar_outputs = True 
 
-# from torch.distributed._tensor import Replicate, Shard
-# from torch.distributed.tensor.parallel import (
-#     ColwiseParallel,
-#     RowwiseParallel,
-#     SequenceParallel,
-#     PrepareModuleInput,
-#     parallelize_module,
-# )
-
-# from xformers.ops import fmha, AttentionBias (CW)
 from lingua.transformer import (
-    # BaseTransformer,
-    BaseTransformerArgs,
     RMSNorm,
-    TiedLinear,
     InitStdFactor,
     RotaryEmbedding,
     TransformerBlock,
-    # generate_doc_mask_mod,
 )
 from .xattn import DecoderBlock, FourierConditioner, DecoderArgs, AdaRMSNorm
 from .conv_stem import CausalConv2DStem
@@ -53,55 +38,6 @@ def create_causal_mask(seqlen, attn_impl, sliding_window):
         raise NotImplementedError(
             f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
         )
-
-#cache masks with the same args
-# @functools.lru_cache(maxsize=128)
-# def create_bidi_mask(seqlen, attn_impl, sliding_window, cross_seqlen=None):
-#     assert attn_impl == "flex_attention", "Bidirectional mask only supported with flex_attention for now"
-#     SLIDING_WINDOW = sliding_window
-#     def sliding_window(b, h, q_idx, kv_idx):
-#         return q_idx - kv_idx <= SLIDING_WINDOW
-    
-#     return create_block_mask(sliding_window, None, None, seqlen, cross_seqlen) if cross_seqlen else create_block_mask(sliding_window, None, None, seqlen, seqlen)
-
-
-@functools.lru_cache(maxsize=128)
-def create_bidi_mask(seqlen, attn_impl, sliding_window, cross_seqlen=None):
-    """
-    Create a bidirectional attention mask with sliding window constraint.
-    
-    For self-attention: implements true bidirectional window where each token 
-    can attend to tokens within +/- sliding_window positions.
-    
-    For cross-attention: implements position-mapped windows where each query
-    is mapped to a corresponding position in the key space, and can attend to
-    a window around that position.
-    
-    Args:
-        seqlen: Sequence length for queries
-        attn_impl: Attention implementation type
-        sliding_window: Size of the sliding window
-        cross_seqlen: Optional sequence length for keys/values in cross-attention
-    """
-    assert attn_impl == "flex_attention", "Bidirectional mask only supported with flex_attention for now"
-    SLIDING_WINDOW = sliding_window
-    def sliding_window_func(b, h, q_idx, kv_idx):
-        if cross_seqlen is None or cross_seqlen == seqlen:
-            # Self-attention case
-            return (q_idx - kv_idx).abs() <= SLIDING_WINDOW
-        else:
-            # Cross-attention case
-            # Use purely tensor arithmetic instead of int(...) on a torch.Tensor
-            center_k_idx = (q_idx * cross_seqlen) // seqlen
-            return (kv_idx - center_k_idx).abs() <= SLIDING_WINDOW
-
-    # Create the block mask using our sliding window function
-    if cross_seqlen:
-        return create_block_mask(sliding_window_func, None, None, seqlen, cross_seqlen,)
-    else:
-        return create_block_mask(sliding_window_func, None, None, seqlen, seqlen,)
-
-
 
 
 def create_document_mask(lengths: torch.Tensor,
@@ -185,8 +121,6 @@ def create_document_mask(lengths: torch.Tensor,
     if base_mask_mod is None:
         base_mask_mod = noop_mask
 
-    # print(f"Inside create_document_mask, {base_mask_mod=}, {lengths.sum()}")
-
     doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
 
     return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
@@ -259,29 +193,26 @@ def huber_cosine_weighted(input, target, huber_c = 0.1):
 @dataclass
 class DecoderTransformerArgs(DecoderArgs):
 
-    # print("Inside DecoderTransformerArgs")
-    # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
     seed: int = 42
 
     weight_tying: bool = False
     sliding_window: int = 128
     xattn_sliding_window: int = 32
-    input_dim: int = 64 # was 256 # (CW) - The same number as number of channels in input BCI data
+    input_dim: int = 64 
 
     decoder_encoder_dropout: float = 0.1
     decoder_timestep_dropout: float = 0.1
 
     encoder_sliding_window: int = 128
-    encoder_input_dim: int = input_dim # was 256  # (CW)
-    encoder_output_dim: int = input_dim*2 # was 32                # (CW) - "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
-    encoder_latent_downsample_factor: int = 2   # (CW) - effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
+    encoder_input_dim: int = input_dim 
+    encoder_output_dim: int = input_dim*2
+    encoder_latent_downsample_factor: int = 2  
     encoder_hidden_dim: Optional[int] = None
 
-    adaptive_loss_weighting: bool = False  # (CW) - set to true to try to fix GradNorm Spikes.
+    adaptive_loss_weighting: bool = False  
     num_fine_time_pts: int = 128
     dont_noise_chan_xyz: bool = False
-    stft_global_sigma: Union[str, float] = 1.0 # (CW) - global sigma for stft noise schedule in EncoderDecoder.sample().
+    stft_global_sigma: Union[str, float] = 1.0 
 
     dropout_type: str =  "zero" # {"zero", "rand", "learnable"}
 
@@ -318,11 +249,6 @@ class BaseTransformerDecoder(nn.Module):
             rope_dim=args.rope_dim,
         )
 
-        # print(f"Inside BaseTransformerDecoder.__init__, {self.max_seqlen=}")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-        
-
-
         self.layers = nn.ModuleList()
         for _ in range(args.n_layers):
             self.layers.append(DecoderBlock(args))
@@ -357,28 +283,7 @@ class BaseTransformerDecoder(nn.Module):
         freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, tok_idx=tok_idx)
         repa_loss = None
 
-        # print("\n\nINside BaseTransformerDecoder.forward,")
-        # print(f"{freq_cis.shape=}")
-        # print(f"{h.shape=}")
-        # print(f"{x_attended.shape=}")
-        # print(f"{t.shape=}")
-        # if tok_idx is not None:
-        #     print(f"{tok_idx.shape=}")
-        # print(f"{self.max_seqlen=}")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)        
-
-
-        for i, layer in enumerate(self.layers):     # (CW) - all these layers are type 'xattn.DecoderBlock'
-
-            # if do_idx is not None: # (CW)
-            #     print(f"\n------ Layer {i}, {type(layer)}:")
-
-            # ## (CW) - Print layer parameter types
-            # print(f"Layer {i}, {type(layer)}:")
-            # for name, param in layer.named_parameters():
-            #     print(f"\t {name} = {param.shape}, {type(param)}") # (CW) - for debug
-
-
+        for i, layer in enumerate(self.layers):     # all these layers are type 'xattn.DecoderBlock'
             h = layer(h,
                       x_attended,
                       t,
@@ -392,11 +297,7 @@ class BaseTransformerDecoder(nn.Module):
             )
 
             if self.training and self.repa_index != inf and i == self.repa_index:
-                # return (1 - F.cosine_similarity(self.repa_proj(self.repa_norm(h)).float(), repa_target, dim=-1).mean())
                 repa_loss = self.repa_loss_fn(self.repa_proj(self.repa_norm(h, t)).float(), repa_target,)
-                # repa_loss = self.cosine_similarity_loss(h, repa_target)
-
-            # print(f"BaseTransformerDecoder Layer {i}: {h.shape=}, {h.norm().item()=}") # (CW) - for debug
 
         return h, repa_loss
 
@@ -421,19 +322,7 @@ class BaseTransformerDecoder(nn.Module):
         # Add these lines for repa_proj initialization
         if self.repa_index != float('inf'):
             init_std = self.init_base_std or (self.dim ** (-0.5))
-            # nn.init.zeros_(self.repa_proj.weight)
-            # if self.repa_proj.bias is not None:
-                # nn.init.zeros_(self.repa_proj.bias)
             self.repa_norm.reset_parameters() # Ensure repa_norm is also reset
-
-            #  nn.init.trunc_normal_(
-            #      self.repa_proj.weight,
-            #      mean=0.0,
-            #      std=init_std, # Use out_init_std based on repa_dim if desired, using self.dim for now
-            #      a=-3 * init_std,
-            #      b=3 * init_std,
-            #  )
-            #init repa_proj.weight with zeros
             
             #now repa_proj is nn.Sequential, let's do it in a loop
             for i, layer in enumerate(self.repa_proj):
@@ -475,9 +364,6 @@ class BaseTransformer(nn.Module):
             self.repa_norm = RMSNorm(args.dim, eps=args.norm_eps)
             self.repa_loss_fn = cosine_similarity_loss if args.repa_loss_fn == "cosine" else huber_cosine_weighted
 
-        # print(f"Inside BaseTransformer.__init__, {self.rope_embeddings=}")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
 
     def forward(
         self,
@@ -490,86 +376,12 @@ class BaseTransformer(nn.Module):
         **kwargs
     ):
 
-        # print("Inside BaseTransformer.forward before freq_cis")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-        ## (CW) - Build up multi-dimensional RoPE. This turns out being the same as the original.
-        check_multidim_rope = False
-        if check_multidim_rope:
-            if tok_idx is not None:
-                print(f"{tok_idx.shape=}")
-                tok_dim = tok_idx.ndim
-                if tok_dim > 1:
-                    tok_dim = tok_idx.shape[1]
-                    # print("Inside BaseTransformer.forward with multi-dim rope. How to do?")
-                    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-                    print(f"{h.shape=}") # [1, 50400, 1024] = [bs, 2*seqlen, args.model.dim]
-                    print(f"{tok_idx.shape=}") # [50400, 4] = [2*seqlen, 4 = {x,y,z,tc}]
-
-                    freq_cis_list = []
-                    for tt in range(tok_dim):
-                        freq_cis = self.rope_embeddings(
-                                    seqlen=self.max_seqlen, 
-                                    tok_idx=tok_idx[:,tt]
-                        )
-                        freq_cis_list.append(freq_cis)
-                        print(f"For dim {tt}, {tok_idx[:,tt].shape=}, {freq_cis.shape=} ")
-                        # For dim 0, tok_idx[:,tt].shape=torch.Size([50400]),freq_cis.shape=torch.Size([50400, 32, 2, 2]) 
-                        # For dim 1, tok_idx[:,tt].shape=torch.Size([50400]),freq_cis.shape=torch.Size([50400, 32, 2, 2]) 
-                        # For dim 2, tok_idx[:,tt].shape=torch.Size([50400]),freq_cis.shape=torch.Size([50400, 32, 2, 2]) 
-                        # For dim 3, tok_idx[:,tt].shape=torch.Size([50400]),freq_cis.shape=torch.Size([50400, 32, 2, 2]) 
-
-                 
-
-        # This was the orignal code (CW).
-        freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, # USES MAX_SEQLEN TO BUILD ROPE
-                                        tok_idx=tok_idx # (CW) - SET TO NONE INSIDE!
+        freq_cis = self.rope_embeddings(seqlen=self.max_seqlen,
+                                        tok_idx=tok_idx
         )
         repa_loss = None
 
-        if check_multidim_rope and tok_dim > 1:
-            print(f"For all dims at once, {tok_idx.shape=},{freq_cis.shape=} ")
-            # rope_dim=4: For all dims at once, tok_idx.shape=torch.Size([50400, 4]),freq_cis.shape=torch.Size([50400, 4, 32, 2, 2]) 
-            # rope_dim=1: For all dims at once, tok_idx.shape=torch.Size([50400]),freq_cis.shape=torch.Size([50400, 32, 2, 2]) 
-
-            ## (CW) - Sanity check that multi-dim RoPE is doing what we think its doing.
-            for tt in range(tok_dim):
-                assert (freq_cis_list[tt] == freq_cis[:,tt,:,:,:]).all().item()
-
-        # print("Inside BaseTransformer.forward after building freq_cis before ROPE. How to construct 4D Axial RoPE?")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-        # print(f"Rope embeddings -> {freq_cis.shape=}") # (CW) - for debug
-
-        # (CW) - freqs_cis.shape should be  [1920, 256, 2, 2] I think.
-
-        # # (CW) - Print out layer types (Tensor or DTensor?)
-        # for j, layer in enumerate(self.layers):
-        #     print(j, type(layer))
-
-        # print("Inside BaseTransformer.forward after ROPE")
-        # print(f"Before BaseTransformer model, : {h.shape=}")
-        
-        for i, layer in enumerate(self.layers):     # (CW) - all these layers are type 'TransformerBlock'
-
-            # if do_idx is not None: # (CW)
-            #     print(f"\n------ Layer {i}, {type(layer)}:")
-
-            # # # (CW) - Print layer parameter types
-            # for name, param in layer.named_parameters():
-            #     print(f"Layer {i}, {name} = {param.shape}, {type(param)}") # (CW) - for debug
-
-                # # THIS IS A FIX FOR INFERENCE. IT SHOULD NOT HAPPEN WITH TRAINING. HOPEFULLY.
-                # if isinstance(param, torch.distributed.tensor.DTensor):
-                #     print(f"DTENSOR!!! - INside BaseTransformer Layer {i} with a DTensor in param {name}.")
-                #     import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-            # print(f"Before BaseTransformer Layer {i}: {h.shape=}") # (CW) - for debug
-            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
+        for i, layer in enumerate(self.layers):     # all these layers are type 'TransformerBlock'
             h = layer(h, 
                       freq_cis, 
                       tok_idx=tok_idx, 
@@ -578,11 +390,7 @@ class BaseTransformer(nn.Module):
                       do_idx=do_idx,
             )
 
-            # print(f"After BaseTransformer Layer {i}: {h.shape=}") # (CW) - for debug
-            # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
             if self.training and self.repa_index != inf and i == self.repa_index:
-                # repa_loss = (1 - F.cosine_similarity(self.repa_proj(self.repa_norm(extract_non_registers(h, **kwargs))).float(), repa_target, dim=-1).mean())
                 repa_loss = cosine_similarity_loss(self.repa_proj(self.repa_norm(extract_non_registers(h, **kwargs))).float(), repa_target,)
 
 
@@ -704,7 +512,7 @@ class DecoderTransformer(BaseTransformerDecoder):
         cross_attended = self.encoder_proj(cross_attended)
 
 
-        # (CW) - COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK - I THINK THIS WORKS!!
+        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK
         SLIDING_WINDOW = self.sliding_window
         def selfattn_sliding_window_func(b, h, q_idx, kv_idx):
             # Self-attention case
@@ -742,22 +550,22 @@ class DecoderTransformer(BaseTransformerDecoder):
                                        t=t,
                                        tok_idx=tok_idx,
                                        cross_tok_idx=cross_tok_idx,
-                                       mask=mask, # (CW) - works if mask set to None.  NOT SURE WHY!
-                                       cross_attn_mask=cross_attn_mask, # (CW) - works if cross_attn_mask set to None.  NOT SURE WHY!
+                                       mask=mask, 
+                                       cross_attn_mask=cross_attn_mask, 
                                        attn_impl=attn_impl,
                                        repa_target=repa_target,
-                                       do_idx=do_idx, # (CW)
+                                       do_idx=do_idx,
         )
 
-        h_normed = self.norm(h, t) # (CW)
+        h_normed = self.norm(h, t) 
 
-        if print_layerwise_activation_stats and do_idx is not None: # (CW)
+        if print_layerwise_activation_stats and do_idx is not None: 
             print(f"\nDecoder output norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") 
             print(f"Decoder output norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}")
 
-        logits = self.output(h_normed) # (CW)
+        logits = self.output(h_normed) 
 
         if self.use_compression_free_conv_stem:
             logits = self.compression_free_conv_stem_output(logits)
@@ -777,7 +585,7 @@ class DecoderTransformer(BaseTransformerDecoder):
 
         if target is not None:
             if self.huber_c is None:
-                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none")#.mean(dim=-1) # shape = [B, T, C]
+                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none") # shape = [B, T, C]
             else:
                 batchwise_loss = huber_loss(target.float(), logits.float(), self.huber_c)
 
@@ -792,11 +600,10 @@ class DecoderTransformer(BaseTransformerDecoder):
 
             if freq_masks is not None:
                 batchwise_loss = (batchwise_loss * freq_masks).sum(dim=1) / (freq_masks.sum(dim=1) + 1e-6) # shape = [B,C,1]
-                # batchwise_loss = (batchwise_loss * freq_masks).sum(dim=-1) / (freq_masks.sum(dim=-1) + 1e-6) # was this
             else:
                 batchwise_loss = batchwise_loss.mean(dim=-1)
 
-            if time_masks is not None: # (CW) - this line without if None will error!
+            if time_masks is not None:
                 batchwise_loss = (batchwise_loss * time_masks).sum(dim=-1) / time_masks.sum(dim=-1)
 
             losses["decoder_rf_loss"] = batchwise_loss.mean()
