@@ -586,9 +586,6 @@ class BaseTransformer(nn.Module):
                 repa_loss = cosine_similarity_loss(self.repa_proj(self.repa_norm(extract_non_registers(h, **kwargs))).float(), repa_target,)
 
 
-            # print(f"After BaseTransformer, after all layers") # (CW) - for debug
-            # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
         return h, repa_loss
 
     def reset_parameters(self):
@@ -631,36 +628,34 @@ class DecoderTransformer(BaseTransformerDecoder):
         if args.huber_c is not None:
             self.huber_c = args.huber_c
         else:
-            self.huber_c = None
-        # self.input_conv_stem = ConvStem(2, 1,)   
+            self.huber_c = None 
 
-        self.tok_embeddings = nn.Linear(args.input_dim, args.dim,) # (CW) *2 was for STFT amplitude & phase
+        self.tok_embeddings = nn.Linear(args.input_dim, args.dim,) 
 
         self.t_embedder = FourierConditioner(args.t_dim, std=args.init_base_std)
 
-        self.encoder_proj = nn.Linear(args.encoder_output_dim, args.dim) # (CW) - projection from encoder output dim to model dim
+        self.encoder_proj = nn.Linear(args.encoder_output_dim, args.dim)
 
         self.norm = AdaRMSNorm(args.t_dim, args.dim, eps=args.norm_eps)
 
         self.output = nn.Linear(
             args.dim,
-            args.input_dim, # (CW) *2 was for STFT amplitude & phase
+            args.input_dim, 
             bias=False,
         )
         self.init_base_std = args.init_base_std
-        # self.output_conv_step = ConvStem(2, 2, multiplicative_factor=8)
         self.use_compression_free_conv_stem = False
         if args.compression_free_conv_stem:
             self.use_compression_free_conv_stem = True
 
             self.compression_free_conv_stem_input = CausalConv2DStem(
-                input_features = args.input_dim, # (CW) *2 was for STFT amplitude & phase
+                input_features = args.input_dim, 
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,
             )
             self.compression_free_conv_stem_output = CausalConv2DStem(
-                input_features = args.input_dim, # (CW) *2 was for STFT amplitude & phase
+                input_features = args.input_dim,
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,
@@ -690,26 +685,7 @@ class DecoderTransformer(BaseTransformerDecoder):
         print_layerwise_activation_stats: bool = False,
     ):
 
-        # print("In DecoderTransformer.forward at the TOP")
-        # # print(f"{tokens.shape=}")
-        # # print(f"{cross_attended.shape=}")
-        # # print(f"{timeD.shape=}")
-        # # print(f"{seq_lens.shape=}")
-        # # print(f"{cross_seq_lens.shape=}")
-        # # print(f"{tok_idx.shape=}")
-        # # print(f"{cross_tok_idx.shape=}")
-        # # print(f"{type(tok_idx)=}, {tok_idx.device=}, {tok_idx.min()=} & {tok_idx.max()=}")
-        # # print(f"{self.max_seqlen=}")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # tokens = self.input_conv_stem(tokens)
-
-
-        # print(do_idx)
-
-        # print(f"Pre-squeeze: {tokens.shape=}")
-        tokens = tokens.squeeze(1)                # (CW) - this was causing error when num channels was 1. Do I need it?
-        # print(f"Post-squeeze: {tokens.shape=}")
+        tokens = tokens.squeeze(1)  
 
         bsz, seqlen, dim = tokens.shape
         _, cross_seqlen, _ = cross_attended.shape
@@ -724,17 +700,8 @@ class DecoderTransformer(BaseTransformerDecoder):
 
         h = self.tok_embeddings(tokens)
         t = self.t_embedder(timeD)
-        # print(f"time {timeD.shape} --[t_embedder {self.t_embedder}]--> t {t.shape}") # (CW) - for debug
-        # print(f"tok {tokens.shape} --[tok_embeddings {self.tok_embeddings}]--> h {h.shape}") # (CW) - for debug
 
-        # print(f"Before encoder proj, {cross_attended.shape=}") # (CW) - for debug
         cross_attended = self.encoder_proj(cross_attended)
-        # print(f"After encoder proj, {cross_attended.shape=}") # (CW) - for debug
-
-
-        # print("In DecoderTransformer.forward before computing cross-attention Document+Sliding_Window Masking")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
 
 
         # (CW) - COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK - I THINK THIS WORKS!!
@@ -762,28 +729,6 @@ class DecoderTransformer(BaseTransformerDecoder):
             torch._dynamo.config.disable = False
 
 
-        # print("In DecoderTransformer.forward after computing cross-attention Document+Sliding_Window Masking")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-
-        # (CW) - This is the old way of making masks with just bidi sliding window.
-        if False:
-            mask = (
-                mask
-                if mask is not None
-                else create_bidi_mask(seqlen, attn_impl, self.sliding_window)
-            )
-
-            # print("In DecoderTransformer.forward after mask creation")
-            
-            cross_attn_mask = (
-                cross_attn_mask
-                if cross_attn_mask is not None
-                else create_bidi_mask(seqlen, attn_impl, self.xattn_sliding_window, cross_seqlen=cross_seqlen)
-            )
-
-
         if tok_idx is not None:
             if tok_idx.ndim==3 and tok_idx.shape[0]==1:
                 tok_idx = tok_idx.squeeze().squeeze() # make it the right size for RoPE.
@@ -792,10 +737,6 @@ class DecoderTransformer(BaseTransformerDecoder):
             if cross_tok_idx.ndim==3 and cross_tok_idx.shape[0]==1:
                 cross_tok_idx = cross_tok_idx.squeeze().squeeze() # make it the right size for RoPE.
 
-        # print("INside DecoderTransformer.forward, before BaseTransformerDecoder.forward.") # (CW) - for debug
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # (CW). Here we are passing input tokens (h) and enc_out (cross_attended) through the different layers of the BaseTransformerDecoder model.
         h, repa_loss = super().forward(h,
                                        cross_attended,
                                        t=t,
@@ -808,12 +749,6 @@ class DecoderTransformer(BaseTransformerDecoder):
                                        do_idx=do_idx, # (CW)
         )
 
-
-
-        # print(f"Inside DecoderTransformer, After BaseTransformerDecoder.forward(), {h.shape=}, {t.shape=}") # (CW) - for debug
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # logits = self.output(self.norm(h, t)) # (CW) - was this
         h_normed = self.norm(h, t) # (CW)
 
         if print_layerwise_activation_stats and do_idx is not None: # (CW)
@@ -827,12 +762,7 @@ class DecoderTransformer(BaseTransformerDecoder):
         if self.use_compression_free_conv_stem:
             logits = self.compression_free_conv_stem_output(logits)
 
-        # print("In DecoderTransformer.forward just before compute losses")
-
         losses = self.compute_losses(target, logits, time_masks, freq_masks, channel_loss_weighting)
-
-        # print("In DecoderTransformer.forward after compute losses")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         if repa_target is not None:
             losses["decoder_repa_loss"] = repa_loss#.mean()
@@ -845,25 +775,18 @@ class DecoderTransformer(BaseTransformerDecoder):
     def compute_losses(self, target, logits, time_masks, freq_masks, channel_loss_weighting):
         losses = {}
 
-        # (CW) - NOTES:
-        #       Inside EEGProcessor, targets = noise - eeg_signal
-        # logits = self.output_conv_step(logits)
-
         if target is not None:
             if self.huber_c is None:
-                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none")#.mean(dim=-1) # shape = [B, T, C]??
+                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none")#.mean(dim=-1) # shape = [B, T, C]
             else:
                 batchwise_loss = huber_loss(target.float(), logits.float(), self.huber_c)
 
-            # losses["decoder_rf_loss_pre_ALW"] = batchwise_loss.mean() # Log loss before ALW to add to WANDB plots. (NOT WORKING YET!!)
-
-            # (CW) - Do Adaptive Loss Weighting - to boost loss from channels with small signals so we can better learn small signals.
+            #  Do Adaptive Loss Weighting - to boost loss from channels with small signals so we can better learn small signals.
             if self.adaptive_loss_weighting:
                 ALW = batchwise_loss.detach().abs().mean(dim=2).unsqueeze(2) # shape = [B,C,1]
                 batchwise_loss = batchwise_loss/(ALW + 1e-5)
 
 
-            # (CW) - All these are None as we run currently. 
             if channel_loss_weighting is not None:
                 batchwise_loss = batchwise_loss * channel_loss_weighting
 
@@ -932,23 +855,16 @@ class EncoderTransformer(BaseTransformer):
         self.bottleneck_type = args.bottleneck_type
         self.downsample_factor = args.encoder_latent_downsample_factor
         self.distill = args.distill_output_dim != 0
-        # self.conv_stem = ConvStem(2, 1)
-
-        self.tok_embeddings = nn.Linear(args.encoder_input_dim, args.dim) # (CW) *2 was for STFT amplitude & phase
-
+        self.tok_embeddings = nn.Linear(args.encoder_input_dim, args.dim) 
         self.norm = RMSNorm(args.dim, eps=args.norm_eps)
-
-        self.registers = torch.nn.Parameter(torch.zeros(1, args.encoder_input_dim)) # (CW) *2 was for STFT amplitude & phase
-
+        self.registers = torch.nn.Parameter(torch.zeros(1, args.encoder_input_dim))
         self.dropout_type = args.dropout_type
         if self.dropout_type=="learnable":
             self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) #, device='cuda')) # rand init for learnable dropout vector # (CW)
         else:
             self.dropout_vec = None # If None, it will just use zeros for dropped out chans (rather than learnable vector).
 
-
         self.init_base_std = args.init_base_std
-
         self.output = nn.Linear(args.dim, args.encoder_output_dim, bias=False)
 
         if args.distill_output_dim != 0:
@@ -981,9 +897,6 @@ class EncoderTransformer(BaseTransformer):
                 compress_channels=False,
             )
 
-        # print(f"Inside EncoderTransformer __init__, {args.dim=}, {args.norm_eps=}, ")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
 
     def _interleave_registers(self, x: torch.Tensor):
         """
@@ -1012,17 +925,8 @@ class EncoderTransformer(BaseTransformer):
         # Reshape to [B, num_groups, df, D]
         x = x.reshape(bsz, num_groups, df, dim)
 
-        # print("INside EncoderTransformer._interleave_registers")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # # THIS IS A FIX FOR INFERENCE. IT SHOULD NOT HAPPEN WITH TRAINING. HOPEFULLY.
-        # if isinstance(self.registers, torch.distributed.tensor.DTensor):
-        #     print("DTENSOR!!! - INside EncoderTransformer._interleave_registers with a DTensor registers")
-        #     # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-        #     self.registers = Parameter(self.registers.to_local()) # Convert DTensor to a regular Parameter Tensor
-
         # Expand the single register => [B, num_groups, 1, D]
-        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2) ## (CW) -  This .expand errors cryptically. Fix with above. But that errors later. Ugh!
+        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2)
 
         # Cat the register in front of each group => [B, num_groups, df+1, D]
         x = torch.cat([regs, x], dim=2)
@@ -1090,27 +994,14 @@ class EncoderTransformer(BaseTransformer):
         print_layerwise_activation_stats: bool = False,
     ): 
         
-        # print(f"INside EncoderTransformer.forward from the TOP: {distill_target=}, {repa_target=}")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-
-
         _, orig_seqlen, _ = token_values.shape
 
         if self.use_compression_free_conv_stem:
             token_values = self.compression_free_conv_stem_input(token_values)
 
-        # token_values = self.conv_stem(token_values)
-
-        # print(f"INside EncoderTransformer.forward Before _interleave_registers, {token_values.shape=}") # (CW) - for debug
-
         token_values, num_groups = self._interleave_registers(token_values)
         bsz, seqlen, _ = token_values.shape
 
-        # print(f"{seqlen=}")
-
-        # print(f"INside EncoderTransformer.forward After _interleave_registers, {token_values.shape=} {type(token_values)=}") # (CW) - for debug
         if do_idx is not None: # (CW)
             do_idx_pre_reg = do_idx                             # indices of dropped-out channels without registers interleaved       
             do_idx = (token_values.sum(axis=2)==0).squeeze(0)   # recompute do_idx after interleaving registers
@@ -1118,20 +1009,11 @@ class EncoderTransformer(BaseTransformer):
 
         # Now if using Learable Dropout, replace dropped-out channels with a learned but fixed parameter vector.
         if self.dropout_vec is not None:
-            ## When channel has been dropped out (all-zeros), replace it with a learned but fixed parameter vector. 
-            # I.e. initialize them to torch.randn but set them as nn.Parameter() so they are backpropped to. 
-            # Have it be the same learned embedding for every dropped out channel in the encoder. 
-            # This way the model learns that this fixed vector means 'no information'. 
-            # Ideally it would have roughly the same norm as real data so we don't have the diminishing norm issue of zeros
-            token_values[:,do_idx,:] = self.dropout_vec # Not sure if this is being learned tho actually...
-            # Note: self.registers are a learned vector too, different from self.dropout_vec.
-            # Note: Must do this after interleaving registers using do_idx, not do_idx_pre_reg.
-            #       If we do it before interleaving registers, then do_idx after registers will be (incorrectly) all false!
+            token_values[:,do_idx,:] = self.dropout_vec
 
         h = self.tok_embeddings(token_values)
 
-
-        # (CW) - COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK - I THINK THIS WORKS!!
+        # (CW) - COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK 
         SLIDING_WINDOW = self.sliding_window
         def sliding_window_func(b, h, q_idx, kv_idx):
             # Self-attention case
@@ -1150,50 +1032,15 @@ class EncoderTransformer(BaseTransformer):
             tok_idx = tok_idx.repeat_interleave(repeats=2,dim=1)
             tok_idx = tok_idx.squeeze().squeeze() # make it the right size for RoPE.
 
-        # TO DO: Things to shape after interleave_registers: Need to change for CR != 1.
-        #   (1). mask
-        #   (2). tok_idx
 
-        # print(f"INside EncoderTransformer.forward, interleave_registers into tok_idx for RoPE")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # (CW) - This is what it was. Torch.compile issue if we dont have sliding attention in there too.
-        if False:
-            mask = (
-                mask
-                if mask is not None
-                #                       512,    flex,      128      
-                else create_bidi_mask(seqlen, attn_impl, self.sliding_window) # (CW) - was this
-                # else create_document_mask(seq_lens*2) # Hardcoded for ds_fctr=1... use num_groups?
-            )
-
-
-        # print(f"INside EncoderTransformer.forward before BaseTransformer.forward")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-        # Note: for dropped-out channels, the token_values will be all zeros, 
-        # but the embeddings h will not be all zeros because of token embedding linear layer (bias in there?).
         if print_layerwise_activation_stats and do_idx is not None: # (CW)
             print(f"{do_idx.sum()=} and {(~do_idx).sum()=}")
             print(f"{token_values.shape=}")
 
 
-
-        # # THIS IS A FIX FOR INFERENCE. IT SHOULD NOT HAPPEN WITH TRAINING. HOPEFULLY.
-        # if isinstance(self.tok_embeddings.weight, torch.distributed.tensor.DTensor):
-        #     print("DTENSOR!!! - INside EncoderTransformer.forward with a DTensor tok_embeddings")
-        #     # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-        #     self.tok_embeddings.weight = Parameter(self.tok_embeddings.weight.to_local()) # Convert DTensor to a regular Parameter Tensor
-        #     self.tok_embeddings.bias = Parameter(self.tok_embeddings.bias.to_local())
-
-
-
-
-        # (CW). WORKING RIGHT HERE. SOMEHOW THIS ALL BREAKS IN INFERENCE!! I DUNNO WHY. - Had to do with torch.compile graph breaking.
         h, repa_loss = super().forward(h,                   # BaseTransformer.forward
                                        tok_idx=tok_idx, 
-                                       mask=mask, # (CW) - works if mask set to None.  NOT SURE WHY!
+                                       mask=mask,
                                        attn_impl=attn_impl, 
                                        repa_target=repa_target, 
                                        num_groups=num_groups, 
@@ -1204,10 +1051,7 @@ class EncoderTransformer(BaseTransformer):
 
         h, non_regs = self._extract_registers_and_non_registers(h, num_groups, original_seqlen=orig_seqlen, return_non_registers=distill_target is not None)
 
-        # print("INside EncoderTransformer.forward, after BaseTransformer.forward")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
-        
         if print_layerwise_activation_stats and do_idx is not None: # (CW)
             h_normed = self.norm(h) # (CW)
             print(f"\nEncoder output norm (drop-out): mean={h[:, do_idx_pre_reg, :].mean().item():.6f}, std={h[:, do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
@@ -1222,11 +1066,7 @@ class EncoderTransformer(BaseTransformer):
 
         logits, losses = self.bottleneck(logits)
         if distill_target is not None:
-            # losses['encoder_distill'] = ((distill_target - self.distill_output(self.distill_norm(non_regs))) ** 2).mean()
-            # do cosine similarity instead
-            # print(distill_target.shape, self.distill_output(self.distill_norm(non_regs)).shape, non_regs.shape, token_values.shape, 
             losses['encoder_distill'] = (1 - F.cosine_similarity(self.distill_output(self.distill_norm(non_regs)), distill_target, dim=-1).mean()) * 0.1 
-            # print("computer encoder distill")
 
         if repa_target is not None:
             losses["encoder_repa_loss"] = repa_loss#.mean()
@@ -1307,9 +1147,6 @@ class EncoderDecoder(nn.Module):
     def __init__(self, args: DecoderTransformerArgs):
         super().__init__()
 
-        # print("Inside EncoderDecoder.__init__")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
         self.encoder = EncoderTransformer(args)
         self.decoder = DecoderTransformer(args)
         self.input_output_dim = args.input_dim
@@ -1344,60 +1181,14 @@ class EncoderDecoder(nn.Module):
     ):
 
 
-        # print("INside EncoderDecoder model.forward, before encoder.forward and decoder.forward - Put t_coarse into tok_idx for RoPE")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-        # print(f"{distill_target=}, {encoder_repa_target=}")
-
-
-        #print input data shapes.  
-        if False:
-            print(f"Before reintroduce batch dimension inside EncoderDecoder.forward:")
-            print(f"\t{encoder_input.shape=}")
-            print(f"\t{decoder_input.shape=}")
-            print(f"\t{t.shape=}")
-            print(f"\t{chan_pos.shape=}")
-            print(f"\t{chan_pos_discrete.shape=}")
-            print(f"\t{chan_id.shape=}")
-            print(f"\t{t_coarse.shape=}")
-            print(f"\t{seq_lens=}")
-            print("------------------------")
-
-
-        # Reintroduce the batch dimension. Come back to: I forget, Do I actually need to do this in the first place? Is it needed for something in Encoder?
         if encoder_input.ndim==2:
             encoder_input = encoder_input.unsqueeze(0)
             target = target.unsqueeze(0) # doing to get rid of broadcast warning from DecoderTransformer.compute_losses
             chan_pos = chan_pos.unsqueeze(0)
             chan_pos_discrete = chan_pos_discrete.unsqueeze(0)
             chan_id = chan_id.unsqueeze(0)
-            t_coarse = t_coarse.unsqueeze(0) # We are just undoing this later...
-            # seq_ids = seq_ids.unsqueeze(0)
+            t_coarse = t_coarse.unsqueeze(0)
 
-
-        #print input data shapes.  
-        if False:
-            print(f"After reintroduce batch dimension inside EncoderDecoder.forward:")
-            print(f"\t{encoder_input.shape=}")
-            print(f"\t{decoder_input.shape=}")
-            print(f"\t{t.shape=}")
-            print(f"\t{chan_pos.shape=}")
-            print(f"\t{chan_pos_discrete.shape=}")
-            print(f"\t{chan_pos_discrete[:,:10,:]=}")
-            print(f"\t{chan_id.shape=}")
-            print(f"\t{t_coarse.shape=}")
-            print(f"\t{seq_lens.shape=}")
-            print(f"\t{seq_lens=}")
-            print("------------------------")
-
-
-        # # (CW) - swap the channel and time dimensions [B,T,C] -> [B,C,T] so that tok_embeddings linear layer does not mix channels.
-        # if self.DONT_MIX_CHANNELS:
-        #     encoder_input = encoder_input.transpose(1, 2)[:,:,:self.num_fine_time_pts]  # and take only first 0.5 seconds (128 samples at 256Hz)
-        #     decoder_input = decoder_input.transpose(1, 2)[:,:,:self.num_fine_time_pts]
-        #     if target is not None:
-        #         target = target.transpose(1, 2)[:,:,:self.num_fine_time_pts]
-        
 
         ## Options for tok_idx.  Choose 1.
         if self.tok_idx_type is None:
@@ -1414,32 +1205,9 @@ class EncoderDecoder(nn.Module):
             print(f"Dont understand {self.tok_idx_type=} and {self.rope_dim}")
             die
 
-        # print(f"{self.tok_idx_type=} and {self.rope_dim=}")
-
-        # print(f"Inside EncoderDecoder.forward() {tok_idx.shape=} ")
-
-
-
-
-        # print(f"After reintroduce batch dimension inside EncoderDecoder.forward:")
-        # print(f"\t{encoder_input.shape=}")
-        # print(f"\t{decoder_input.shape=}")
-        # print(f"\t{t.shape=}")
-        # print(f"\t{chan_pos.shape=}")
-        # print(f"\t{chan_pos_discrete.shape=}")
-        # print(f"\t{chan_pos_discrete[:,:10,:]=}")
-        # print(f"\t{chan_id.shape=}")
-        # print(f"\t{t_coarse.shape=}")
-        # print(f"\t{seq_lens.shape=}")
-        # print(f"\t{seq_lens=}")
-        # print("------------------------")
-
 
         do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
         # do_idx = None # [Set do_idx to None to disable printing of activation stats comparing channel drop-out]
-
-        # print("INside EncoderDecoder model.forward, before encoder.forward and decoder.forward.")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         enc_out, enc_losses = self.encoder(encoder_input, 
                                            distill_target=distill_target,       # (CW) - None
@@ -1449,42 +1217,9 @@ class EncoderDecoder(nn.Module):
                                            tok_idx=tok_idx,                    # (CW) - pass in coarse time index for 1D RoPE
                                            do_idx=do_idx,                      # indices of dropped-out channels (CW)
         )
-        # print(f"{enc_out.shape=}")
-
-
-        if False:
-            # Question: For dropped out channels, does enc_out have all zeros?  Is it constant?  Need to check.
-            xxx = enc_out[:,do_idx,:].squeeze(0) # encoder output for dropped out channels is what? 
-            yyy = decoder_input[:,do_idx,:].squeeze(0) # t*noise input to decoder for dropped out channels
-            # zzz = encoder_input[:,do_idx,:].squeeze(0) # all zeros by definition of do_idx
-
-            print(f"Plotting out random samples from encoder output and decoder input for dropped out channels")
-
-            # HERE - Plot 100 random samples from enc_out and decoder_input in a 10x10 grid
-            from .utils import plot_random_samples_in_grid
-            torch._dynamo.config.disable = True
-            plot_random_samples_in_grid(data=xxx, 
-                                        num_samples=100, 
-                                        grid_rows=10, 
-                                        grid_cols=10, 
-                                        save_path='figures/enc_out_samples_grid.png', 
-                                        title='100 Random Samples from encoder output for dropped out channels')
-            plot_random_samples_in_grid(data=yyy, 
-                                        num_samples=100, 
-                                        grid_rows=10, 
-                                        grid_cols=10, 
-                                        save_path='figures/dec_in_samples_grid.png', 
-                                        title='100 Random Samples from decoder input for dropped out channels')
-            torch._dynamo.config.disable = False
-
-        # print("INside EncoderDecoder model.forward, after encoder.forward and before decoder.forward.")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-
 
         dec_out, dec_losses = self.decoder(tokens=decoder_input,
-                                           cross_attended=enc_out, #(CW) - self.dropout_encoder_outputs(enc_out), - NOT USING THIS DROPOUT! DOING IT IN DATASET NOW.
+                                           cross_attended=enc_out,
                                            timeD=t, 
                                            target=target, 
                                            time_masks=time_masks,                               # (CW) - None
@@ -1500,49 +1235,7 @@ class EncoderDecoder(nn.Module):
                                            do_idx=do_idx, #.squeeze(0) if do_idx is not None else None,  # indices of dropped-out channels (CW)
         )
 
-        #print out shapes as data flows through the model.  
-        if False:
-            print(f"{encoder_input.shape=}")
-            print(f"{enc_out.shape=}")
-            print("")
-            print(f"{decoder_input.shape=}")
-            print(f"{t.shape=}")
-            print(f"{target.shape=}")
-            if freq_masks is not None:
-                print(f"{freq_masks.shape=}")
-            print(f"{dec_out.shape=}")
-
-
-        # print("INside EncoderDecoder model.forward, after encoder.forward and decoder.forward")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-        
-        # dec_out, dec_losses = self.decoder(tokens=decoder_input, cross_attended=enc_out, time=t, target=target)
-
         return dec_out, enc_losses, dec_losses
-
-    def dropout_encoder_outputs(self, enc_out: torch.Tensor):
-        """
-        This was the dropout scheme handed down from Audio.
-        NOT USING CURRENTLY - Doing dropout at encoder_inputs.
-        Drop entire batch elements or entire sequence elements
-        """
-
-        # print(f"Inside EncoderDecoder.dropout_encoder_outputs with {self.decoder_timestep_dropout=} and {self.encoder_dropout=}")
-
-        # (1). This zeros out entire batch in encoder output (CW)
-        bsz, seqlen, dim = enc_out.shape
-        mask = torch.rand(bsz, 1, 1, device=enc_out.device) > self.encoder_dropout
-        enc_out = enc_out * mask if self.training else enc_out
-
-        # (2). This zeros out entire channels in encoder output (CW)
-        dout = F.dropout1d(enc_out, p=self.decoder_timestep_dropout, training=self.training)
-
-        # (3). We are NOT dropping out specific time points across all channels. This is good. Dont think we want to. (CW)
-
-        # print(f"Inside EncoderDecoder.dropout_encoder_outputs")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-               
-        return dout
 
 
     @torch.no_grad()
@@ -1550,27 +1243,7 @@ class EncoderDecoder(nn.Module):
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
 
-            # print("Inside EncoderDecoder.sample")
-            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-            # enc_out, _ = self.encoder(encoder_input)      # (CW) - was this first
-
-            # enc_out, _ = self.encoder(                      # (CW) - was this second (working version without Learned Dropout Vector)
-            #                 token_values=encoder_input, 
-            #                 seq_lens=seq_lens,
-            #                 tok_idx=tok_idx,
-            # )
-
-
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            ## (CW) - Trying to do inference with Learned Dropout Vector (not zeros for dropout).
             do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
-            ## To DO: replace encoder_input at do_idx with self.dropout_vec ... happening inside EncoderTransformer()
-
-            # print(f"Inside model.sample")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
-            # matches = (encoder_input == self.encoder.dropout_vec).all(dim=-1) 
-            # token_values[:,do_idx,:] = self.dropout_vec
 
             # do_idx = None # [Set do_idx to None to disable printing of activation stats comparing channel drop-out]
             enc_out, _ = self.encoder(
@@ -1588,12 +1261,6 @@ class EncoderDecoder(nn.Module):
             z = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device) # (CW) - was init to rand
             # z = torch.zeros_like(encoder_input).to(enc_out.device) # (CW) - trying init to zeros
 
-            # ## Send Noisy signal in to decoder during inference - as debug test.
-            # if False:
-            #     tt = 0.5
-            #     noise = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device)
-            #     z = (1 - tt) * encoder_input + tt * noise
-
             # Do not noise channel {x,y,z}-position in eeg_signal
             if self.dont_noise_chan_xyz:
                 if dim==131 or dim==35:
@@ -1607,16 +1274,9 @@ class EncoderDecoder(nn.Module):
 
             outputs = []
             for i in range(sample_steps, 0, -1):
-                # print(f"{i=} in {sample_steps}")
                 t = dt_time * i
-                # print(t)
                 t_model = t.unsqueeze(1).unsqueeze(1)
-                # print(t_model.shape, z.shape)
 
-                # print("Inside EncoderDecoder.sample before decoder.forward()")
-                # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-                #vc, _ = self.decoder(z.unsqueeze(1), enc_out, t_model) # (CW) - was this
                 vc, _ = self.decoder(tokens=z.unsqueeze(1),
                                      cross_attended=enc_out, 
                                      timeD=t_model, 
@@ -1625,19 +1285,6 @@ class EncoderDecoder(nn.Module):
                                      tok_idx=tok_idx,                     # (CW) - pass in coarse time index for 1D RoPE
                                      cross_tok_idx=tok_idx,               # (CW) - pass in coarse time index for 1D RoPE (with CR=1)               
                 )
-
-
-                # print("Inside EncoderDecoder.sample after decoder.forward()")
-                # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-                # NOTE: cfg scale (as implemented) is kinda weird. Why?
-                #   Special case:
-                #       cfg = 1.0 means use exactly conditioned vc.
-                #   Otherwise:
-                #       low cfg = 1.1 means use mostly unconditioned vc_uncond
-                #       high cfg 10.0 means use mostly conditioned vc 
-                #       cfg < 1.0 would work here (wouldnt error) and means something a little weird - closer to uncond.
 
                 if cfg != 1.0:
                     # vc_uncond, _ = self.decoder(z, torch.zeros_like(enc_out), t_model) # (CW) - was this
@@ -1663,9 +1310,6 @@ class EncoderDecoder(nn.Module):
                         import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
                 outputs.append(z)
-
-            # print(f"At the end of EncoderDecoder.sample")
-            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
             
             return z, outputs
 
@@ -1692,130 +1336,23 @@ def build_fsdp_grouping_plan(model_args: DecoderTransformerArgs) -> List[Tuple[s
     group_plan: List[Tuple[str, bool]] = []
 
     # # 1. Encoder Input
-    # if model_args.compression_free_conv_stem:
-    #      group_plan.append(("encoder.compression_free_conv_stem_input", False))
-    # group_plan.append(("encoder.tok_embeddings", False))
     group_plan.append(("encoder.output", False)) # <-- Changed to True
     group_plan.append(("decoder.output", False)) # Final output for main loss
     if model_args.decoder_repa_index != inf:
         group_plan.append(("decoder.repa_proj", False))
-        # group_plan.append(("decoder.repa_norm", False))
-        # group_plan.append(("decoder.repa_loss_fn", False))
     if model_args.encoder_repa_index != inf:
         group_plan.append(("encoder.repa_proj", False))
-        # group_plan.append(("encoder.repa_norm", False))
-        # group_plan.append(("encoder.repa_loss_fn", False))
-
 
     # 2. Encoder Transformer Blocks
     for i in range(model_args.n_layers):
         group_plan.append((f"encoder.layers.{i}", False))
 
-    # 3. Encoder Output Block - crucial change here
-    # Wrap norm first, keep its output sharded
-    # group_plan.append(("encoder.norm", False))
-    # Wrap the linear output projection. Gather its output (reshard=True)
-    # because it feeds into the bottleneck/loss calculations (MMD, KL)
-    # which likely require the full tensor. This gathered tensor is then
-    # also passed to the decoder, which FSDP will handle.
-
-    # Add distill layers if they exist. Assume they operate on outputs
-    # potentially *before* the final 'encoder.output'. If they operate *after*,
-    # they should also be gathered or handled carefully. Let's assume for now
-    # they use internal states or sharded outputs where possible. If issues arise,
-    # these might need `True` as well depending on their implementation.
-    # if model_args.distill_output_dim != 0:
-    #     group_plan.append(("encoder.distill_norm", False)) # Assume operates on sharded non_regs
-    #     group_plan.append(("encoder.distill_output", False))# Assume operates on sharded non_regs
-
-    # --- Decoder ---
-    # # 4. Decoder Input Layers
-    # if model_args.compression_free_conv_stem:
-    #     group_plan.append(("decoder.compression_free_conv_stem_input", False))
-    # group_plan.append(("decoder.tok_embeddings", False))
-    # group_plan.append(("decoder.t_embedder", False))
-    # group_plan.append(("decoder.encoder_proj", False))
-
-    # 5. Decoder Transformer Blocks
+    # 3. Decoder Transformer Blocks
     for i in range(model_args.n_layers):
         group_plan.append((f"decoder.layers.{i}", False))
 
-    # 6. Decoder Output Block
-    # group_plan.append(("decoder.norm", False))
-    # if model_args.compression_free_conv_stem:
-    #     group_plan.append(("decoder.compression_free_conv_stem_output", True))
-
-    # --- REPA if they exist ---
-    # 7. REPA layers
-
-
-
-    # 8. Add Decoder and Encoder themselves
+    # 4. Add Decoder and Encoder themselves
     group_plan.append(("encoder", False))
     group_plan.append(("decoder", False))
 
-
-
     return group_plan
-
-
-
-
-# Optional and only used for model/tensor parallelism when tp_size > 1
-# def tp_parallelize(model, tp_mesh, model_args: DecoderTransformerArgs, distributed_args):
-#     assert model_args.dim % distributed_args.tp_size == 0
-#     assert model_args.vocab_size % distributed_args.tp_size == 0
-#     assert model_args.n_heads % distributed_args.tp_size == 0
-#     assert (model_args.n_kv_heads or 0) % distributed_args.tp_size == 0
-#     assert model_args.n_heads % (model_args.n_kv_heads or 1) == 0
-
-#     # Embedding layer tp
-#     main_plan = {}
-#     main_plan["tok_embeddings"] = ColwiseParallel(
-#         input_layouts=Replicate(), output_layouts=Shard(1)
-#     )
-#     main_plan["norm"] = SequenceParallel()
-#     main_plan["output"] = ColwiseParallel(
-#         input_layouts=Shard(1), output_layouts=Replicate()
-#     )
-
-#     parallelize_module(
-#         model,
-#         tp_mesh,
-#         main_plan,
-#     )
-
-#     # Attention layers tp
-#     for layer in model.layers:
-#         layer_plan = {}
-
-#         layer_plan["attention"] = PrepareModuleInput(
-#             input_layouts=(Shard(1), None),
-#             desired_input_layouts=(Replicate(), None),
-#         )
-#         layer_plan["attention_norm"] = SequenceParallel()
-#         layer_plan["attention.wq"] = ColwiseParallel()
-#         layer_plan["attention.wk"] = ColwiseParallel()
-#         layer_plan["attention.wv"] = ColwiseParallel()
-#         layer_plan["attention.wo"] = RowwiseParallel(output_layouts=Shard(1))
-
-#         # Feedforward layers tp
-#         layer_plan["feed_forward"] = PrepareModuleInput(
-#             input_layouts=(Shard(1),),
-#             desired_input_layouts=(Replicate(),),
-#         )
-#         layer_plan["ffn_norm"] = SequenceParallel()
-#         layer_plan["feed_forward.w1"] = ColwiseParallel()
-#         layer_plan["feed_forward.w3"] = ColwiseParallel()
-#         layer_plan["feed_forward.w2"] = RowwiseParallel(output_layouts=Shard(1))
-
-#         parallelize_module(
-#             layer,
-#             tp_mesh,
-#             layer_plan,
-#         )
-
-#         # Adjusting the number of heads and kv heads according to the tp size
-#         attn_layer = layer.attention
-#         attn_layer.n_heads = attn_layer.n_heads // distributed_args.tp_size
-#         attn_layer.n_kv_heads = attn_layer.n_kv_heads // distributed_args.tp_size
