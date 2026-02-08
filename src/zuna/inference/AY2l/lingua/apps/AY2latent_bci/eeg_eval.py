@@ -115,51 +115,6 @@ LOAD_THE_MODEL = True           # Flag to load model onto GPU or not. If False, 
 # SAVE_RECONSTRUCTION_PTS = True  # Flag to save reconstructions and latents into pt files so we can run classifier on them
 
 
-
-def compute_mae(y_true, y_pred):
-    """
-    Compute Mean Absolute Error between two signals.
-    """
-    # Ensure inputs are numpy arrays for vectorization
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
-    
-    # Calculate the absolute difference, then take the mean
-    mae = np.mean(np.abs(y_true - y_pred))
-    
-    return mae
-
-def compute_nmse(y_true, y_pred):
-    """
-    Compute Normalized Mean Square Error between two signals.
-    """
-    mse = np.mean((y_true - y_pred)**2)
-    normalization = np.mean(y_true**2)
-    return mse / normalization # maybe 10 * np.log10(mse / normalization) for dB?
-
-
-def compute_snr(y_true, y_pred):
-    """
-    Compute Signal-to-Noise Ratio between two signals.
-    """
-    # Power of the clean signal
-    sig_power = np.sum(y_true**2)
-    
-    # Power of the noise (the difference)
-    noise_power = np.sum((y_true - y_pred)**2)
-    
-    # Compute ratio in dB
-    snr = 10 * np.log10(sig_power / noise_power)
-    return snr
-
-def compute_pcc(y_true, y_pred):
-    """
-    Compute Pearson Correlation Coefficient between two signals.
-    """
-    # This returns a 2x2 matrix; the [0, 1] element is the r value
-    return np.corrcoef(y_true, y_pred)[0, 1]
-
-
 @dataclass
 class TrainArgs:
     name: str = "lingua"
@@ -325,28 +280,9 @@ def every_n_steps(train_state, freq, acc_step=None, acc_freq=None):
         test = test and ((train_state.acc_step % acc_freq) == 0)
     return test
 
-def reshape_eeg_signal(eeg_signal, polyphase_factor=1): # (CW)
-    """
-    eeg_signal.shape = [B,C,T] = [B, 64, 1280] 
-    EncoderDecoder model expects [B,T,C].
-    Here, we permute dims 2 & 1 with x.permute(0, 2, 1)
-    Can also implement Polyphase here to downsample (T,seqlen)
-    and put it into (C,dim) -> [B, 256, 320] 
-    """
-
-    # print("Inside reshape_eeg_signal")
-    # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-    eeg_signal = eeg_signal.permute(0,2,1)
-    if polyphase_factor > 1:
-        print("Need to implement polyphase.")
-    return eeg_signal
-
-
 
 def plot_compare_eeg_signal(data,
                             reconst,  
-                            mse_value,
                             eeg_signal=None,  # (CW) - added this argument to see original signal with no dropout  
                             mne_reconstruction = None,
                             fs=256,
@@ -377,17 +313,9 @@ def plot_compare_eeg_signal(data,
     pct_dropout = (np.abs(data).sum(axis=0)==0).sum()/chans
     where_dropout = np.abs(data).sum(axis=0)==0
 
-
-    # print(f"In plot_compare_eeg_signal, ... ")
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-    if eeg_signal is not None:
-        MSE_dropout = np.abs(reconst[:,where_dropout] - eeg_signal[:,where_dropout]).mean()
-        MSE_nondrop = np.abs(reconst[:,~where_dropout] - eeg_signal[:,~where_dropout]).mean()
     if mne_reconstruction is not None:
-        #jm - Transpose MNE reconstruction from (channels, times) to (times, channels)
+        #Transpose MNE reconstruction from (channels, times) to (times, channels)
         mne_reconstruction = mne_reconstruction.T
-        MSE_mne_dropout = np.abs(reconst[:,where_dropout] - mne_reconstruction[:,where_dropout]).mean()
 
 
     if dimx==dimy==1:
@@ -446,318 +374,12 @@ def plot_compare_eeg_signal(data,
     fig.text(0.19, 0.97, "reconst", ha='center', va='center', fontsize=16, fontweight='bold', color='red')
     fig.text(0.22, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
     fig.text(0.25, 0.97, "mne", ha='center', va='center', fontsize=16, fontweight='bold', color='magenta')
-    plt.suptitle(f"EEG{fname_tag} - ({batch=}, {idx=}, {sample=}) - MSE={mse_value:0.5f} - %dropped={pct_dropout:0.3f}", fontsize=16, fontweight='bold')
+    plt.suptitle(f"EEG{fname_tag} - ({batch=}, {idx=}, {sample=}) - %dropped={pct_dropout:0.3f}", fontsize=16, fontweight='bold')
 
-    if eeg_signal is not None:
-        fig.text(0.8, 0.97, f"MSE_do={MSE_dropout:0.3f}", ha='center', va='center', fontsize=16, fontweight='bold', color='green')
-        fig.text(0.9, 0.97, f"MSE_~do={MSE_nondrop:0.3f}", ha='center', va='center', fontsize=16, fontweight='bold', color='blue')
-    if mne_reconstruction is not None:
-        fig.text(0.8, 0.95, f"MSE_mne={MSE_mne_dropout:0.3f}", ha='center', va='center', fontsize=16, fontweight='bold', color='magenta')
-
-
-    # (CW) - try to use dark background for plots.
-    if False:
-        plt.style.use('dark_background')
 
     plt.savefig(f"{dir_base}/eeg_signal_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-
-
-
-def plot_compare_eeg_position(data,
-                              reconst,  
-                              mse_value,
-                              batch=0, 
-                              sample=0,
-                              idx=0,
-                              fname_tag="",
-                              dir_base="figures",
-):
-    """
-    Plot EEG electrode position (data & reconst) over coarse time scale.
-    """
-    assert data.shape == reconst.shape
-
-    tc = data.shape[1]//3 # coarse time
-
-    # Split out coarse_time from {x,z,y} channels.
-    data = data.reshape(-1,tc,3)
-    reconst = reconst.reshape(-1,tc,3)
-
-    # Sanity check: channel positions in data should be same for all time points
-    #       Not true for reconst - but is desirable.
-    xxx = data[:,0,:]
-    for i in range(1,tc):
-        yyy = data[:,i,:]
-        assert (yyy == xxx).all()
-
-    if tc ==  1:
-        dimx, dimy = 1,1
-    elif tc == 10:
-        dimx, dimy = 2,5
-    elif tc == 40:
-        dimx, dimy = 5,8
-    else:
-        print(f"In plot_compare_eeg_position, tc is unexpected: {dimx=}, {dimy=}, {tc=}")
-        import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-    assert dimx*dimy == tc
-
-    tf_sec = 5.0/tc # fine-time window in seconds for each coarse time chunk (full signal is 5 seconds for now)
-
-    fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12), subplot_kw=dict(projection="3d"))
-
-    # Get max/min for each axis, across data & reconst for subplot consistency
-    max_x = max( data[:,:,0].max(), reconst[:,:,0].max() )
-    min_x = min( data[:,:,0].min(), reconst[:,:,0].min() )
-    max_y = max( data[:,:,1].max(), reconst[:,:,1].max() )
-    min_y = min( data[:,:,1].min(), reconst[:,:,1].min() )
-    max_z = max( data[:,:,2].max(), reconst[:,:,2].max() )
-    min_z = min( data[:,:,2].min(), reconst[:,:,2].min() )
-
-
-
-    if tc == 1:
-        tc = tc-1 # just to make the indexing work.
-        # If only one coarse time point (chop_signals_only)
-        axes.view_init(elev=20, azim=120)
-        axes.set_box_aspect([1, 1, 1])
-        axes.set_xlim(min_x, max_x)
-        axes.set_ylim(min_y, max_y)
-        axes.set_zlim(min_z, max_z)
-        #
-        xd = data[:, tc, 0]
-        yd = data[:, tc, 1]
-        zd = data[:, tc, 2]
-        axes.scatter(xd, yd, zd, marker='o', s=20, facecolors='none', edgecolors='b', alpha=0.3)
-        #
-        xr = reconst[:, tc, 0]
-        yr = reconst[:, tc, 1]
-        zr = reconst[:, tc, 2]
-        axes.scatter(xr, yr, zr, marker='o', s=15, facecolors='r', edgecolors='r', alpha=0.3)
-        #
-        axes.set_xlabel('x')
-        axes.set_ylabel('y')
-        axes.set_zlabel('z')
-        axes.set_title(f"tc = {tc*tf_sec}-{(tc+1)*tf_sec} secs ")
-
-    else:
-        # Loop through each subplot and plot channel positions at that coarse time.
-        tc=-1
-        for i in range(dimx):
-            for j in range(dimy):
-                tc+=1
-                axes[i, j].view_init(elev=20, azim=120)
-                axes[i, j].set_box_aspect([1, 1, 1])
-                axes[i, j].set_xlim(min_x, max_x)
-                axes[i, j].set_ylim(min_y, max_y)
-                axes[i, j].set_zlim(min_z, max_z)
-                #
-                xd = data[:, tc, 0]
-                yd = data[:, tc, 1]
-                zd = data[:, tc, 2]
-                axes[i, j].scatter(xd, yd, zd, marker='o', s=20, facecolors='none', edgecolors='b', alpha=0.3)
-                #
-                xr = reconst[:, tc, 0]
-                yr = reconst[:, tc, 1]
-                zr = reconst[:, tc, 2]
-                axes[i, j].scatter(xr, yr, zr, marker='o', s=15, facecolors='r', edgecolors='r', alpha=0.3)
-
-                if tc==0:
-                    axes[i, j].set_xlabel('x')
-                    axes[i, j].set_ylabel('y')
-                    axes[i, j].set_zlabel('z')
-                axes[i, j].set_title(f"tc = {tc*tf_sec}-{(tc+1)*tf_sec} secs ")
-        
-    plt.tight_layout(rect=[0, 0, 1, 0.95]) # leave some space at top for suptitle
-    fig.text(0.27, 0.97, "data", ha='center', va='center', fontsize=16, fontweight='bold', color='blue')
-    fig.text(0.30, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
-    fig.text(0.34, 0.97, "reconst", ha='center', va='center', fontsize=16, fontweight='bold', color='red')
-    plt.suptitle(f"EEG - ({batch=}, {idx=}, {sample=}) - MSE={mse_value:0.5f}", fontsize=16, fontweight='bold')
-
-    plt.savefig(f"{dir_base}/eeg_position_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def plot_compare_fft(data, 
-                     reconst,
-                     mse_value,
-                     mse_value_do,
-                     mse_value_nodo,
-                     freqs, 
-                     batch=0, 
-                     sample=0,
-                     idx=0,
-                     fname_tag="",
-                     dir_base="figures"):
-    
-    """
-    Plot FFT spectrum (data & reconst), each channel on a different subplot.
-    """
-
-    assert data.shape == reconst.shape
-
-    data = data.T
-    reconst = reconst.T
-
-    num_f, chans = data.shape
-    print(f"\tfft: {chans=}, {num_f=}")
-
-    # dim = int(np.ceil(np.sqrt(chans)))
-    best_div = get_best_divisors(chans, max_pad=10)
-    dimx, dimy = best_div
-    fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12))
-
-    if dimx==dimy==1:
-
-        # Single channel case: (copy-pasted-edited from multi-chan case below)
-        ch=0
-        # Plot FFT of EEG
-        axes.plot(freqs, data[:, ch], "b-", linewidth=0.5, alpha=0.4)
-        axes.plot(freqs, reconst[:, ch], "r-", linewidth=0.5, alpha=0.4)
-        axes.set_xlim(freqs[0],freqs[-1])
-        axes.tick_params(axis='x', labelsize=10)
-        axes.tick_params(axis='y', labelsize=10)
-        axes.grid(True)
-        axes.text(.98, .98, f"Ch{ch+1}", transform=axes.transAxes, ha='right', va='top', fontsize=12, color='black')
-        axes.set_xlabel("Freq (hz)")
-        axes.set_ylabel("Amp")
-
-    else:
-        # Multi-channel case:
-        # Loop through each subplot and plot something
-        ch=-1
-        for i in range(dimx):
-            for j in range(dimy):
-                try:  
-                    ch+=1
-                    # Plot FFT of EEG
-                    axes[i, j].plot(freqs, data[:, ch], "b-", linewidth=0.5, alpha=0.4)
-                    axes[i, j].plot(freqs, reconst[:, ch], "r-", linewidth=0.5, alpha=0.4)
-                    axes[i, j].set_xlim(freqs[0],freqs[-1])
-                    axes[i, j].tick_params(axis='x', labelsize=10)
-                    axes[i, j].tick_params(axis='y', labelsize=10)
-                    axes[i, j].grid(True)
-                    axes[i, j].text(.98, .98, f"Ch{ch+1}", transform=axes[i, j].transAxes, ha='right', va='top', fontsize=12, color='black')
-                    
-                    if i==(dimx-1) and j==0:
-                        axes[i, j].set_xlabel("Freq (hz)")
-                        axes[i, j].set_ylabel("Amp")
-            
-                except:
-                    break # If we run out of channels, just break
-        
-    plt.tight_layout(rect=[0, 0, 1, 0.95]) # leave some space at top for suptitle
-    fig.text(0.05, 0.97, "data", ha='center', va='center', fontsize=16, fontweight='bold', color='blue')
-    fig.text(0.08, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
-    fig.text(0.12, 0.97, "reconst", ha='center', va='center', fontsize=16, fontweight='bold', color='red')
-    plt.suptitle(f"EEG FFT - ({batch=}, {idx=}, {sample=}) - MSE={mse_value:0.5f}, MSE_do={mse_value_do:0.5f}, MSE_nodo={mse_value_nodo:0.5f}", fontsize=16, fontweight='bold')
-
-    plt.savefig(f"{dir_base}/fft_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_compare_latents(data,
-                         reconst,  
-                         mse_value,
-                         batch=0, 
-                         sample=0,
-                         idx=0,
-                         fname_tag="",
-                         dir_base="figures"):
-
-    """
-    Plot latents from encoder operating on (data & reconst), each channel on a different subplot.
-    """
-    assert data.shape == reconst.shape
-
-    # print(f"Inside plot_compare_latents:")
-    # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-    
-    data = data.T
-    reconst = reconst.T
-
-    num_t, chans = data.shape
-    t = np.arange(num_t) #/ fs
-    print(f"\tlat: {chans=}, {num_t=}")
-
-    # dim = int(np.ceil(np.sqrt(chans)))
-    best_div = get_best_divisors(chans, max_pad=10)
-    dimx, dimy = best_div
-    fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12))
-
-    if dimx==dimy==1:
-        # Single chan case
-        ch=0
-        # Plot time-domain EEG (offset by channel index)
-        axes.plot(t, data[:, ch], "b-", linewidth=0.5, alpha=0.4)
-        axes.plot(t, reconst[:, ch], "r-", linewidth=0.5, alpha=0.4)
-        axes.set_xlim(t[0],t[-1])
-        axes.tick_params(axis='x', labelsize=10)
-        axes.tick_params(axis='y', labelsize=10)
-        axes.grid(True)
-        axes.text(.98, .98, f"dim {ch+1}", transform=axes.transAxes, ha='right', va='top', fontsize=12, color='black')
-        axes.set_xlabel("Latent Sequence")
-        axes.set_ylabel("Amp")
-
-    else:
-        # Multi-chan case
-        # Loop through each subplot and plot something
-        ch=-1
-        for i in range(dimx):
-            for j in range(dimy):
-                try:
-                    ch+=1
-                    # Plot time-domain EEG (offset by channel index)
-                    axes[i, j].plot(t, data[:, ch], "b-", linewidth=0.5, alpha=0.4)
-                    axes[i, j].plot(t, reconst[:, ch], "r-", linewidth=0.5, alpha=0.4)
-                    axes[i, j].set_xlim(t[0],t[-1])
-                    axes[i, j].tick_params(axis='x', labelsize=10)
-                    axes[i, j].tick_params(axis='y', labelsize=10)
-                    axes[i, j].grid(True)
-                    axes[i, j].text(.98, .98, f"dim {ch+1}", transform=axes[i, j].transAxes, ha='right', va='top', fontsize=12, color='black')
-                    if i==(dimx-1) and j==0:
-                        axes[i, j].set_xlabel("Latent Sequence")
-                        axes[i, j].set_ylabel("Amp")
-
-                except:
-                    break # If we run out of channels, just break
-        
-    plt.tight_layout(rect=[0, 0, 1, 0.95]) # leave some space at top for suptitle
-    fig.text(0.13, 0.97, "data", ha='center', va='center', fontsize=16, fontweight='bold', color='blue')
-    fig.text(0.16, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
-    fig.text(0.20, 0.97, "reconst", ha='center', va='center', fontsize=16, fontweight='bold', color='red')
-    plt.suptitle(f"Encoder Latents - ({batch=}, {idx=}, {sample=}) - MSE={mse_value:0.5f}", fontsize=16, fontweight='bold')
-
-    plt.savefig(f"{dir_base}/latents_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-    
-    # print("Inside plot_compare_latents")
-    # print(f"{reconst.sum(axis=0)=}")
-    # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-def get_distinct_colors(n):
-    # Use multiple good colormaps and stack them
-    base_maps = [
-        plt.cm.tab20,
-        plt.cm.tab20b,
-        plt.cm.tab20c,
-        plt.cm.Set1,
-        plt.cm.Set2,
-        plt.cm.Set3,
-        plt.cm.Pastel1,
-        plt.cm.Pastel2,
-    ]
-    
-    colors = []
-    for cmap in base_maps:
-        colors.extend([to_hex(cmap(i)) for i in np.linspace(0, 1, cmap.N)])
-        if len(colors) >= n:
-            break
-
-    return colors[:n]
 
 
 def get_divisors(n):
@@ -781,6 +403,7 @@ def get_best_divisors(chans, max_pad=0):
     """
     Finds the best divisors of a positive integer chans, allowing for padding up to max_pad.
     The best divisors are those that are closest to each other.
+    For subplots
     """
     div_diff_best = 1e6
     for pad in range(max_pad):
@@ -1011,365 +634,31 @@ def compute_sig_FFT(signal_unwrapped, fs):
     return fft_signal_unwrapped, freqs
 
 
-def compute_reconstruction_metrics_unwrapped_signals(model_signal_input_unwrapped, 
-                                                    model_signal_output_unwrapped,  
-                                                    eeg_signal_unwrapped, 
-                                                    model_position_input_unwrapped=None, 
-                                                    model_position_output_unwrapped=None, 
-                                                    latent_data_unwrapped=None, 
-                                                    latent_recon_unwrapped=None,
-                                                    fft_signal_input_unwrapped=None,
-                                                    fft_signal_output_unwrapped=None):
-    """
-    Compute reconstruction metrics (MAE, NMSE, SNR, PCC) between latents, EEG signals, and FFTs.
-    """
-
-    # 1. Compute MSE between latent_data and latent_recon 
-    if latent_data_unwrapped is not None and latent_recon_unwrapped is not None:
-        MSE_samp_latent = []
-        MAE_samp_latent = []
-        NMSE_samp_latent = []
-        SNR_samp_latent = []
-        PCC_samp_latent = []
-        for samp in range(len(latent_data_unwrapped)):
-            latent_data_sample = latent_data_unwrapped[samp]
-            latent_recon_sample = latent_recon_unwrapped[samp]
-            MSE = np.abs(latent_data_sample - latent_recon_sample).mean() 
-            MAE = compute_mae(latent_data_sample, latent_recon_sample)
-            NMSE = compute_nmse(latent_data_sample, latent_recon_sample)
-            SNR = compute_snr(latent_data_sample, latent_recon_sample)
-            PCC = compute_pcc(latent_data_sample, latent_recon_sample)
-            MSE_samp_latent.append(MSE)
-            MAE_samp_latent.append(MAE)
-            NMSE_samp_latent.append(NMSE)
-            SNR_samp_latent.append(SNR)
-            PCC_samp_latent.append(PCC)
-    else:
-        MSE_samp_latent = [None]
-        MAE_samp_latent = [None]
-        NMSE_samp_latent = [None]
-        SNR_samp_latent = [None]
-        PCC_samp_latent = [None]
-
-
-    # 2. Compute MSE between raw data and reconstruction for EEG (across each sample individually).
-    #    Do it separately for dropped-out (do) and non-dropped-out (nodo) channels.
-    MSE_samp_EEG_pos = []
-    MSE_samp_EEG_sig = []
-    MSE_samp_EEG_sig_do = []
-    MSE_samp_EEG_sig_nodo = []
-    #
-    MAE_samp_EEG_pos = []
-    NMSE_samp_EEG_pos = []
-    SNR_samp_EEG_pos = []
-    PCC_samp_EEG_pos = []
-    #
-    MAE_samp_EEG_sig = []
-    NMSE_samp_EEG_sig = []
-    SNR_samp_EEG_sig = []
-    PCC_samp_EEG_sig = []
-    #
-    MAE_samp_EEG_sig_do = []
-    NMSE_samp_EEG_sig_do = []
-    SNR_samp_EEG_sig_do = []
-    PCC_samp_EEG_sig_do = []
-    #
-    MAE_samp_EEG_sig_nodo = []
-    NMSE_samp_EEG_sig_nodo = []
-    SNR_samp_EEG_sig_nodo = []
-    PCC_samp_EEG_sig_nodo = []
-    #
-    for samp in range(len(model_signal_input_unwrapped)):
-        dropped_chans = np.abs(model_signal_input_unwrapped[samp]).sum(axis=1)==0
-
-        model_in_sig = eeg_signal_unwrapped[samp] 
-        model_out_sig = model_signal_output_unwrapped[samp]
-
-        if model_position_input_unwrapped is not None and model_position_output_unwrapped is not None:
-            model_in_pos = model_position_input_unwrapped[samp]
-            model_out_pos = model_position_output_unwrapped[samp]
-            #
-            MSE_EEG_pos = np.abs(model_in_pos - model_out_pos).mean() # mean square error btwn data and reconst
-            #
-            MAE_EEG_pos = compute_mae(model_in_pos, model_out_pos)
-            NMSE_EEG_pos = compute_nmse(model_in_pos, model_out_pos)
-            SNR_EEG_pos = compute_snr(model_in_pos, model_out_pos)
-            PCC_EEG_pos = compute_pcc(model_in_pos, model_out_pos)
-        #
-        MSE_EEG_sig = np.abs(model_in_sig - model_out_sig).mean() # mean square error btwn data and reconst
-        #
-        MAE_EEG_sig = compute_mae(model_in_sig, model_out_sig)
-        NMSE_EEG_sig = compute_nmse(model_in_sig, model_out_sig)
-        SNR_EEG_sig = compute_snr(model_in_sig, model_out_sig)
-        PCC_EEG_sig = compute_pcc(model_in_sig, model_out_sig)
-        #
-        MSE_EEG_sig_do = np.abs(model_in_sig[dropped_chans] - model_out_sig[dropped_chans]).mean() # mean square error btwn data and reconst on dropped-out chans
-        MSE_EEG_sig_nodo = np.abs(model_in_sig[~dropped_chans] - model_out_sig[~dropped_chans]).mean() # mean square error btwn data and reconst on non-dropped chans
-        #
-        if sum(dropped_chans) > 0:
-            MAE_EEG_sig_do = compute_mae(model_in_sig[dropped_chans], model_out_sig[dropped_chans])
-            NMSE_EEG_sig_do = compute_nmse(model_in_sig[dropped_chans], model_out_sig[dropped_chans])
-            SNR_EEG_sig_do = compute_snr(model_in_sig[dropped_chans], model_out_sig[dropped_chans])
-            PCC_EEG_sig_do = compute_pcc(model_in_sig[dropped_chans], model_out_sig[dropped_chans])
-        else:
-            MAE_EEG_sig_do = np.nan
-            NMSE_EEG_sig_do = np.nan
-            SNR_EEG_sig_do = np.nan
-            PCC_EEG_sig_do = np.nan
-        #
-        if sum(~dropped_chans) > 0:
-            MAE_EEG_sig_nodo = compute_mae(model_in_sig[~dropped_chans], model_out_sig[~dropped_chans])
-            NMSE_EEG_sig_nodo = compute_nmse(model_in_sig[~dropped_chans], model_out_sig[~dropped_chans])
-            SNR_EEG_sig_nodo = compute_snr(model_in_sig[~dropped_chans], model_out_sig[~dropped_chans])
-            PCC_EEG_sig_nodo = compute_pcc(model_in_sig[~dropped_chans], model_out_sig[~dropped_chans])
-        else:
-            MAE_EEG_sig_nodo = np.nan
-            NMSE_EEG_sig_nodo = np.nan
-            SNR_EEG_sig_nodo = np.nan
-            PCC_EEG_sig_nodo = np.nan
-        #
-        
-        MSE_samp_EEG_sig.append(MSE_EEG_sig)
-        #
-        MSE_samp_EEG_sig_do.append(MSE_EEG_sig_do)
-        MSE_samp_EEG_sig_nodo.append(MSE_EEG_sig_nodo)
-        #
-        if model_position_input_unwrapped is not None and model_position_output_unwrapped is not None:
-            MSE_samp_EEG_pos.append(MSE_EEG_pos)
-            #
-            MAE_samp_EEG_pos.append(MAE_EEG_pos)
-            NMSE_samp_EEG_pos.append(NMSE_EEG_pos)
-            SNR_samp_EEG_pos.append(SNR_EEG_pos)
-            PCC_samp_EEG_pos.append(PCC_EEG_pos)
-        #
-        MAE_samp_EEG_sig.append(MAE_EEG_sig)
-        NMSE_samp_EEG_sig.append(NMSE_EEG_sig)
-        SNR_samp_EEG_sig.append(SNR_EEG_sig)
-        PCC_samp_EEG_sig.append(PCC_EEG_sig)
-        #
-        MAE_samp_EEG_sig_do.append(MAE_EEG_sig_do)
-        NMSE_samp_EEG_sig_do.append(NMSE_EEG_sig_do)
-        SNR_samp_EEG_sig_do.append(SNR_EEG_sig_do)
-        PCC_samp_EEG_sig_do.append(PCC_EEG_sig_do)
-        #
-        MAE_samp_EEG_sig_nodo.append(MAE_EEG_sig_nodo)
-        NMSE_samp_EEG_sig_nodo.append(NMSE_EEG_sig_nodo)
-        SNR_samp_EEG_sig_nodo.append(SNR_EEG_sig_nodo)
-        PCC_samp_EEG_sig_nodo.append(PCC_EEG_sig_nodo)
-
-
-    if model_position_input_unwrapped is None and model_position_output_unwrapped is None:
-        MSE_samp_EEG_pos = [None]
-        #
-        MAE_samp_EEG_pos = [None]
-        NMSE_samp_EEG_pos = [None]
-        SNR_samp_EEG_pos = [None]
-        PCC_samp_EEG_sig = [None]
-        
-
-
-    # 3. Compute MSE between raw data and reconstruction for FFT (across each sample individually).
-    #    Do it separately for dropped-out (do) and non-dropped-out (nodo) channels.
-    if fft_signal_input_unwrapped is not None and fft_signal_output_unwrapped is not None:
-        MSE_samp_FFT = []
-        MSE_samp_FFT_do = []
-        MSE_samp_FFT_nodo = []
-        #
-        MAE_samp_FFT = []
-        NMSE_samp_FFT = []
-        SNR_samp_FFT = []
-        PCC_samp_FFT = []
-        #
-        MAE_samp_FFT_do = []
-        NMSE_samp_FFT_do = []
-        SNR_samp_FFT_do = []
-        PCC_samp_FFT_do = []
-        #
-        MAE_samp_FFT_nodo = []
-        NMSE_samp_FFT_nodo = []
-        SNR_samp_FFT_nodo = []
-        PCC_samp_FFT_nodo = []
-        #   
-        for samp in range(len(model_signal_input_unwrapped)):
-            dropped_chans = np.abs(model_signal_input_unwrapped[samp]).sum(axis=1)==0
-
-            fft_sample_data = fft_signal_input_unwrapped[samp]
-            fft_sample_recon = fft_signal_output_unwrapped[samp]
-            MSEf = np.abs(fft_sample_data - fft_sample_recon).mean() # mean square error btwn data and reconst FFTs   
-            MSE_FFT_do = np.abs(fft_sample_data[dropped_chans] - fft_sample_recon[dropped_chans]).mean() # mean square error btwn data and reconst on dropped-out chans
-            MSE_FFT_nodo = np.abs(fft_sample_data[~dropped_chans] - fft_sample_recon[~dropped_chans]).mean() # mean square error btwn data and reconst on non-dropped chans
-            #
-            MAE_FFT = compute_mae(fft_sample_data, fft_sample_recon)
-            NMSE_FFT = compute_nmse(fft_sample_data, fft_sample_recon)
-            SNR_FFT = compute_snr(fft_sample_data, fft_sample_recon)
-            PCC_FFT = compute_pcc(fft_sample_data, fft_sample_recon)
-            #
-            if sum(dropped_chans) > 0:
-                MAE_FFT_do = compute_mae(fft_sample_data[dropped_chans], fft_sample_recon[dropped_chans])
-                NMSE_FFT_do = compute_nmse(fft_sample_data[dropped_chans], fft_sample_recon[dropped_chans])
-                SNR_FFT_do = compute_snr(fft_sample_data[dropped_chans], fft_sample_recon[dropped_chans])
-                PCC_FFT_do = compute_pcc(fft_sample_data[dropped_chans], fft_sample_recon[dropped_chans])
-            else:
-                MAE_FFT_do = np.nan
-                NMSE_FFT_do = np.nan
-                SNR_FFT_do = np.nan
-                PCC_FFT_do = np.nan
-            #
-            if sum(~dropped_chans) > 0:
-                MAE_FFT_nodo = compute_mae(fft_sample_data[~dropped_chans], fft_sample_recon[~dropped_chans])
-                NMSE_FFT_nodo = compute_nmse(fft_sample_data[~dropped_chans], fft_sample_recon[~dropped_chans])
-                SNR_FFT_nodo = compute_snr(fft_sample_data[~dropped_chans], fft_sample_recon[~dropped_chans])
-                PCC_FFT_nodo = compute_pcc(fft_sample_data[~dropped_chans], fft_sample_recon[~dropped_chans])
-            else:
-                MAE_FFT_nodo = np.nan
-                NMSE_FFT_nodo = np.nan
-                SNR_FFT_nodo = np.nan
-                PCC_FFT_nodo = np.nan
-            #
-
-            MSE_samp_FFT.append(MSEf)
-            MSE_samp_FFT_do.append(MSE_FFT_do)
-            MSE_samp_FFT_nodo.append(MSE_FFT_nodo)
-            #
-            MAE_samp_FFT.append(MAE_FFT)
-            NMSE_samp_FFT.append(NMSE_FFT)
-            SNR_samp_FFT.append(SNR_FFT)
-            PCC_samp_FFT.append(PCC_FFT)
-            #
-            MAE_samp_FFT_do.append(MAE_FFT_do)
-            NMSE_samp_FFT_do.append(NMSE_FFT_do)
-            SNR_samp_FFT_do.append(SNR_FFT_do)
-            PCC_samp_FFT_do.append(PCC_FFT_do)
-            #
-            MAE_samp_FFT_nodo.append(MAE_FFT_nodo)
-            NMSE_samp_FFT_nodo.append(NMSE_FFT_nodo)
-            SNR_samp_FFT_nodo.append(SNR_FFT_nodo)
-            PCC_samp_FFT_nodo.append(PCC_FFT_nodo)
-    else:
-        MSE_samp_FFT = [None]
-        MSE_samp_FFT_do = [None]
-        MSE_samp_FFT_nodo = [None]
-        #
-        MAE_samp_FFT = [None]
-        NMSE_samp_FFT = [None]
-        SNR_samp_FFT = [None]
-        PCC_samp_FFT = [None]
-        #
-        MAE_samp_FFT_do = [None]
-        NMSE_samp_FFT_do = [None]
-        SNR_samp_FFT_do = [None]
-        PCC_samp_FFT_do = [None]
-        #
-        MAE_samp_FFT_nodo = [None]
-        NMSE_samp_FFT_nodo = [None]
-        SNR_samp_FFT_nodo = [None]
-        PCC_samp_FFT_nodo = [None]
-        #
-
-    if True:
-        print(" ")
-        print(f"(mn, std) MSE for {len(MSE_samp_EEG_sig)} all      samples of EEG: ({np.mean(MSE_samp_EEG_sig):0.5f}, {np.std(MSE_samp_EEG_sig):0.5f})")
-        print(f"(mn, std) MSE for {len(MSE_samp_EEG_sig_do)} drop-out samples of EEG: ({np.nanmean(MSE_samp_EEG_sig_do):0.5f}, {np.nanstd(MSE_samp_EEG_sig_do):0.5f})")
-        print(f"(mn, std) MSE for {len(MSE_samp_EEG_sig_nodo)} non-drop samples of EEG: ({np.nanmean(MSE_samp_EEG_sig_nodo):0.5f}, {np.nanstd(MSE_samp_EEG_sig_nodo):0.5f})")
-        try:
-            print(f"(mn, std) MSE for {len(MSE_samp_FFT)} all      samples of FFT: ({np.mean(MSE_samp_FFT):0.5f}, {np.std(MSE_samp_FFT):0.5f})")
-            print(f"(mn, std) MSE for {len(MSE_samp_FFT_do)} drop-out samples of FFT: ({np.nanmean(MSE_samp_FFT_do):0.5f}, {np.nanstd(MSE_samp_FFT_do):0.5f})")
-            print(f"(mn, std) MSE for {len(MSE_samp_FFT_nodo)} non-drop samples of FFT: ({np.nanmean(MSE_samp_FFT_nodo):0.5f}, {np.nanstd(MSE_samp_FFT_nodo):0.5f})")
-        except:
-            pass
-        print(" ")
-
-    return MSE_samp_EEG_sig, \
-           MSE_samp_EEG_sig_do, \
-           MSE_samp_EEG_sig_nodo, \
-           MSE_samp_FFT, \
-           MSE_samp_FFT_do, \
-           MSE_samp_FFT_nodo, \
-           MSE_samp_latent, \
-           MSE_samp_EEG_pos, \
-           MAE_samp_EEG_sig, \
-           NMSE_samp_EEG_sig, \
-           SNR_samp_EEG_sig, \
-           PCC_samp_EEG_sig, \
-           MAE_samp_EEG_sig_do, \
-           NMSE_samp_EEG_sig_do, \
-           SNR_samp_EEG_sig_do, \
-           PCC_samp_EEG_sig_do, \
-           MAE_samp_EEG_sig_nodo, \
-           NMSE_samp_EEG_sig_nodo, \
-           SNR_samp_EEG_sig_nodo, \
-           PCC_samp_EEG_sig_nodo, \
-           MAE_samp_FFT, \
-           NMSE_samp_FFT, \
-           SNR_samp_FFT, \
-           PCC_samp_FFT, \
-           MAE_samp_FFT_do, \
-           NMSE_samp_FFT_do, \
-           SNR_samp_FFT_do, \
-           PCC_samp_FFT_do, \
-           MAE_samp_FFT_nodo, \
-           NMSE_samp_FFT_nodo, \
-           SNR_samp_FFT_nodo, \
-           PCC_samp_FFT_nodo, \
-           MAE_samp_latent, \
-           NMSE_samp_latent, \
-           SNR_samp_latent, \
-           PCC_samp_latent, \
-           MAE_samp_EEG_pos, \
-           NMSE_samp_EEG_pos, \
-           SNR_samp_EEG_pos, \
-           PCC_samp_EEG_pos
 
 
 def plot_unwrapped_signals(model_signal_input_unwrapped, 
                             model_signal_output_unwrapped, 
-                            eeg_signal_unwrapped, 
-                            MSE_samp_EEG_sig,
-                            #
-                            model_position_input_unwrapped, 
-                            model_position_output_unwrapped, 
-                            MSE_samp_EEG_pos,
-                            #
-                            fft_signal_input_unwrapped, 
-                            fft_signal_output_unwrapped,
-                            MSE_samp_FFT,
-                            MSE_samp_FFT_do,
-                            MSE_samp_FFT_nodo,
-                            #
-                            latent_data_unwrapped,
-                            latent_recon_unwrapped,
-                            MSE_samp_latent,
-                            #
+                            eeg_signal_unwrapped,
                             fs,
-                            freqs,
                             batch_cntr,
                             batch_idx,
                             dir_base,  
                             fname_suptag,
-                            #
                             plot_eeg_signal_samples,
-                            plot_eeg_position_samples,
-                            plot_fft_samples,
-                            plot_latent_samples,
-                            args,
                             mne_interpolated_signals=None):
 
         """
-        Plot original and reconstructed signals, channel positions, FFTs, latents for a single batch.
+        Plot original and EEG reconstructed signals.
         """
 
         for samp in range(len(model_signal_input_unwrapped)):
             print(f"sample {samp}")
-
-            # print(f"In plot_unwrapped_signals: How many dropped out chans?? What does model_signal_input_unwrapped[samp] & model_signal_output_unwrapped[samp] look like???")
-            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             # (1). Plot EEG time course for data and reconstruction on same axis (one ax per channel). One figure per sample.
             if plot_eeg_signal_samples:
                 # 1a. Plot with non-dropout signal too.
                 plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
                                         reconst=model_signal_output_unwrapped[samp],
-                                        mse_value=MSE_samp_EEG_sig[samp],
                                         eeg_signal=eeg_signal_unwrapped[samp],
                                         # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
                                         fs=fs,
@@ -1382,7 +671,6 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                 # 1b. plot without non-dropout signal.
                 plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
                                         reconst=model_signal_output_unwrapped[samp],
-                                        mse_value=MSE_samp_EEG_sig[samp],
                                         # eeg_signal=eeg_signal_unwrapped[samp], # comment out to plot without non-dropped out data
                                         # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None,
                                         fs=fs, 
@@ -1391,46 +679,6 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                                         idx=batch_idx[samp].item(),
                                         fname_tag="_dropout"+fname_suptag,
                                         dir_base=dir_base,
-                )
-
-            # (2). Plot channel positions if we are concatenating channel {x,y,z} with EEG data and predicting them. Maybe Old.
-            if plot_eeg_position_samples and args.data.cat_chan_xyz_and_eeg and args.data.dont_noise_chan_xyz:
-                plot_compare_eeg_position(model_position_input_unwrapped[samp],
-                                        model_position_output_unwrapped[samp],
-                                        MSE_samp_EEG_pos[samp],
-                                        batch=batch_cntr, 
-                                        sample=samp,
-                                        idx=batch_idx[samp].item(),
-                                        fname_tag=""+fname_suptag,
-                                        dir_base=dir_base,
-                )
-
-
-            # (3). Plot EEG FFT frequency specturms for data and reconstruction on same axis (one ax per channel). One figure per sample.
-            if plot_fft_samples:
-                plot_compare_fft(fft_signal_input_unwrapped[samp], 
-                                fft_signal_output_unwrapped[samp],
-                                MSE_samp_FFT[samp],
-                                MSE_samp_FFT_do[samp],
-                                MSE_samp_FFT_nodo[samp],
-                                freqs=freqs, 
-                                batch=batch_cntr,
-                                sample=samp,
-                                idx=batch_idx[samp].item(),
-                                fname_tag=""+fname_suptag,
-                                dir_base=dir_base,
-                )
-
-            # (4). Plot Latents encoder consistency computation.
-            if plot_latent_samples:
-                plot_compare_latents(latent_data_unwrapped[samp], 
-                                    latent_recon_unwrapped[samp], 
-                                    MSE_samp_latent[samp],
-                                    batch=batch_cntr,
-                                    sample=samp,
-                                    idx=batch_idx[samp].item(),
-                                    fname_tag=""+fname_suptag,
-                                    dir_base=dir_base,
                 )
 
 
@@ -1983,171 +1231,19 @@ def evaluate(args: TrainArgs):
                     mark_zero_variance=True
                 )
 
-                # Compute FFT of signal input into model and signal output from model.
-                fft_signal_input_unwrapped, freqs = compute_sig_FFT(eeg_signal_unwrapped, fs) # (CW) - non-dropped-out signal.
-                fft_signal_output_unwrapped, _ = compute_sig_FFT(model_signal_output_unwrapped, fs)            
-
-                # Compute reconstruction-based metrics between original and reconstructions from model
-                MSE_samp_EEG_sig, \
-                MSE_samp_EEG_sig_do, \
-                MSE_samp_EEG_sig_nodo, \
-                MSE_samp_FFT, \
-                MSE_samp_FFT_do, \
-                MSE_samp_FFT_nodo, \
-                MSE_samp_latent, \
-                MSE_samp_EEG_pos, \
-                MAE_samp_EEG_sig, \
-                NMSE_samp_EEG_sig, \
-                SNR_samp_EEG_sig, \
-                PCC_samp_EEG_sig, \
-                MAE_samp_EEG_sig_do, \
-                NMSE_samp_EEG_sig_do, \
-                SNR_samp_EEG_sig_do, \
-                PCC_samp_EEG_sig_do, \
-                MAE_samp_EEG_sig_nodo, \
-                NMSE_samp_EEG_sig_nodo, \
-                SNR_samp_EEG_sig_nodo, \
-                PCC_samp_EEG_sig_nodo, \
-                MAE_samp_FFT, \
-                NMSE_samp_FFT, \
-                SNR_samp_FFT, \
-                PCC_samp_FFT, \
-                MAE_samp_FFT_do, \
-                NMSE_samp_FFT_do, \
-                SNR_samp_FFT_do, \
-                PCC_samp_FFT_do, \
-                MAE_samp_FFT_nodo, \
-                NMSE_samp_FFT_nodo, \
-                SNR_samp_FFT_nodo, \
-                PCC_samp_FFT_nodo, \
-                MAE_samp_latent, \
-                NMSE_samp_latent, \
-                SNR_samp_latent, \
-                PCC_samp_latent, \
-                MAE_samp_EEG_pos, \
-                NMSE_samp_EEG_pos, \
-                SNR_samp_EEG_pos, \
-                PCC_samp_EEG_pos = compute_reconstruction_metrics_unwrapped_signals(model_signal_input_unwrapped, 
-                                                                                    model_signal_output_unwrapped,  
-                                                                                    eeg_signal_unwrapped, 
-                                                                                    model_position_input_unwrapped, 
-                                                                                    model_position_output_unwrapped, 
-                                                                                    latent_data_unwrapped, 
-                                                                                    latent_recon_unwrapped,
-                                                                                    fft_signal_input_unwrapped,
-                                                                                    fft_signal_output_unwrapped)
-
-
-                # Compute reconstruction-based metrics between original and mne-linear-interpolated signals
-                MSE_samp_EEG_mne, \
-                MSE_samp_EEG_mne_do, \
-                MSE_samp_EEG_mne_nodo, \
-                MSE_samp_FFT_mne, \
-                MSE_samp_FFT_mne_do, \
-                MSE_samp_FFT_mne_nodo, \
-                _, \
-                _, \
-                MAE_samp_EEG_mne, \
-                NMSE_samp_EEG_mne, \
-                SNR_samp_EEG_mne, \
-                PCC_samp_EEG_mne, \
-                MAE_samp_EEG_mne_do, \
-                NMSE_samp_EEG_mne_do, \
-                SNR_samp_EEG_mne_do, \
-                PCC_samp_EEG_mne_do, \
-                MAE_samp_EEG_mne_nodo, \
-                NMSE_samp_EEG_mne_nodo, \
-                SNR_samp_EEG_mne_nodo, \
-                PCC_samp_EEG_mne_nodo, \
-                MAE_samp_FFT_mne, \
-                NMSE_samp_FFT_mne, \
-                SNR_samp_FFT_mne, \
-                PCC_samp_FFT_mne, \
-                MAE_samp_FFT_mne_do, \
-                NMSE_samp_FFT_mne_do, \
-                SNR_samp_FFT_mne_do, \
-                PCC_samp_FFT_mne_do, \
-                MAE_samp_FFT_mne_nodo, \
-                NMSE_samp_FFT_mne_nodo, \
-                SNR_samp_FFT_mne_nodo, \
-                PCC_samp_FFT_mne_nodo, \
-                _, \
-                _, \
-                _, \
-                _, \
-                _, \
-                _, \
-                _, \
-                _ = compute_reconstruction_metrics_unwrapped_signals(model_signal_input_unwrapped, 
-                                                                     mne_interpolated_signals, 
-                                                                     eeg_signal_unwrapped)
-
-
 
                 # Plot signals
                 # fname_suptag=""
                 plot_unwrapped_signals(model_signal_input_unwrapped, 
                                         model_signal_output_unwrapped, 
                                         eeg_signal_unwrapped, 
-                                        MSE_samp_EEG_sig,
-                                        #
-                                        model_position_input_unwrapped, 
-                                        model_position_output_unwrapped, 
-                                        MSE_samp_EEG_pos,
-                                        #
-                                        fft_signal_input_unwrapped, 
-                                        fft_signal_output_unwrapped,
-                                        MSE_samp_FFT,
-                                        MSE_samp_FFT_do,
-                                        MSE_samp_FFT_nodo,
-                                        #
-                                        latent_data_unwrapped,
-                                        latent_recon_unwrapped,
-                                        MSE_samp_latent,
-                                        #
                                         fs,
-                                        freqs,
                                         batch_cntr,
                                         batch_idx,
                                         dir_base,
                                         fname_suptag,  
-                                        #
                                         plot_eeg_signal_samples,
-                                        plot_eeg_position_samples,
-                                        plot_fft_samples,
-                                        plot_latent_samples,
-                                        args,
                                         mne_interpolated_signals=mne_interpolated_signals)
-
-
-            # print(f"After plotting signals")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-            # Gather up all metrics across batches into bigger lists
-
-            if compute_reconstruction_metrics_stats_across_dataset: 
-                MAE_samp_EEG_sig_do_list.extend(MAE_samp_EEG_sig_do)   
-                NMSE_samp_EEG_sig_do_list.extend(NMSE_samp_EEG_sig_do)
-                SNR_samp_EEG_sig_do_list.extend(SNR_samp_EEG_sig_do)
-                PCC_samp_EEG_sig_do_list.extend(PCC_samp_EEG_sig_do)
-                #
-                MAE_samp_EEG_mne_do_list.extend(MAE_samp_EEG_mne_do)
-                NMSE_samp_EEG_mne_do_list.extend(NMSE_samp_EEG_mne_do)
-                SNR_samp_EEG_mne_do_list.extend(SNR_samp_EEG_mne_do)
-                PCC_samp_EEG_mne_do_list.extend(PCC_samp_EEG_mne_do)
-                #
-                MAE_samp_EEG_sig_nodo_list.extend(MAE_samp_EEG_sig_nodo)
-                NMSE_samp_EEG_sig_nodo_list.extend(NMSE_samp_EEG_sig_nodo)
-                SNR_samp_EEG_sig_nodo_list.extend(SNR_samp_EEG_sig_nodo)
-                PCC_samp_EEG_sig_nodo_list.extend(PCC_samp_EEG_sig_nodo)
-                #
-                MAE_samp_EEG_mne_nodo_list.extend(MAE_samp_EEG_mne_nodo) 
-                NMSE_samp_EEG_mne_nodo_list.extend(NMSE_samp_EEG_mne_nodo)
-                SNR_samp_EEG_mne_nodo_list.extend(SNR_samp_EEG_mne_nodo)
-                PCC_samp_EEG_mne_nodo_list.extend(PCC_samp_EEG_mne_nodo)
-
-
 
 
             # Here if you want to only do a certain number of batches (like for making a couple plots))
@@ -2157,27 +1253,6 @@ def evaluate(args: TrainArgs):
             # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
             if epoch > 1:
                 break
-
-        ## Display Stats of reconstruction-based metrics across batches of data
-        if False:
-            try:
-                print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.key_prefix} with channel dropout rate {args.data.channel_dropout_prob}") # backblaze path in EEGDataset_b2
-            except:
-                print(f"\n\n{len(MAE_samp_EEG_mne_do_list)} samples from {data_loader.dataset.memmap_paths[0].parts[5]} with channel dropout rate {args.data.channel_dropout_prob}") # local path in EEGDataset_v2
-
-            print("\nMAE:")
-            print(f"\tZUNA recon: (mean +/- std) ({np.array(MAE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_sig_do_list).std():.4f})")
-            print(f"\tmne interp: (mean +/- std) ({np.array(MAE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(MAE_samp_EEG_mne_do_list).std():.4f})")
-            print("NMSE:")
-            print(f"\tZUNA recon: (mean +/- std) ({np.array(NMSE_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_sig_do_list).std():.4f})")
-            print(f"\tmne  interp: (mean +/- std) ({np.array(NMSE_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(NMSE_samp_EEG_mne_do_list).std():.4f})")
-            print("SNR:")
-            print(f"\tZUNA recon: (mean +/- std) ({np.array(SNR_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_sig_do_list).std():.4f})")
-            print(f"\tmne interp: (mean +/- std) ({np.array(SNR_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(SNR_samp_EEG_mne_do_list).std():.4f})")
-            # print("PCC:") 
-            # print(f"\tZUNA recon: (mean +/- std) ({np.array(PCC_samp_EEG_sig_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_sig_do_list).std():.4f})")
-            # print(f"\tmne interp: (mean +/- std) ({np.array(PCC_samp_EEG_mne_do_list).mean():.4f} +/- {np.array(PCC_samp_EEG_mne_do_list).std():.4f})")
-            print(f"\n\n")
 
         print("After looping over dataloader")
         import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
