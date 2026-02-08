@@ -16,94 +16,6 @@ from torch.nn.attention.flex_attention import (
 
 from lingua import probe
 flex_attention_comp = torch.compile(flex_attention, dynamic=True, mode='max-autotune')
-# flex_attention_comp = torch.compile(flex_attention)
-# flex_attention_comp = flex_attention
-
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-#
-# (CW) - moved all this generate_doc_mask stuff into AY2latent_bci/transformer.py 
-
-# def lengths_to_start_ids(lengths):
-#     doc_start = lengths.cumsum(0)
-#     doc_start = doc_start.roll(1)
-#     doc_start[0] = 0
-#     return doc_start
-
-
-# def lengths_to_local_ids(lengths):
-#     assert lengths.ndim == 1
-#     nb_seqs = lengths.size(0)
-#     total_seqlen = lengths.sum()
-#     # This gives the document id of each token
-#     doc_id = torch.repeat_interleave(lengths)
-#     # Compute document start for each document
-#     doc_start = lengths_to_start_ids(lengths)
-#     # Compute document start for each token
-#     doc_start = doc_start[doc_id]
-#     # Compute the position of each token within each document
-#     tok_id = torch.arange(total_seqlen, device=lengths.device) - doc_start
-
-#     return doc_id, tok_id
-
-
-# def generate_doc_mask_mod(
-#     mask_mod: _mask_mod_signature,
-#     lengths: torch.Tensor,
-#     kv_lengths: Optional[torch.Tensor] = None, # for cross-attn
-# ) -> _mask_mod_signature:
-#     """Generates mask mods that apply to inputs to flex attention in the sequence stacked
-#     format.
-
-#     Args:
-#         mask_mod: The mask mod to apply to the documents
-#         lengths: Lengths of each document
-
-#     Note:
-#         What is the sequence stacked format? When assembling batches of inputs, we
-#         take multiple sequences and stack them together to form 1 large sequence. We then
-#         use masking to ensure that the attention scores are only applied to tokens within
-#         the same document.
-
-#     Example:
-
-#     - Square mask
-#       doc_mask         lengths
-#       a a b b b c c    2 3 2
-#     a 1 0 0 0 0 0 0
-#     a 1 1 0 0 0 0 0
-#     b 0 0 1 0 0 0 0
-#     b 0 0 1 1 0 0 0
-#     b 0 0 1 1 1 0 0
-#     c 0 0 0 0 0 1 0
-#     c 0 0 0 0 0 1 1
-
-#     """
-
-#     kv_lengths = kv_lengths if kv_lengths is not None else lengths
-#     q_document_id, q_token_id = lengths_to_local_ids(lengths)
-#     kv_document_id, kv_token_id = lengths_to_local_ids(kv_lengths)
-#     q_max_idx = lengths.sum() - 1
-#     kv_max_idx = kv_lengths.sum() - 1
-
-#     def doc_mask_mod(b, h, q_idx, kv_idx):        
-#         q_idx_cap = torch.minimum(q_max_idx, q_idx)
-#         kv_idx_cap = torch.minimum(kv_max_idx, kv_idx)
-#         valid_idx = (q_idx <= q_max_idx) & (kv_idx <= kv_max_idx)
-#         same_doc = q_document_id[q_idx_cap] == kv_document_id[kv_idx_cap]
-#         q_logical = q_token_id[q_idx_cap]
-#         kv_logical = kv_token_id[kv_idx_cap]
-#         inner_mask = mask_mod(b, h, q_logical, kv_logical)
-
-#         return same_doc & inner_mask & valid_idx
-
-#     return doc_mask_mod
-
-# (CW) - moved all this generate_doc_mask stuff into AY2latent_bci/transformer.py 
-#
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-
-
 
 class InitStdFactor(Enum):
     DISABLED = "disabled"  # Init std is divided by 1.0
@@ -114,9 +26,6 @@ class InitStdFactor(Enum):
 
 @dataclass
 class BaseTransformerArgs:
-
-    # print("Inside BaseTransformerArgs in lingua/transformer.py")
-    # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     dim: int = 1024
     n_layers: int = 10
@@ -177,9 +86,6 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
         torch.Tensor: Precomputed frequency tensor with complex exponentials.
     """
 
-    # print(f"Inside precompute_freqs_cis.")
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)
     freqs = torch.outer(t, freqs).float()
@@ -205,9 +111,6 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor, seq_dim: int
         torch.Tensor: Reshaped frequency tensor.
     """
 
-    # print(f"INside reshape_for_broadcast: freqs_cis vs x: {(freqs_cis.shape, x.shape)}")
-    # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
     ndim = x.ndim
     assert 0 <= seq_dim < ndim
     assert freqs_cis.shape == (
@@ -227,17 +130,7 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     seq_dim: int,
     freqs_cis: torch.Tensor,
-    # rope_dim: int = 1,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-
-    # print("INside apply_rotary_emb")
-    # print(f"{xq.shape=}")
-    # print(f"{xk.shape=}")
-    # print(f"{seq_dim=}")
-    # print(f"{freqs_cis.shape=}")
-    # print(f"{rope_dim=}")
-    # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
 
     xq_ = xq.reshape(*xq.shape[:-1], -1, 1, 2)  # B S D -> B S D/2 1 2
     xk_ = xk.reshape(*xk.shape[:-1], -1, 1, 2)  # B S D -> B S D/2 1 2
@@ -254,7 +147,7 @@ def apply_rotary_emb(
 
 
 
-# Rotary embedding as in xformer, see if torchtrain implementation is not better. Also might be useful to make it work with batch*seqlen collapsed.
+# Rotary embedding as in xformer
 class RotaryEmbedding(torch.nn.Module):
     """
     RotaryEmbedding Module
@@ -276,10 +169,6 @@ class RotaryEmbedding(torch.nn.Module):
             persistent=False,
         )
 
-        # print(f"Inside RotaryEmbedding.__init__, {self.freqs_cis=}")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
     def reset_parameters(self):
         self.freqs_cis[...] = precompute_freqs_cis(
             dim=self.head_dim//self.rope_dim, end=self.max_seqlen, theta=self.theta
@@ -298,15 +187,12 @@ class RotaryEmbedding(torch.nn.Module):
             Tuple(torch.Tensor, torch.Tensor): Embedded input tensor and freqs_cis
         """
 
-        # print("INside RotaryEmbedding.forward")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)   
-
         tok_idx = None # HARDCODE (CW)! SEE NOTE BELOW. WILL USE SEQLEN PATH.   
 
         test = (seqlen is not None) or (tok_idx is not None)
         assert test, "Should provide atleast seqlen or tok_idx"
         if tok_idx is not None:
-            return self.freqs_cis[tok_idx] # NOTE: THINK I DONT WANT TO INDEX WITH TOK_IDX HERE AND THEN AGAIN INSIDE ATTENTION.FORWARD - DOUBLE DOING
+            return self.freqs_cis[tok_idx] # NOTE: DONT WANT TO INDEX WITH TOK_IDX HERE AND THEN AGAIN INSIDE ATTENTION.FORWARD - DOUBLE DOING
         elif seqlen is not None:
             return self.freqs_cis[0:seqlen]
 
@@ -410,9 +296,6 @@ class Attention(nn.Module):
         attn_impl: str = "sdpa",
     ) -> torch.Tensor:
 
-        # print("Inside lingua.transformer.Attention forward!!! ")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
         # B S D
         bsz, seq_len, dim = x.shape
         xq = self.wq(x.view_as(x)) 
@@ -425,46 +308,14 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
 
-        # print("Inside lingua.transformer.Attention forward, before apply_rotary_emb ")
-        # print(f"{self.head_dim=}")
-        # print(f"{self.n_heads=}")
-        # print(f"{self.n_kv_heads=}")        
-        # print(f"{xq.shape=}")
-        # print(f"{xk.shape=}")
-        # print(f"{xv.shape=}")
-        # print(f"{freq_cis.shape=}")
-        # print(f"{freq_cis[tok_idx].shape=}")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
         if self.rope_dim==0:
-            # print("using NoPE in lingua.transformer.Attention.")
             pass
         elif self.rope_dim==1:
-
-            # print(f"Inside attention block with 1d-RoPE: with \n \t{freq_cis.shape=}, \n \t{tok_idx.shape=}, \n \t{freq_cis[tok_idx].shape=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-            # Inside attention block with 1d-RoPE:
-            #   freq_cis.shape            = [10, 32, 2, 2] = [max_seqlen, head_dim//2, 2, 2]
-            #   tok_idx.shape             = [50400] = [seqlen]
-            #   freq_cis[tok_idx].shape   = [50400, 32, 2, 2] = [seqlen, head_dim//2, 2, 2]
-
             if tok_idx is not None:
                 xq, xk = apply_rotary_emb(xq, xk, 1, freq_cis[tok_idx])     # this edit mirrors what is inside RotaryEmbedding class. To use tok_idx
             else:
                 xq, xk = apply_rotary_emb(xq, xk, 1, freq_cis[0:seq_len])   # This is how it was. (SEEMS TO ASSUME WE ARE USING MAX_SEQLEN, NOT TOK_IDX)
         elif self.rope_dim==4:
-
-            # print(f"Inside attention block with 4d-RoPE: \n \t{freq_cis.shape=}, \n \t{tok_idx.shape=}, \n \t{freq_cis[tok_idx].shape=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-            # Inside attention block with 4d-RoPE: 
-            #     freq_cis.shape = [10, 8, 2, 2] = [max_seqlen, head_dim//(2*rope_dim), 2, 2] 
-            #     tok_idx.shape = [50000, 4]) = [seqlen, rope_dim]
-            #     freq_cis[tok_idx].shape = [50000, 4, 8, 2, 2] = [seqlen, rope_dim, head_dim//(2*rope_dim), 2, 2]
-
-            # Build freqcis_4RoPE by indexing freq_cis with each dimension of tok_idx separately and concatenating
-            # Cat along a new dimension to get [S, head_dim//2, 2, 2]
             freqcis_parts = []
             for i in range(self.rope_dim):
                 freqcis_parts.append(freq_cis[tok_idx[:, i]])
@@ -488,8 +339,6 @@ class Attention(nn.Module):
 
         xk = repeat_kv(xk, self.heads_per_group, dim=2)
         xv = repeat_kv(xv, self.heads_per_group, dim=2)
-
-        # print(f"Inside attention.forward, {mask=}") # (CW)
 
         if attn_impl == "flex_attention":
             assert mask is None or isinstance(mask, BlockMask)
@@ -577,10 +426,6 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-
-        # print("Inside lingua.transformer.FeedForward forward!!! ")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
         # B S D
         x1 = self.w1(x.view_as(x))
         x3 = self.w3(x.view_as(x))
@@ -620,7 +465,6 @@ class TransformerBlock(nn.Module):
         self.n_heads = args.n_heads or args.dim // args.head_dim
         self.n_kv_heads = args.n_kv_heads or self.n_heads
 
-
         assert args.n_heads % self.n_kv_heads == 0
         assert args.dim % args.n_heads == 0
 
@@ -641,8 +485,6 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
-        # print(f"Insider TransformerBlock __init__, {args.dim=}, {args.norm_eps=}, ")
-
     def forward(
         self,
         x: torch.Tensor,
@@ -658,39 +500,34 @@ class TransformerBlock(nn.Module):
         if print_layerwise_activation_stats and do_idx is not None:
 
             # # Print all the activation stats for the dropped and non-dropped tokens if do_idx is provided
-            x_normed = self.attention_norm(x) # (CW)
-
-            # print("\nInside TransformerBlock.forward with do_idx provided:")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
+            x_normed = self.attention_norm(x)
             print(f"\n\t Encoder attn_norm (drop-out): mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") 
             print(f"\t Encoder attn_norm (non-drop): mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
-            h = x + self.attention(                         # (CW) - lingua.transformer.Attention
-                x_normed, # (CW)
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") 
+            h = x + self.attention(                         #  lingua.transformer.Attention
+                x_normed,
                 freq_cis,
                 tok_idx=tok_idx,
-                mask=mask, # (CW) - WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
+                mask=mask, 
                 attn_impl=attn_impl,
             )
-            h_normed = self.ffn_norm(h) # (CW)
+            h_normed = self.ffn_norm(h) 
             print(f"\n\t Encoder ffn_norm (drop-out): mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") 
             print(f"\t Encoder ffn_norm (non-drop): mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
-            out = h + self.feed_forward(h_normed)  # (CW) - lingua.transformer.FeedForward
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") 
+            out = h + self.feed_forward(h_normed)  #  lingua.transformer.FeedForward
 
         else:
-            h = x + self.attention(                         # (CW) - was this:
+            h = x + self.attention(                         
                 self.attention_norm(x),
                 freq_cis,
                 tok_idx=tok_idx,
-                mask=mask, # (CW) - WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
+                mask=mask, 
                 attn_impl=attn_impl,
             )
-            out = h + self.feed_forward(self.ffn_norm(h))  # (CW) - lingua.transformer.FeedForward
-
+            out = h + self.feed_forward(self.ffn_norm(h))  
 
         return out
 
@@ -700,55 +537,3 @@ class TransformerBlock(nn.Module):
 
         self.feed_forward.reset_parameters(init_std, factor)
         self.ffn_norm.reset_parameters()
-
-
-# class BaseTransformer(nn.Module):
-#     def __init__(self, args: BaseTransformerArgs):
-#         super().__init__()
-#         self.dim = args.dim
-#         self.init_base_std = args.init_base_std
-#         self.init_std_factor = InitStdFactor(args.init_std_factor)
-#         self.max_seqlen = args.max_seqlen
-#         self.rope_embeddings = RotaryEmbedding(
-#             theta=args.rope_theta,
-#             head_dim=args.head_dim or args.dim // args.n_heads,
-#             max_seqlen=args.max_seqlen,
-#         )
-
-#         self.layers = nn.ModuleList()
-#         for _ in range(args.n_layers):
-#             self.layers.append(TransformerBlock(args))
-
-#         print("WRONG ONE BaseTransformer __init__")
-
-#     def forward(
-#         self,
-#         h,
-#         tok_idx: Optional[torch.Tensor] = None,
-#         mask: Optional[Union[BlockMask,  str]] = None,
-#         attn_impl: str = "sdpa",
-#     ):
-        
-#         print("WRONG ONE BaseTransformer forward")
-
-#         freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, tok_idx=tok_idx)
-
-#         for i, layer in enumerate(self.layers):
-#             h = layer(h, freq_cis, tok_idx=tok_idx, mask=mask, attn_impl=attn_impl)
-#         return h
-
-#     def reset_parameters(self):
-#         # Either use fixed base std or sqrt model dim
-#         self.rope_embeddings.reset_parameters()
-
-#     def init_weights(self):
-#         self.reset_parameters()
-#         for depth, layer in enumerate(self.layers):
-#             factor = {
-#                 InitStdFactor.CURRENT_DEPTH: (2 * (depth + 1)) ** 0.5,
-#                 InitStdFactor.GLOBAL_DEPTH: (2 * (len(self.layers) + 1)) ** 0.5,
-#                 InitStdFactor.DIM_RATIO: self.dim / 4096,
-#                 InitStdFactor.DISABLED: 1.0,
-#             }[self.init_std_factor]
-
-#             layer.init_weights(self.init_base_std, factor)
