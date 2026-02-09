@@ -224,11 +224,15 @@ def pt_directory_to_fif(input_dir: str, output_dir: str) -> dict:
 
 # Expose key classes for advanced usage
 from .preprocessing import ProcessingConfig, EEGProcessor
+from .preprocessing.batch import process_directory
+from .pipeline import run_zuna
 
 __all__ = [
     'raw_to_pt',
     'pt_to_raw',
     'pt_directory_to_fif',
+    'process_directory',
+    'run_zuna',
     'ProcessingConfig',
     'EEGProcessor',
 ]
