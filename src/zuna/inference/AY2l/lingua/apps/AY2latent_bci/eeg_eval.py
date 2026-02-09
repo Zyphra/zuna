@@ -7,7 +7,7 @@
 #   >> "pip install zuna" or something?
 
 # 2nd, run something like:
-#   >> CUDA_VISIBLE_DEVICES=0 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
+#   >> CUDA_VISIBLE_DEVICES=1 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
 from copy import deepcopy
@@ -536,7 +536,7 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                 plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
                                         reconst=model_signal_output_unwrapped[samp],
                                         eeg_signal=eeg_signal_unwrapped[samp],
-                                        # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
+                                        mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
                                         fs=fs,
                                         batch=batch_cntr,
                                         sample=samp,
@@ -544,47 +544,6 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                                         fname_tag=""+fname_suptag,
                                         dir_base=dir_base,
                 )
-                # 1b. plot without non-dropout signal.
-                plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
-                                        reconst=model_signal_output_unwrapped[samp],
-                                        # eeg_signal=eeg_signal_unwrapped[samp], # comment out to plot without non-dropped out data
-                                        # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None,
-                                        fs=fs, 
-                                        batch=batch_cntr, 
-                                        sample=samp,
-                                        idx=batch_idx[samp].item(),
-                                        fname_tag="_dropout"+fname_suptag,
-                                        dir_base=dir_base,
-                )
-
-
-def compare_models_weight_by_weight(model, model2, rtol=1e-5, atol=1e-8):
-    """Compare two models parameter-by-parameter. Returns (all_match, list of mismatches)."""
-    sd1, sd2 = model.state_dict(), model2.state_dict()
-    keys1, keys2 = set(sd1.keys()), set(sd2.keys())
-    if keys1 != keys2:
-        only_1 = keys1 - keys2
-        only_2 = keys2 - keys1
-        return False, {
-            "only_in_first": list(only_1),
-            "only_in_second": list(only_2),
-        }
-    mismatches = []
-    for name in sd1:
-        p1, p2 = sd1[name], sd2[name]
-        if p1.shape != p2.shape:
-            mismatches.append((name, "shape", str(p1.shape), str(p2.shape)))
-            continue
-        if not torch.allclose(p1.float(), p2.float(), rtol=rtol, atol=atol):
-            diff = (p1.float() - p2.float()).abs()
-            mismatches.append((
-                name,
-                "values",
-                f"max_diff={diff.max().item():.6e} mean_diff={diff.mean().item():.6e}",
-                None,
-            ))
-    return len(mismatches) == 0, mismatches
-
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -650,7 +609,7 @@ def evaluate(args: TrainArgs):
             if True:
                 # Load the model from the checkpoint.
                 with torch.device("meta"):
-                    model = EncoderDecoder(args.model)
+                    model = EncoderDecoder(args.model) # load from yaml file
 
                 logger.info("Model is built !")
                 model_param_count = get_num_params(model)
@@ -681,66 +640,52 @@ def evaluate(args: TrainArgs):
 
             if False:
                 print("LOAD THE MODEL FROM HUGGINGFACE.")
-                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-                # In your shell, set your HF_TOKEN environment variable: 
+                # In your shell, set your HF_TOKEN environment variable:
                 # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+                def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
+                    cfg = OmegaConf.load(config_path)
+                    cfg_obj = OmegaConf.to_container(cfg, resolve=True)
+                    return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
+
+                def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
+                    config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
+                    with open(config_path, "r") as f:
+                        cfg = json.load(f)
+                    # expects {"model": {...}} like you showed
+                    return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
 
                 REPO_ID = "Zyphra/ZUNA"
                 WEIGHTS = "model-00001-of-00001.safetensors"
-                CONFIG  = "config.json"  
+                arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
+                CONFIG  = "config.json"
 
-                # model arch
-                config_path = hf_hub_download(repo_id=REPO_ID, filename=CONFIG, token=True)
-                with open(config_path, "r") as f:
-                    config_dict = json.load(f)
+                # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
+                # model_args = load_model_args_local(arg_path)
+                model_args = load_model_args_from_hf(REPO_ID, CONFIG)
 
-                # del model # (CW) - delete the model if it exists.
-
-                # build model
-                model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
-                with torch.device("meta"):
-                    model2 = EncoderDecoder(model_args)
-
-                device = torch.cuda.current_device()
-                model2 = model2.to_empty(device=device)
-
-                # download weights, load them into EncoderDecoder
                 weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
-                state_dict = safe_load(weights_path, device=device) #"cpu")
+                sd_st_raw = safe_load(weights_path, device="cpu")
 
-                # remove .model prefix from keys
-                state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+                # Normalize: strip leading "model." if present
+                sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
 
-                model2.load_state_dict(state_dict, strict=True)
-                model2.eval()
+                model = EncoderDecoder(model_args).to(device)
+                sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
+                model.load_state_dict(sd_st_on_dev, strict=True)
+                model.eval()
 
+                logger.info("Model is built !")
+                model_param_count = get_num_params(model)
 
-                model_param_count = get_num_params(model2)
-                model2.sample = torch.compile(model2.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
-                model2.encoder = torch.compile(model2.encoder)
-                model2 = model2.to_empty(device=device) # Use local device, not cuda:0
+                model.sample = torch.compile(model.sample)
+                model.encoder = torch.compile(model.encoder)
 
-                check_model_value_range(model2, range=10.0, std=1.0)
+                check_model_value_range(model, range=10.0, std=1.0)
 
                 # log model size
                 logger.info(f"Model size: {model_param_count:,} total parameters")
 
-            if False:
-                # Check that model and model2 have the same weights:
-                all_match, result = compare_models_weight_by_weight(model, model2)
-                if all_match:
-                    print("All weights match (within rtol=1e-5, atol=1e-8).")
-                else:
-                    if isinstance(result, dict):
-                        print("Key sets differ:", result)
-                    else:
-                        print("Mismatches:")
-                        for t in result:
-                            print(f"  {t}")
 
-                print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
-                import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
 
             if device.type == "cuda":
                 gpu_memory_monitor = GPUMemoryMonitor("cuda")
@@ -802,15 +747,6 @@ def evaluate(args: TrainArgs):
                 MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
         )
 
-        
-
-        
-
-
-
-
-
-        # args.data.load_csv() (CW) - old audio stuff.
         print("Entering create dataloader on rank", dp_rank)
         data_loader = create_dataloader_v2(args.data, args.seed, dp_rank)
         print("Finishing create dataloader on rank", dp_rank)
@@ -908,9 +844,6 @@ def evaluate(args: TrainArgs):
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
-
-            print(f"After data_processor.process: {batch.keys()}")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
             
             # batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
             batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
@@ -1012,13 +945,13 @@ def evaluate(args: TrainArgs):
                                         mne_interpolated_signals=mne_interpolated_signals)
 
 
-            # Here if you want to only do a certain number of batches (like for making a couple plots))
-            # if batch_cntr >= num_batches:
-            #     break
+            # # Here if you want to only do a certain number of batches (like for making a couple plots))
+            if batch_cntr >= num_batches:
+                break
 
             # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
-            if epoch > 1:
-                break
+            # if epoch > 1:
+            #     break
 
         print("After looping over dataloader")
         import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
