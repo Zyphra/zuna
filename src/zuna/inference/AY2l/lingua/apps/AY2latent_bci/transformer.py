@@ -1048,7 +1048,9 @@ class EncoderDecoder(nn.Module):
     @torch.no_grad()
     def sample(self, encoder_input: torch.Tensor, seq_lens: torch.Tensor, tok_idx: torch.Tensor, sample_steps: int = 50, cfg: float = 1.0):
 
-        with torch.autocast("cuda", dtype=torch.bfloat16):
+        device = encoder_input.device
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        with torch.autocast(device.type, dtype=dtype):
 
             do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
 

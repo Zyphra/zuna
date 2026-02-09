@@ -92,7 +92,7 @@ class EnvironmentArgs:
     TORCH_NCCL_ASYNC_ERROR_HANDLING: str = "1"
 
 
-def get_device_mesh(distributed_args: DistributedArgs):
+def get_device_mesh(distributed_args: DistributedArgs, device: torch.device):
     tp_size = distributed_args.tp_size
     dp_replicate = distributed_args.dp_replicate
     dp_shard = distributed_args.dp_shard
@@ -118,7 +118,7 @@ def get_device_mesh(distributed_args: DistributedArgs):
     dims = tuple(dims)
     names = tuple(names)
 
-    return init_device_mesh("cuda", mesh_shape=dims, mesh_dim_names=names)
+    return init_device_mesh(device.type, mesh_shape=dims, mesh_dim_names=names)
 
 
 def dist_max(x: Union[int, float], mesh: DeviceMesh = None):
@@ -236,7 +236,7 @@ def setup_env(env_args):
             logger.warning(f"WARNING: Setting {name} to {value}")
 
 
-def setup_torch_distributed(dist_args):
+def setup_torch_distributed(dist_args, device: torch.device):
     """
     Handle single and multi-GPU / multi-node / SLURM jobs.
     Initialize the following variables:
@@ -269,17 +269,18 @@ def setup_torch_distributed(dist_args):
 
     # set GPU device
     assert 0 <= local_rank < 8
-    if dist_args.matmul_allow_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        logger.warning(
-            f"WARNING: Setting torch.backends.matmul.allow_tf32 to True. This is faster but less accurate."
+    if device.type == "cuda":
+        if dist_args.matmul_allow_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            logger.warning(
+                f"WARNING: Setting torch.backends.matmul.allow_tf32 to True. This is faster but less accurate."
+            )
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = (
+            dist_args.allow_bf16_reduced_precision_reduction
         )
-    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = (
-        dist_args.allow_bf16_reduced_precision_reduction
-    )
-    if torch.cuda.device_count() > 1:
-        torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(init_method="env://", backend="nccl")
+        if torch.cuda.device_count() > 1:
+            torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(init_method="env://", backend="nccl" if device.type == "cuda" else "gloo")
     torch.autograd.set_detect_anomaly(dist_args.detect_anomaly)
 
 

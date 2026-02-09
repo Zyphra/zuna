@@ -75,7 +75,6 @@ from apps.AY2latent_bci.transformer import (
     EncoderDecoder,
 )
 from lingua.probe import AutoProbeD
-from lingua.stool import StoolArgs, launch_job
 
 from dotenv import load_dotenv
 load_dotenv() # Load WANDB_API_KEY from .env file
@@ -105,7 +104,6 @@ class TrainArgs:
     model: DecoderTransformerArgs = field(default_factory=DecoderTransformerArgs)
     distributed: DistributedArgs = field(default_factory=DistributedArgs)
     env: EnvironmentArgs = field(default_factory=EnvironmentArgs)
-
     checkpoint: CheckpointArgs = field(default_factory=CheckpointArgs)
     logging: LoggingArgs = field(default_factory=LoggingArgs)
 
@@ -605,6 +603,9 @@ def evaluate(args: TrainArgs):
     num_batches = 5
     batch_cntr = 0
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu") 
+
     dir_base = 'figures/' + '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]) + f'/cfg{cfg}'
     print(f"Saving output figures to: {dir_base=}")
     os.makedirs(dir_base, exist_ok=True)
@@ -625,8 +626,8 @@ def evaluate(args: TrainArgs):
         init_signal_handler(set_preemption_flag)  # For handling preemption signals.
         setup_env(args.env)
 
-        setup_torch_distributed(args.distributed)
-        world_mesh = get_device_mesh(args.distributed)
+        setup_torch_distributed(args.distributed, device=device)
+        world_mesh = get_device_mesh(args.distributed, device=device)
         logger.info(f"Starting job: {args.name}")
 
         # build dataloader
@@ -645,40 +646,111 @@ def evaluate(args: TrainArgs):
         logger.info("Building model")
 
         if LOAD_THE_MODEL:
-            with torch.device("meta"):
-                model = EncoderDecoder(args.model)
 
-            logger.info("Model is built !")
-            model_param_count = get_num_params(model)
+            if True:
+                # Load the model from the checkpoint.
+                with torch.device("meta"):
+                    model = EncoderDecoder(args.model)
 
-            model.sample = torch.compile(model.sample)
-            model.encoder = torch.compile(model.encoder)
-            model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
+                logger.info("Model is built !")
+                model_param_count = get_num_params(model)
 
-            if args.checkpoint.init_ckpt_path:
-                with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                    torch.manual_seed(args.model.seed)
-                    model.init_weights()
+                model.sample = torch.compile(model.sample)
+                model.encoder = torch.compile(model.encoder)
+                model = model.to_empty(device=device) # Use local device, not cuda:0
+
+                if device.type == "cuda":
+                    if args.checkpoint.init_ckpt_path:
+                        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                            torch.manual_seed(args.model.seed)
+                            model.init_weights()
+                        check_model_value_range(model, range=10.0, std=1.0)
+                        logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
+                        load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+                        logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
+                        check_model_value_range(model, range=10.0, std=1.0)
+                    else:
+                        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                            torch.manual_seed(args.model.seed)
+                            model.init_weights()
                 check_model_value_range(model, range=10.0, std=1.0)
-                logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-                load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-                check_model_value_range(model, range=10.0, std=1.0)
+
+                # log model size
+                logger.info(f"Model size: {model_param_count:,} total parameters")
+
+
+            if False:
+                print("LOAD THE MODEL FROM HUGGINGFACE.")
+                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+                # In your shell, set your HF_TOKEN environment variable: 
+                # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+
+                REPO_ID = "Zyphra/ZUNA"
+                WEIGHTS = "model-00001-of-00001.safetensors"
+                CONFIG  = "config.json"  
+
+                # model arch
+                config_path = hf_hub_download(repo_id=REPO_ID, filename=CONFIG, token=True)
+                with open(config_path, "r") as f:
+                    config_dict = json.load(f)
+
+                # del model # (CW) - delete the model if it exists.
+
+                # build model
+                model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
+                with torch.device("meta"):
+                    model2 = EncoderDecoder(model_args)
+
+                device = torch.cuda.current_device()
+                model2 = model2.to_empty(device=device)
+
+                # download weights, load them into EncoderDecoder
+                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+                state_dict = safe_load(weights_path, device=device) #"cpu")
+
+                # remove .model prefix from keys
+                state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
+
+                model2.load_state_dict(state_dict, strict=True)
+                model2.eval()
+
+
+                model_param_count = get_num_params(model2)
+                model2.sample = torch.compile(model2.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+                model2.encoder = torch.compile(model2.encoder)
+                model2 = model2.to_empty(device=device) # Use local device, not cuda:0
+
+                check_model_value_range(model2, range=10.0, std=1.0)
+
+                # log model size
+                logger.info(f"Model size: {model_param_count:,} total parameters")
+
+            if False:
+                # Check that model and model2 have the same weights:
+                all_match, result = compare_models_weight_by_weight(model, model2)
+                if all_match:
+                    print("All weights match (within rtol=1e-5, atol=1e-8).")
+                else:
+                    if isinstance(result, dict):
+                        print("Key sets differ:", result)
+                    else:
+                        print("Mismatches:")
+                        for t in result:
+                            print(f"  {t}")
+
+                print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
+                import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
+
+            if device.type == "cuda":
+                gpu_memory_monitor = GPUMemoryMonitor("cuda")
+                logger.info(
+                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
+                )
+                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
             else:
-                with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                    torch.manual_seed(args.model.seed)
-                    model.init_weights()
-            check_model_value_range(model, range=10.0, std=1.0)
-
-            # log model size
-            logger.info(f"Model size: {model_param_count:,} total parameters")
-
-            gpu_memory_monitor = GPUMemoryMonitor("cuda")
-            logger.info(
-                f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-            )
-            logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+                logger.info(f"Running on CPU")
 
 
             ## DONT THINK I NEED THIS. (CW)
@@ -713,13 +785,11 @@ def evaluate(args: TrainArgs):
 
             gc.disable()
 
-            # print(f"After: {model.encoder.dropout_vec=}")
-
             # Make seed unique per GPU/rank by adding rank to base seed
-            # dp_rank=0 # (CW) - hard code this. Not running data_parallel
             rank_seed = args.seed + dp_rank
             torch.manual_seed(rank_seed)
-            torch.cuda.manual_seed(rank_seed)
+            if device.type == "cuda":
+                torch.cuda.manual_seed(rank_seed)
 
             logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
             
@@ -734,65 +804,7 @@ def evaluate(args: TrainArgs):
 
         
 
-        if False:
-
-            print("LOAD THE MODEL FROM HUGGINGFACE.")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-            # In your shell, set your HF_TOKEN environment variable: 
-            # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
-
-            REPO_ID = "Zyphra/ZUNA"
-            WEIGHTS = "model-00001-of-00001.safetensors"
-            CONFIG  = "config.json"  
-
-            # model arch
-            config_path = hf_hub_download(repo_id=REPO_ID, filename=CONFIG, token=True)
-            with open(config_path, "r") as f:
-                config_dict = json.load(f)
-
-            del model # (CW) - delete the model if it exists.
-
-            # build model
-            model_args = dataclass_from_dict(DecoderTransformerArgs, config_dict["model"])
-            with torch.device("meta"):
-                model = EncoderDecoder(model_args)
-
-            device = torch.cuda.current_device()
-            model = model.to_empty(device=device)
-
-            # download weights, load them into EncoderDecoder
-            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
-            state_dict = safe_load(weights_path, device="cpu")
-
-            # remove .model prefix from keys
-            state_dict = {k.removeprefix("model."): v for k, v in state_dict.items()}
-
-            model.load_state_dict(state_dict, strict=True)
-            model.eval()
-
-
-            model_param_count = get_num_params(model)
-            model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
-            model.encoder = torch.compile(model.encoder)
-            model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
-
-
-
-            # print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
-            # import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
-
-            # # Check that model and model2 have the same weights:
-            # all_match, result = compare_models_weight_by_weight(model, model2)
-            # if all_match:
-            #     print("All weights match (within rtol=1e-5, atol=1e-8).")
-            # else:
-            #     if isinstance(result, dict):
-            #         print("Key sets differ:", result)
-            #     else:
-            #         print("Mismatches:")
-            #         for t in result:
-            #             print(f"  {t}")
+        
 
 
 
@@ -854,7 +866,7 @@ def evaluate(args: TrainArgs):
             for p in model.parameters():
                 p.requires_grad = False # True (False for eval, True for training)
 
-        data_processor = EEGProcessor(args.data).to(torch.cuda.current_device())
+        data_processor = EEGProcessor(args.data).to(device)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
@@ -896,8 +908,12 @@ def evaluate(args: TrainArgs):
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
+
+            print(f"After data_processor.process: {batch.keys()}")
+            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
             
-            batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
+            # batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
+            batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
 
             tf = args.data.num_fine_time_pts
             tc = args.data.seq_len // tf
