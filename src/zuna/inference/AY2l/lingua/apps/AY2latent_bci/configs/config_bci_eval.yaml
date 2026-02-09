@@ -57,7 +57,7 @@ data:
 
   # data_norm: 1 #5 #1 # (CW) - this is the norm to divide the data by, to normalize it to [-1,1] range. (1 for TUH data, 5 for OpenNeuro data.)
   batch_size: 1 #64 #1024 # 32              # (CW) - editted this for debug. KEEP AT 1 NOW. PACKING IN DATALOADER!
-  target_packed_seqlen: 5000 #3000 #50000 #4 # 32768              # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  target_packed_seqlen: 1 #3000 #50000 #4 # 32768              # (CW) - Target seqlen for packed samples. This is essentially batch size.
   # do_N_epochs: None
   num_workers: 0              # (CW) - editted this for debug.
   prefetch_factor: null          # (CW) - editted this for debug.
