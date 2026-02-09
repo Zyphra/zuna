@@ -81,7 +81,6 @@ load_dotenv() # Load WANDB_API_KEY from .env file
 
 logger = logging.getLogger()
 
-LOAD_THE_MODEL = True           # Flag to load model onto GPU or not. If False, just explore data.
 # SAVE_RECONSTRUCTION_PTS = True  # Flag to save reconstructions and latents into pt files so we can run classifier on them
 
 
@@ -476,8 +475,8 @@ def unwrap_all_the_signals(model_output, batch, args):
             if i==0: # save plot only for 1st sample in batch - to match indx0 insider EEGDataset_v2.__iter__
                 print(f"Saving plots...")
                 for j in range(num_chans):
-                    signal = mod_in_sig_unwrapt[j,:].cpu().numpy()      # model input should match before and after
-                    # signal2 = mod_out_sig_unwrapt[j,:].cpu().numpy()    # should be close I think, right?
+                    signal = mod_in_sig_unwrapt[j,:].cpu().numpy() 
+                    # signal2 = mod_out_sig_unwrapt[j,:].cpu().numpy() 
                     #
                     fig, ax = plt.subplots(1, 1, figsize=(20, 4))
                     ax.plot(signal,color='blue', alpha=0.5)         # plot original data
@@ -553,7 +552,6 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
 def evaluate(args: TrainArgs):
 
     plot_eeg_signal_samples = True      # Plot raw eeg for data and model reconstruction for single samples
-    print_batch_stats = False
     compute_mne_interpolated_signals = True
 
     sample_steps = 50    # for diffusion process in .sample - Default is 50
@@ -604,147 +602,143 @@ def evaluate(args: TrainArgs):
         torch.manual_seed(args.seed)
         logger.info("Building model")
 
-        if LOAD_THE_MODEL:
+        if False:
+            # Load the model from the checkpoint.
+            with torch.device("meta"):
+                model = EncoderDecoder(args.model) # load from yaml file
 
-            if True:
-                # Load the model from the checkpoint.
-                with torch.device("meta"):
-                    model = EncoderDecoder(args.model) # load from yaml file
+            logger.info("Model is built !")
+            model_param_count = get_num_params(model)
 
-                logger.info("Model is built !")
-                model_param_count = get_num_params(model)
-
-                model.sample = torch.compile(model.sample)
-                model.encoder = torch.compile(model.encoder)
-                model = model.to_empty(device=device) # Use local device, not cuda:0
-
-                if device.type == "cuda":
-                    if args.checkpoint.init_ckpt_path:
-                        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                            torch.manual_seed(args.model.seed)
-                            model.init_weights()
-                        check_model_value_range(model, range=10.0, std=1.0)
-                        logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-                        load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                        logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-                        check_model_value_range(model, range=10.0, std=1.0)
-                    else:
-                        with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                            torch.manual_seed(args.model.seed)
-                            model.init_weights()
-                check_model_value_range(model, range=10.0, std=1.0)
-
-                # log model size
-                logger.info(f"Model size: {model_param_count:,} total parameters")
-
-
-            if False:
-                print("LOAD THE MODEL FROM HUGGINGFACE.")
-                # In your shell, set your HF_TOKEN environment variable:
-                # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
-                def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
-                    cfg = OmegaConf.load(config_path)
-                    cfg_obj = OmegaConf.to_container(cfg, resolve=True)
-                    return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
-
-                def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
-                    config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
-                    with open(config_path, "r") as f:
-                        cfg = json.load(f)
-                    # expects {"model": {...}} like you showed
-                    return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
-
-                REPO_ID = "Zyphra/ZUNA"
-                WEIGHTS = "model-00001-of-00001.safetensors"
-                arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
-                CONFIG  = "config.json"
-
-                # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
-                # model_args = load_model_args_local(arg_path)
-                model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-
-                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
-                sd_st_raw = safe_load(weights_path, device="cpu")
-
-                # Normalize: strip leading "model." if present
-                sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
-
-                model = EncoderDecoder(model_args).to(device)
-                sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
-                model.load_state_dict(sd_st_on_dev, strict=True)
-                model.eval()
-
-                logger.info("Model is built !")
-                model_param_count = get_num_params(model)
-
-                model.sample = torch.compile(model.sample)
-                model.encoder = torch.compile(model.encoder)
-
-                check_model_value_range(model, range=10.0, std=1.0)
-
-                # log model size
-                logger.info(f"Model size: {model_param_count:,} total parameters")
-
-
+            model.sample = torch.compile(model.sample)
+            model.encoder = torch.compile(model.encoder)
+            model = model.to_empty(device=device) 
 
             if device.type == "cuda":
-                gpu_memory_monitor = GPUMemoryMonitor("cuda")
-                logger.info(
-                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-                )
-                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
-            else:
-                logger.info(f"Running on CPU")
+                if args.checkpoint.init_ckpt_path:
+                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                        torch.manual_seed(args.model.seed)
+                        model.init_weights()
+                    check_model_value_range(model, range=10.0, std=1.0)
+                    logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
+                    load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+                    logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
+                    check_model_value_range(model, range=10.0, std=1.0)
+                else:
+                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                        torch.manual_seed(args.model.seed)
+                        model.init_weights()
+            check_model_value_range(model, range=10.0, std=1.0)
+
+            # log model size
+            logger.info(f"Model size: {model_param_count:,} total parameters")
 
 
-            ## DONT THINK I NEED THIS. (CW)
-            # build optimizer after apply parallelisms to the model
-            optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
-            # data_loader_state = init_dataloader_state_from_args(
-            #     args.data, dp_rank, dp_degree
-            # )
-            
-            train_state = TrainState(
-                step=0,
-                acc_step=0,
-                # data_loader_state=data_loader_state,
-                scheduler=scheduler,
-            )
-            
-            checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
-            checkpoint.load(model, optimizer, train_state, world_mesh)
-            # Either load from latest checkpoint or start from scratch
-            if args.probe_freq is not None:
-                if get_is_master():
-                    os.makedirs(Path(args.dump_dir) / "probe", exist_ok=True)
-                torch.distributed.barrier()
-                probe = AutoProbeD(
-                    model,
-                    (
-                        Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl"
-                        if (dp_rank % 128 == 0)
-                        else None
-                    ),
-                )
+        if True:
+            print("LOAD THE MODEL FROM HUGGINGFACE.")
+            # In your shell, set your HF_TOKEN environment variable:
+            # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+            def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
+                cfg = OmegaConf.load(config_path)
+                cfg_obj = OmegaConf.to_container(cfg, resolve=True)
+                return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
 
-            gc.disable()
+            def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
+                config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
+                with open(config_path, "r") as f:
+                    cfg = json.load(f)
+                # expects {"model": {...}} like you showed
+                return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
 
-            # Make seed unique per GPU/rank by adding rank to base seed
-            rank_seed = args.seed + dp_rank
-            torch.manual_seed(rank_seed)
-            if device.type == "cuda":
-                torch.cuda.manual_seed(rank_seed)
+            REPO_ID = "Zyphra/ZUNA"
+            WEIGHTS = "model-00001-of-00001.safetensors"
+            arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
+            CONFIG  = "config.json"
 
-            logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
-            
-            # Also make numpy and random seeds unique per rank
-            np.random.seed(rank_seed)
-            random.seed(rank_seed)
+            # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
+            # model_args = load_model_args_local(arg_path)
+            model_args = load_model_args_from_hf(REPO_ID, CONFIG)
 
+            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+            sd_st_raw = safe_load(weights_path, device="cpu")
+
+            # Normalize: strip leading "model." if present
+            sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
+
+            model = EncoderDecoder(model_args).to(device)
+            sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
+            model.load_state_dict(sd_st_on_dev, strict=True)
             model.eval()
-            metric_logger = context_stack.enter_context(
-                MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
+
+            logger.info("Model is built !")
+            model_param_count = get_num_params(model)
+
+            model.sample = torch.compile(model.sample)
+            model.encoder = torch.compile(model.encoder)
+
+            check_model_value_range(model, range=10.0, std=1.0)
+
+            # log model size
+            logger.info(f"Model size: {model_param_count:,} total parameters")
+
+        if device.type == "cuda":
+            gpu_memory_monitor = GPUMemoryMonitor("cuda")
+            logger.info(
+                f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
+            )
+            logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+        else:
+            logger.info(f"Running on CPU")
+
+
+        ## DONT THINK WE NEED THIS FOR EVALS
+        # build optimizer after apply parallelisms to the model
+        optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
+        # data_loader_state = init_dataloader_state_from_args(
+        #     args.data, dp_rank, dp_degree
+        # )
+        
+        train_state = TrainState(
+            step=0,
+            acc_step=0,
+            # data_loader_state=data_loader_state,
+            scheduler=scheduler,
+        )
+        
+        checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
+        checkpoint.load(model, optimizer, train_state, world_mesh)
+        # Either load from latest checkpoint or start from scratch
+        if args.probe_freq is not None:
+            if get_is_master():
+                os.makedirs(Path(args.dump_dir) / "probe", exist_ok=True)
+            torch.distributed.barrier()
+            probe = AutoProbeD(
+                model,
+                (
+                    Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl"
+                    if (dp_rank % 128 == 0)
+                    else None
+                ),
+            )
+
+        gc.disable()
+
+        # Make seed unique per GPU/rank by adding rank to base seed
+        rank_seed = args.seed + dp_rank
+        torch.manual_seed(rank_seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed(rank_seed)
+
+        logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
+        
+        # Also make numpy and random seeds unique per rank
+        np.random.seed(rank_seed)
+        random.seed(rank_seed)
+
+        model.eval()
+        metric_logger = context_stack.enter_context(
+            MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
         )
 
         print("Entering create dataloader on rank", dp_rank)
@@ -798,45 +792,16 @@ def evaluate(args: TrainArgs):
 
         torch_profiler = None
         #make sure all model parameters require gradients
-        if LOAD_THE_MODEL:
-            for p in model.parameters():
-                p.requires_grad = False # True (False for eval, True for training)
+        for p in model.parameters():
+            p.requires_grad = False #(False for eval, True for training)
 
         data_processor = EEGProcessor(args.data).to(device)
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-
-
-        # Loop through batches of data from dataloader and gather up mean & std of data
-        if print_batch_stats:
-            batch_mean = []
-            batch_std = []
-            batch_cntr = 0
-            while True:
-                batch = next(batch_iterator)     
-                batch_cntr += 1
-                print(f"{batch_cntr=}, {epoch=}")
-                batch_mean.append( batch['eeg_signal'].mean().item() )
-                batch_std.append( batch['eeg_signal'].std().item() )
-                if epoch > 1 or batch_cntr > 20000:
-                    break
-
-            print(f"After {batch_cntr} batches through data loader:")
-            print(f"Batch std: (mn, std) ({np.array(batch_std).mean()}, {np.array(batch_std).std()})")
-            print(f"Batch mean: (mn, std) ({np.array(batch_mean).mean()}, {np.array(batch_mean).std()})")
-
-            print(f"After Loop through batches of data from dataloader and gather up mean & std of data")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
     
         while True:
             batch = next(batch_iterator)     
             batch_cntr += 1
-
-            # if batch_cntr < 3:
-            #     continue
 
             eeg_signal = batch['eeg_signal']
             # batch_ids = batch.pop('ids', None)
@@ -845,7 +810,6 @@ def evaluate(args: TrainArgs):
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
             
-            # batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
             batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
 
             tf = args.data.num_fine_time_pts
@@ -953,9 +917,6 @@ def evaluate(args: TrainArgs):
             # if epoch > 1:
             #     break
 
-        print("After looping over dataloader")
-        import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 #
@@ -963,42 +924,6 @@ def evaluate(args: TrainArgs):
 
 def main():
     """
-    The command line interface here uses OmegaConf https://omegaconf.readthedocs.io/en/2.3_branch/usage.html#from-command-line-arguments
-    This accepts arguments as a dot list
-    So if the dataclass looks like
-
-    @dataclass
-    class DummyArgs:
-        name: str
-        model: LMTransformerArgsgs
-
-    @dataclass
-    class LMTransformerArgsgs:
-        dim: int
-
-    Then you can pass model.dim=32 to change values in LMTransformerArgsgs
-    or just name=tictac for top level attributes.
-
-    The behavior here is as follows:
-    1. We instantiate TrainArgs with its default values
-    2. We override those default values with the ones in the provided config file
-    3. We override the result with the additional arguments provided through command line
-
-    For example, if the config is the following
-
-    model:
-        dim: 128
-        n_layers: 4
-
-    and you call train.py with train.py model.dim=64
-
-    Then the final TrainArgs will have
-
-    model:
-        dim: 64
-        n_layers: 4
-
-    Plus all the default values in TrainArgs dataclass.
     """
     cli_args = OmegaConf.from_cli()
 
@@ -1009,11 +934,6 @@ def main():
     default_cfig = OmegaConf.structured(TrainArgs())
     cfig = OmegaConf.merge(default_cfig, file_cfig, cli_args)
     cfig = OmegaConf.to_object(cfig)
-
-    # print(cfig)
-
-    # print(f"I am in main after imports and after loading config, before diving into train.")
-    # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     evaluate(cfig)
 
