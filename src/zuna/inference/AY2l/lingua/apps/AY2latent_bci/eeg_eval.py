@@ -7,7 +7,7 @@
 #   >> "pip install zuna" or something?
 
 # 2nd, run something like:
-#   >> CUDA_VISIBLE_DEVICES=0 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
+#   >> CUDA_VISIBLE_DEVICES=1 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
 from copy import deepcopy
@@ -346,6 +346,70 @@ def get_best_divisors(chans, max_pad=0):
     return winner_best_div
 
 
+#jm saving pt files - helper functions for file management
+def parse_filename_num_samples(filename):
+    """
+    Parse filename to extract expected number of samples.
+    Example: ds000001_000000_000002_d00_00003_31_1280.pt -> 3 samples
+    """
+    try:
+        parts = filename.removesuffix('.pt').split('_')
+        num_samples = int(parts[4])  # The 5th element (index 4) is num_samples
+        return num_samples
+    except (IndexError, ValueError):
+        logger.warning(f"Could not parse num_samples from filename: {filename}")
+        return None
+
+
+def save_reconstructed_file(filename, file_data, export_dir):
+    """
+    Save a complete reconstructed file with all its samples.
+
+    Args:
+        filename: Original filename (e.g., "ds000001_..._.pt")
+        file_data: Dict with 'data_original', 'data_reconstructed', 'channel_positions', 'metadata'
+        export_dir: Directory to save the file
+    """
+    output_path = Path(export_dir) / filename
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save with same structure as input files
+    output_dict = {
+        'data': file_data['data_reconstructed'],        # List of reconstructed samples
+        'data_original': file_data['data_original'],    # List of original samples (for comparison)
+        'channel_positions': file_data['channel_positions'],
+        'metadata': file_data['metadata']
+    }
+
+    torch.save(output_dict, output_path)
+    logger.info(f"✓ Saved and freed: {filename} ({len(file_data['data_reconstructed'])} samples)")
+
+
+def check_and_save_complete_files(results_accumulator, export_dir):
+    """
+    Check for complete files and save them immediately to free memory.
+
+    Args:
+        results_accumulator: Dict tracking results by filename
+        export_dir: Directory to save files
+
+    Returns:
+        List of filenames that were saved (to be removed from accumulator)
+    """
+    completed_files = []
+
+    for filename, file_data in results_accumulator.items():
+        expected = file_data['expected_samples']
+        collected = file_data['collected_samples']
+
+        if collected == expected:
+            # File is complete - save it
+            save_reconstructed_file(filename, file_data, export_dir)
+            completed_files.append(filename)
+
+    return completed_files
+
+
 
 def unwrap_all_the_signals(model_output, batch, args):
     """
@@ -604,11 +668,19 @@ def evaluate(args: TrainArgs):
     batch_cntr = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu") 
+    # device = torch.device("cpu")
 
     dir_base = 'figures/' + '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]) + f'/cfg{cfg}'
     print(f"Saving output figures to: {dir_base=}")
     os.makedirs(dir_base, exist_ok=True)
+
+    #jm saving pt files - setup export directory and results accumulator
+    export_dir = args.data.export_dir
+    print(f"Will save reconstructed pt files to: {export_dir}")
+    os.makedirs(export_dir, exist_ok=True)
+
+    # Results accumulator - tracks samples by filename until file is complete
+    results_accumulator = {}
 
     fs = args.data.sample_rate
     num_t = args.data.seq_len
@@ -739,8 +811,8 @@ def evaluate(args: TrainArgs):
                         for t in result:
                             print(f"  {t}")
 
-                print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
-                import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
+                # print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
+                # import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
 
             if device.type == "cuda":
                 gpu_memory_monitor = GPUMemoryMonitor("cuda")
@@ -842,16 +914,20 @@ def evaluate(args: TrainArgs):
                         print(f"Clipping input at +/-{eeg_sig_clip}")
                         eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip) # 
 
+                    #jm saving pt files - pass through metadata fields
                     yield {
                         'eeg_signal': eeg_signal, # pass out the clipped and normalized eeg signal.
                         'chan_pos': batch['chan_pos'],
                         'chan_pos_discrete': batch['chan_pos_discrete'],
                         'chan_id': batch['chan_id'],
                         't_coarse': batch['t_coarse'],
-                        'chan_dropout': batch['chan_dropout'], 
+                        'chan_dropout': batch['chan_dropout'],
                         'seq_lens': batch['seq_lens'],
-                        'idx': batch['ids'],       
-                        'dataset_id': batch['dataset_id'],  
+                        'idx': batch['ids'],
+                        'dataset_id': batch['dataset_id'],
+                        'filename': batch['filename'],           # Pass through filename
+                        'sample_idx': batch['sample_idx'],       # Pass through sample_idx
+                        'metadata': batch['metadata'],           # Pass through metadata
                     }
 
                 # dataloader.sampler.set_epoch(epoch)
@@ -890,13 +966,13 @@ def evaluate(args: TrainArgs):
             print(f"Batch std: (mn, std) ({np.array(batch_std).mean()}, {np.array(batch_std).std()})")
             print(f"Batch mean: (mn, std) ({np.array(batch_mean).mean()}, {np.array(batch_mean).std()})")
 
-            print(f"After Loop through batches of data from dataloader and gather up mean & std of data")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+            # print(f"After Loop through batches of data from dataloader and gather up mean & std of data")
+            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
     
         while True:
-            batch = next(batch_iterator)     
+            batch = next(batch_iterator)
             batch_cntr += 1
 
             # if batch_cntr < 3:
@@ -906,11 +982,17 @@ def evaluate(args: TrainArgs):
             # batch_ids = batch.pop('ids', None)
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
-            with torch.no_grad(): 
+
+            #jm saving pt files - pop metadata fields before processing
+            batch_filenames = batch.pop('filename', None)
+            batch_sample_indices = batch.pop('sample_idx', None)
+            batch_metadata_list = batch.pop('metadata', None)
+
+            with torch.no_grad():
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
 
-            print(f"After data_processor.process: {batch.keys()}")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+            # print(f"After data_processor.process: {batch.keys()}")
+            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
             
             # batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
             batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
@@ -978,13 +1060,49 @@ def evaluate(args: TrainArgs):
                                                             batch=batch, 
                                                             args=args)    
 
-                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)  
-                
+                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
                 # eeg_signal_unwrapped: original data | is list, each item has ch*timepoints
-                # model_signal_input_unwrapped: input with dropped channels 
-                # model_signal_output_unwrapped, output of the model 
+                # model_signal_input_unwrapped: input with dropped channels
+                # model_signal_output_unwrapped, output of the model
                 # chan_pos = model_position_input_unwrapped[0].reshape(-1,tc,3)[:,0,:] #channel position requires this reshape
-                
+
+                #jm saving pt files - accumulate results for each sample
+                # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
+                eeg_sig_norm = 10.0  # Must match the value in make_batch_iterator
+
+                for i in range(len(model_signal_output_unwrapped)):
+                    filename = batch_filenames[i]
+                    sample_idx = batch_sample_indices[i]
+                    metadata = batch_metadata_list[i]
+
+                    # Initialize file entry if first time seeing this file
+                    if filename not in results_accumulator:
+                        num_samples = parse_filename_num_samples(filename)
+                        if num_samples is None:
+                            logger.warning(f"Skipping file with unparseable filename: {filename}")
+                            continue
+
+                        results_accumulator[filename] = {
+                            'expected_samples': num_samples,
+                            'collected_samples': 0,
+                            'data_original': [None] * num_samples,
+                            'data_reconstructed': [None] * num_samples,
+                            'channel_positions': [None] * num_samples,
+                            'metadata': metadata
+                        }
+
+                    # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
+                    file_entry = results_accumulator[filename]
+                    file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
+                    file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
+                    file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
+                    file_entry['collected_samples'] += 1
+
+                # Check if any files are complete and save them
+                completed = check_and_save_complete_files(results_accumulator, export_dir)
+                for filename in completed:
+                    del results_accumulator[filename]  # Free memory
 
                 # Apply MNE interpolation to dropped-out channels
                 if compute_mne_interpolated_signals:
@@ -1020,8 +1138,30 @@ def evaluate(args: TrainArgs):
             if epoch > 1:
                 break
 
-        print("After looping over dataloader")
-        import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
+        #jm saving pt files - save any remaining incomplete files at the end
+        if results_accumulator:
+            logger.info(f"\nProcessing complete. Saving {len(results_accumulator)} remaining files...")
+            for filename, file_data in results_accumulator.items():
+                expected = file_data['expected_samples']
+                collected = file_data['collected_samples']
+
+                if collected == expected:
+                    # Complete file that hasn't been saved yet
+                    save_reconstructed_file(filename, file_data, export_dir)
+                else:
+                    # Incomplete file - save with warning
+                    logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
+                    # You can choose to save incomplete files or skip them
+                    # For now, let's save them with a flag
+                    file_data['metadata']['incomplete'] = True
+                    file_data['metadata']['collected_samples'] = collected
+                    file_data['metadata']['expected_samples'] = expected
+                    save_reconstructed_file(filename, file_data, export_dir)
+
+            logger.info(f"All files saved to: {export_dir}")
+
+        # print("After looping over dataloader")
+        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
