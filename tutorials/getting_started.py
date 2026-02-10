@@ -23,21 +23,27 @@ from zuna.pipeline import run_zuna, zuna_preprocessing, zuna_inference, zuna_pt_
 # OUTPUT_DIR = "data/4_fif_output"              # Output reconstructed .fif files
 # CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
-INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif"                # Input .fif files
+INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"                # Input .fif files
 PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
 PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
 OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Output reconstructed .fif files
 CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
 UPSAMPLE_FACTOR = None  # None for no upsampling, or integer (e.g., 2, 4)
-GPU_DEVICE = 1          # GPU device ID
+GPU_DEVICE = 6          # GPU device ID
 
 # =============================================================================
 # OPTION 1: Complete Pipeline (Recommended)
 # =============================================================================
 # Runs all 3 steps automatically and cleans up tmp files
+#
+# NOTE: By default, artifact removal is DISABLED to preserve all data.
+# To enable artifact removal (clean noisy data), the preprocessing step would need:
+#   drop_bad_channels=True, drop_bad_epochs=True, zero_out_artifacts=True
+# These are set in the pipeline defaults and cannot be changed via run_zuna().
+# Use OPTION 2 if you need to control these settings.
 
-if __name__ == "__main__":
+if __name__ == "__main__" and True:
     print("Running complete pipeline...")
     run_zuna(
         input_dir=INPUT_DIR,
@@ -55,8 +61,8 @@ if __name__ == "__main__":
 # Run each step separately for more control
 
 if __name__ == "__main__" and False:  # Change False to True to use this option
+    
     print("Running individual steps...")
-
     # Setup paths for intermediate files
     output_path = Path(OUTPUT_DIR)
     pt_input = PT_INPUT_DIR if PT_INPUT_DIR else str(output_path / "tmp" / "pt_input")
@@ -67,7 +73,12 @@ if __name__ == "__main__" and False:  # Change False to True to use this option
     Path(pt_output).mkdir(parents=True, exist_ok=True)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    import pdb; pdb.set_trace()
+
     # Step 1: Preprocessing (.fif → .pt)
+    # NOTE: By default, artifact removal is DISABLED to preserve all data.
+    # To enable artifact removal (clean noisy data), add these parameters:
+    #   drop_bad_channels=True, drop_bad_epochs=True, zero_out_artifacts=True
     print("\n" + "="*80)
     print("STEP 1: Preprocessing")
     print("="*80)
@@ -77,6 +88,10 @@ if __name__ == "__main__" and False:  # Change False to True to use this option
         target_sfreq=256.0,
         epoch_duration=5.0,
         apply_notch_filter=False
+        # Uncomment to enable artifact removal:
+        # drop_bad_channels=True,
+        # drop_bad_epochs=True,
+        # zero_out_artifacts=True,
     )
 
     # Step 2: Model Inference (.pt → .pt)

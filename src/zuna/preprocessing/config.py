@@ -46,12 +46,12 @@ class ProcessingConfig:
         Whether to save normalization parameters for reversibility (pt_to_raw)
     """
 
-    # Processing toggles
-    drop_bad_channels: bool = True
-    drop_bad_epochs: bool = True
+    # Processing toggles (disabled by default to preserve all data)
+    drop_bad_channels: bool = False
+    drop_bad_epochs: bool = False
     apply_notch_filter: bool = True
     apply_highpass_filter: bool = True
-    zero_out_artifacts: bool = True
+    zero_out_artifacts: bool = False
 
     # Basic parameters
     target_sfreq: float = 256.0
@@ -74,13 +74,17 @@ class ProcessingConfig:
     save_normalization_params: bool = True
 
     # Bad channel handling
-    zero_bad_channels_from_raw: bool = True  # Zero channels marked as bad in raw.info['bads']
+    zero_bad_channels_from_raw: bool = False  # Zero channels marked as bad in raw.info['bads']
 
     # File chunking
     max_duration_minutes: float = 10.0  # Split files longer than this into chunks
 
     # Channel upsampling
     upsample_to_channels: Optional[int] = None  # If set, upsample to this many channels (e.g., 128)
+
+    # Save preprocessed FIF for comparison
+    save_preprocessed_fif: bool = False  # Save preprocessed raw (before epoching) for ground truth comparison
+    preprocessed_fif_dir: Optional[str] = None  # Where to save preprocessed FIF files (None = don't save)
 
     def __post_init__(self):
         """Validate configuration."""

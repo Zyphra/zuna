@@ -13,29 +13,190 @@ from .processor import EEGProcessor
 from .config import ProcessingConfig
 
 
+# Global epoch cache for batching epochs into 64-sample PT files
+_epoch_cache = {
+    'data_list': [],
+    'positions_list': [],
+    'channel_names': None,
+    'metadata': None,
+    'file_counter': 0,
+    'pt_file_counter': 0  # Resets for each new source file
+}
+
+
+def _reset_epoch_cache():
+    """Reset the global epoch cache."""
+    global _epoch_cache
+    _epoch_cache['data_list'].clear()
+    _epoch_cache['positions_list'].clear()
+    _epoch_cache['channel_names'] = None
+    _epoch_cache['metadata'] = None
+    _epoch_cache['pt_file_counter'] = 0
+    gc.collect()
+
+
 def _generate_output_filename(
     dataset_name: str,
-    file_idx: int,
+    file_counter: int,
+    pt_file_idx: int,
+    n_epochs: int,
     metadata: Dict[str, Any],
     epochs_list: List,
 ) -> str:
     """
     Generate output filename in format:
-    {dataset_name}_000000_{file_idx:06d}_d{n_dropped:02d}_{n_epochs:05d}_{avg_channels}_{samples_per_epoch}.pt
+    {dataset_name}_{file_counter:06d}_{pt_file_idx:06d}_d{n_dropped:02d}_{n_epochs:05d}_{avg_channels}_{samples_per_epoch}.pt
 
-    Example: ds000123_000000_000001_d05_00064_063_1280.pt
+    Example: ds000000_000000_000001_d05_00064_063_1280.pt
+             ds000000_000000_000002_d05_00064_063_1280.pt  (same source file)
+             ds000000_000001_000001_d05_00064_063_1280.pt  (next source file)
+
+    Where:
+      - file_counter: Which source .fif file (0, 1, 2, ...)
+      - pt_file_idx: Which PT file from that source (1, 2, 3, ...)
     """
-    chunk_idx = 0  # Single chunk for now
     n_dropped = len(metadata.get('channels_dropped_no_coords', []))
-    n_epochs = len(epochs_list)
     avg_channels = int(np.mean([ep.shape[0] for ep in epochs_list])) if epochs_list else 0
     samples_per_epoch = epochs_list[0].shape[1] if epochs_list else 0
 
     filename = (
-        f"{dataset_name}_{chunk_idx:06d}_{file_idx:06d}_"
+        f"{dataset_name}_{file_counter:06d}_{pt_file_idx:06d}_"
         f"d{n_dropped:02d}_{n_epochs:05d}_{avg_channels}_{samples_per_epoch}.pt"
     )
     return filename
+
+
+def _add_epochs_to_cache(
+    epochs_list: List,
+    positions_list: List,
+    metadata: Dict[str, Any],
+    file_counter: int,
+    output_path: Path,
+    config: ProcessingConfig
+) -> List[str]:
+    """
+    Add epochs to cache and save PT files when we reach 64 epochs.
+
+    Returns list of saved PT filenames.
+    """
+    global _epoch_cache
+
+    # Check if we're starting a new source file
+    if _epoch_cache['file_counter'] != file_counter:
+        # Reset PT file counter for new source file
+        _epoch_cache['pt_file_counter'] = 0
+        _epoch_cache['file_counter'] = file_counter
+
+    # Store metadata from first batch
+    if _epoch_cache['metadata'] is None:
+        _epoch_cache['metadata'] = metadata.copy()
+        _epoch_cache['channel_names'] = metadata['channel_names']
+
+    # Add epochs to cache
+    _epoch_cache['data_list'].extend(epochs_list)
+    _epoch_cache['positions_list'].extend(positions_list)
+
+    saved_files = []
+
+    # Save complete PT files (64 epochs each)
+    while len(_epoch_cache['data_list']) >= config.epochs_per_file:
+        output_file = _save_pt_from_cache(output_path, config)
+        if output_file:
+            saved_files.append(output_file)
+
+    return saved_files
+
+
+def _save_pt_from_cache(output_path: Path, config: ProcessingConfig) -> Optional[str]:
+    """Save one PT file (64 epochs) from the cache."""
+    global _epoch_cache
+
+    if len(_epoch_cache['data_list']) < config.epochs_per_file:
+        return None
+
+    # Extract epochs for this PT file
+    epochs_for_pt = _epoch_cache['data_list'][:config.epochs_per_file]
+    positions_for_pt = _epoch_cache['positions_list'][:config.epochs_per_file]
+
+    # Remove from cache
+    _epoch_cache['data_list'] = _epoch_cache['data_list'][config.epochs_per_file:]
+    _epoch_cache['positions_list'] = _epoch_cache['positions_list'][config.epochs_per_file:]
+
+    # Increment PT file counter
+    _epoch_cache['pt_file_counter'] += 1
+
+    # Generate filename
+    dataset_name = "ds000000"  # Always use ds000000 as base
+    output_filename = _generate_output_filename(
+        dataset_name=dataset_name,
+        file_counter=_epoch_cache['file_counter'],
+        pt_file_idx=_epoch_cache['pt_file_counter'],
+        n_epochs=config.epochs_per_file,
+        metadata=_epoch_cache['metadata'],
+        epochs_list=epochs_for_pt
+    )
+    output_file = output_path / output_filename
+
+    # Save
+    from .io import save_pt
+    save_pt(
+        epochs_for_pt,
+        positions_for_pt,
+        _epoch_cache['channel_names'],
+        str(output_file),
+        metadata=_epoch_cache['metadata'],
+        reversibility_params=_epoch_cache['metadata'].get('reversibility')
+    )
+
+    return str(output_file)
+
+
+def _flush_remaining_cache(output_path: Path) -> Optional[str]:
+    """Save any remaining epochs in cache (< 64) at the end of processing."""
+    global _epoch_cache
+
+    if len(_epoch_cache['data_list']) == 0:
+        return None
+
+    if _epoch_cache['metadata'] is None:
+        return None
+
+    # Get remaining epochs
+    epochs_for_pt = _epoch_cache['data_list']
+    positions_for_pt = _epoch_cache['positions_list']
+    n_remaining = len(epochs_for_pt)
+
+    # Clear cache
+    _epoch_cache['data_list'] = []
+    _epoch_cache['positions_list'] = []
+
+    # Increment PT file counter
+    _epoch_cache['pt_file_counter'] += 1
+
+    # Generate filename
+    dataset_name = "ds000000"  # Always use ds000000 as base
+    output_filename = _generate_output_filename(
+        dataset_name=dataset_name,
+        file_counter=_epoch_cache['file_counter'],
+        pt_file_idx=_epoch_cache['pt_file_counter'],
+        n_epochs=n_remaining,
+        metadata=_epoch_cache['metadata'],
+        epochs_list=epochs_for_pt
+    )
+    output_file = output_path / output_filename
+
+    # Save
+    from .io import save_pt
+    save_pt(
+        epochs_for_pt,
+        positions_for_pt,
+        _epoch_cache['channel_names'],
+        str(output_file),
+        metadata=_epoch_cache['metadata'],
+        reversibility_params=_epoch_cache['metadata'].get('reversibility')
+    )
+
+    return str(output_file)
 
 
 def _process_single_file(
@@ -64,14 +225,14 @@ def _process_single_file(
                 'file_counter': file_counter
             }
 
-        # Check if file needs chunking
+        # Check if file needs chunking (for processing/normalization)
         max_duration_seconds = config.max_duration_minutes * 60
         file_duration = raw.times[-1]
 
         chunks_to_process = []
 
         if file_duration > max_duration_seconds:
-            # Split into chunks
+            # Split into chunks for processing
             n_chunks = int(np.ceil(file_duration / max_duration_seconds))
             for sub_chunk_idx in range(n_chunks):
                 start_time = sub_chunk_idx * max_duration_seconds
@@ -91,8 +252,10 @@ def _process_single_file(
                 'total_chunks': 1
             })
 
-        # Process each chunk
-        chunk_results = []
+        # Process each chunk and accumulate epochs
+        total_epochs_from_file = 0
+        saved_pt_files = []
+
         for chunk_info in chunks_to_process:
             chunk_raw = chunk_info['raw']
 
@@ -103,68 +266,48 @@ def _process_single_file(
             metadata['original_filename'] = file_path.name
 
             if len(epochs_list) == 0:
-                chunk_results.append({
-                    'success': False,
-                    'error': 'No epochs after processing'
-                })
                 continue
 
-            # Generate dataset name
-            if chunk_info['is_chunked']:
-                dataset_name = f"ds{file_counter:06d}_chunk{chunk_info['chunk_idx']:02d}"
-            else:
-                dataset_name = f"ds{file_counter:06d}"
-
-            # Generate output filename
-            output_filename = _generate_output_filename(
-                dataset_name=dataset_name,
-                file_idx=idx,
-                metadata=metadata,
-                epochs_list=epochs_list
-            )
-            output_file = output_path / output_filename
-
-            # Save
-            from .io import save_pt
-            save_pt(
+            # Add epochs to cache (will save PT files when reaching 64 epochs)
+            pt_files = _add_epochs_to_cache(
                 epochs_list,
                 positions_list,
-                metadata['channel_names'],
-                str(output_file),
-                metadata=metadata,
-                reversibility_params=metadata.get('reversibility')
+                metadata,
+                file_counter,
+                output_path,
+                config
             )
 
-            chunk_results.append({
-                'success': True,
-                'epochs_saved': metadata['n_epochs_saved'],
-                'output': str(output_file),
-                'metadata': metadata,
-                'chunk_idx': chunk_info['chunk_idx']
-            })
+            saved_pt_files.extend(pt_files)
+            total_epochs_from_file += len(epochs_list)
 
             # Memory cleanup
             del chunk_raw, epochs_list, positions_list
             gc.collect()
 
+        # IMPORTANT: Flush cache after each source file to prevent mixing epochs
+        # This ensures PT files only contain epochs from a single source file
+        remaining_file = _flush_remaining_cache(output_path)
+        if remaining_file:
+            saved_pt_files.append(remaining_file)
+
         # Return summary
-        successful_chunks = [r for r in chunk_results if r['success']]
-        if successful_chunks:
+        if total_epochs_from_file > 0:
             return {
                 'file': file_path.name,
                 'success': True,
                 'file_counter': file_counter,
-                'chunks': len(chunk_results),
-                'successful_chunks': len(successful_chunks),
-                'outputs': [r['output'] for r in successful_chunks],
-                'total_epochs': sum(r.get('epochs_saved', 0) for r in successful_chunks)
+                'chunks': len(chunks_to_process),
+                'total_epochs': total_epochs_from_file,
+                'pt_files_saved': len(saved_pt_files),
+                'outputs': saved_pt_files
             }
         else:
             return {
                 'file': file_path.name,
                 'success': False,
                 'file_counter': file_counter,
-                'error': 'No chunks processed successfully'
+                'error': 'No epochs after processing'
             }
 
     except Exception as e:
@@ -195,10 +338,10 @@ def process_directory(
     Features:
     - Parallel processing: Set n_jobs > 1 to process multiple files simultaneously
     - Automatic chunking: Files longer than max_duration_minutes are split into segments
+    - Epoch batching: Accumulates epochs across files and saves in batches of 64
 
-    Output files will be named: ds{file_num:06d}_{chunk:06d}_{file:06d}_d{dropped:02d}_{epochs:05d}_{channels}_{samples}.pt
-    Example: ds000001_000000_000001_d05_00064_063_1280.pt
-    Chunked files: ds000001_chunk00_000000_000001_d05_00064_063_1280.pt
+    Output files will be named: ds{file_num:06d}_{pt_file:06d}_d{dropped:02d}_{epochs:05d}_{channels}_{samples}.pt
+    Example: ds000000_000001_d05_00064_063_1280.pt
 
     Files are numbered sequentially starting from 0.
 
@@ -248,6 +391,9 @@ def process_directory(
     # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Reset epoch cache at the start
+    _reset_epoch_cache()
+
     # Find all supported EEG files
     supported_extensions = ['.fif', '.edf', '.bdf', '.vhdr', '.cnt', '.set', '.mff']
     eeg_files = []
@@ -293,10 +439,9 @@ def process_directory(
             # Print summary
             if result['success']:
                 print(f"  ✅ Success!")
-                if 'chunks' in result:
-                    print(f"     Chunks: {result['successful_chunks']}/{result['chunks']}")
-                    print(f"     Total epochs: {result['total_epochs']}")
-                    print(f"     Outputs: {len(result['outputs'])} files")
+                print(f"     Total epochs: {result['total_epochs']}")
+                if result.get('pt_files_saved', 0) > 0:
+                    print(f"     PT files saved: {result['pt_files_saved']}")
             else:
                 print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
 
@@ -312,20 +457,30 @@ def process_directory(
             for file_path, idx, fc in tasks
         )
 
+    # Flush remaining epochs in cache
+    print("\n💾 Saving remaining epochs from cache...")
+    remaining_file = _flush_remaining_cache(output_path)
+    if remaining_file:
+        print(f"  ✅ Saved remaining epochs to: {Path(remaining_file).name}")
+
     # Final summary
     print("\n" + "="*80)
     print("Processing Summary")
     print("="*80)
     successful = sum(1 for r in results if r['success'])
     failed = len(results) - successful
-    total_epochs = sum(r.get('total_epochs', r.get('epochs_saved', 0)) for r in results if r['success'])
-    total_output_files = sum(len(r.get('outputs', [])) for r in results if r['success'])
+    total_epochs = sum(r.get('total_epochs', 0) for r in results if r['success'])
+    total_pt_files = sum(r.get('pt_files_saved', 0) for r in results if r['success'])
+
+    # Add the final flushed file if it exists
+    if remaining_file:
+        total_pt_files += 1
 
     print(f"  Total input files: {len(results)}")
     print(f"  Successful: {successful}")
     print(f"  Failed: {failed}")
-    print(f"  Total output PT files: {total_output_files}")
-    print(f"  Total epochs saved: {total_epochs}")
+    print(f"  Total epochs processed: {total_epochs}")
+    print(f"  Total PT files saved: {total_pt_files}")
     print(f"  Output directory: {output_dir}")
 
     return results
