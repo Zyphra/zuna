@@ -1,20 +1,15 @@
 
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# This software may be used and distributed according to the terms of the Llama 2 Community License Agreement.
-
-
-# 1st, setup tmux and docker with lingua.sh
-#   >> "pip install zuna" or something?
+# 1st, 
+#   >> pip install zuna
 
 # 2nd, run something like:
-#   >> CUDA_VISIBLE_DEVICES=1 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
+#   >> CUDA_VISIBLE_DEVICES=3 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
 from copy import deepcopy
 import gc
 import logging
 import os
-# import sys
 import time
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
@@ -25,11 +20,9 @@ import random
 import numpy as np
 from omegaconf import OmegaConf
 import torch
-import torch.distributed
 import torch.nn.functional as F
 from torch.optim import lr_scheduler
 from torch.distributed.checkpoint.stateful import Stateful
-# from torch.distributed._tensor import DTensor
 import matplotlib.pyplot as plt
 
 # To load model from HuggingFace.
@@ -38,8 +31,7 @@ from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file as safe_load
 
 
-from lingua.args import dataclass_from_dict, dump_config, flatten_dict
-from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
+from lingua.args import dataclass_from_dict, dump_config
 
 from utils_pt_mne import interpolate_signals_with_mne
 
@@ -57,7 +49,6 @@ from lingua.distributed import (
     init_signal_handler,
     get_device_mesh,
     get_is_master,
-    get_world_size,
     setup_env,
     setup_torch_distributed,
     check_model_value_range,
@@ -66,22 +57,18 @@ from lingua.logger import init_logger
 from lingua.metrics import (
     GPUMemoryMonitor,
     LoggingArgs,
-    MetricLogger,
     get_num_params,
 )
-from lingua.optim import OptimArgs, build_optimizer
+
 from apps.AY2latent_bci.transformer import (
     DecoderTransformerArgs,
     EncoderDecoder,
 )
-from lingua.probe import AutoProbeD
 
 from dotenv import load_dotenv
-load_dotenv() # Load WANDB_API_KEY from .env file
+load_dotenv()
 
 logger = logging.getLogger()
-
-# SAVE_RECONSTRUCTION_PTS = True  # Flag to save reconstructions and latents into pt files so we can run classifier on them
 
 
 @dataclass
@@ -99,11 +86,9 @@ class TrainArgs:
     steps: int = 1000
 
     data: BCIDatasetArgs = field(default_factory=BCIDatasetArgs)
-    optim: OptimArgs = field(default_factory=OptimArgs)
     model: DecoderTransformerArgs = field(default_factory=DecoderTransformerArgs)
     distributed: DistributedArgs = field(default_factory=DistributedArgs)
     env: EnvironmentArgs = field(default_factory=EnvironmentArgs)
-    checkpoint: CheckpointArgs = field(default_factory=CheckpointArgs)
     logging: LoggingArgs = field(default_factory=LoggingArgs)
 
     # If set to None, eval is run locally otherwise it launches a new job with the given number of gpus
@@ -148,63 +133,6 @@ class TrainState(Stateful):
         self.acc_step = state_dict["acc_step"]
         self.scheduler.load_state_dict(state_dict["scheduler"])
 
-def validate_train_args(args: TrainArgs,):
-    assert args.dump_dir, "Dump dir not set"
-
-    if args.checkpoint.path is None:
-        logger.info(f"Setting checkpoint path to {str(Path(args.dump_dir) / 'checkpoints')}")
-        args.checkpoint.path = str(Path(args.dump_dir) / "checkpoints")
-
-    # if using local filesystem, check if data_dir exists.
-    if not args.data.use_b2:
-        assert os.path.exists(args.data.data_dir), f"{args.data.data_dir} doesn't exist"
-
-    if (
-        args.distributed.dp_replicate
-        * args.distributed.dp_shard
-        * args.distributed.tp_size
-        != get_world_size()
-    ):
-        assert get_world_size() % args.distributed.dp_shard == 0
-        args.distributed.dp_replicate = get_world_size() // args.distributed.dp_shard
-
-        assert args.distributed.dp_replicate % args.distributed.tp_size == 0
-        args.distributed.dp_replicate = (
-            args.distributed.dp_replicate // args.distributed.tp_size
-        )
-
-        logger.warning(
-            f"Setting Data Parallel size to {args.distributed.dp_replicate * args.distributed.dp_shard}"
-        )
-        assert (
-            args.distributed.dp_replicate
-            * args.distributed.dp_shard
-            * args.distributed.tp_size
-            == get_world_size()
-        )
-
-        if args.distributed.fsdp_type == "no_shard":
-            assert (
-                args.distributed.dp_shard == 1
-                and args.distributed.dp_replicate == get_world_size()
-            )
-
-    if args.distributed.tp_size == 1:
-        logger.warning(
-            "Tensor parallelism has not been tested for a while, use at your own risk"
-        )
-
-    if args.logging.wandb is not None:
-        args.logging.wandb.name = args.name
-
-    if args.probe_freq is not None:
-        assert (
-            args.distributed.tp_size == 1
-        ), "Probing not supported with tensor parallelism"
-        assert (
-            args.distributed.selective_activation_checkpointing is False
-        ), "Probing not supported with selective activation checkpointing"
-
 preemption_flag = dict(flag=False)
 
 def set_preemption_flag(signum, frame):
@@ -212,12 +140,9 @@ def set_preemption_flag(signum, frame):
     logger.warning("Preemption ! checkpointing asap and exiting.")
     preemption_flag["flag"] = True
 
-
-
-
 def plot_compare_eeg_signal(data,
                             reconst,  
-                            eeg_signal=None,  # (CW) - added this argument to see original signal with no dropout  
+                            eeg_signal=None,  # added this argument to see original signal with no dropout  
                             mne_reconstruction = None,
                             fs=256,
                             batch=0, 
@@ -345,7 +270,6 @@ def get_best_divisors(chans, max_pad=0):
     return winner_best_div
 
 
-#jm saving pt files - helper functions for file management
 def parse_filename_num_samples(filename):
     """
     Parse filename to extract expected number of samples.
@@ -599,7 +523,7 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
                 plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
                                         reconst=model_signal_output_unwrapped[samp],
                                         eeg_signal=eeg_signal_unwrapped[samp],
-                                        mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
+                                        # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
                                         fs=fs,
                                         batch=batch_cntr,
                                         sample=samp,
@@ -627,27 +551,21 @@ def evaluate(args: TrainArgs):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
 
-    dir_base = 'figures/' + '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]) + f'/cfg{cfg}'
+    dir_base = f'figures/zuna/cfg{cfg}/'
     print(f"Saving output figures to: {dir_base=}")
     os.makedirs(dir_base, exist_ok=True)
 
-    #jm saving pt files - setup export directory and results accumulator
+    # saving pt files - setup export directory and results accumulator
     export_dir = args.data.export_dir
     print(f"Will save reconstructed pt files to: {export_dir}")
     os.makedirs(export_dir, exist_ok=True)
-
-    # Results accumulator - tracks samples by filename until file is complete
-    results_accumulator = {}
+    results_accumulator = {} # tracks samples by filename until file is complete
 
     fs = args.data.sample_rate
     num_t = args.data.seq_len
 
 
     with ExitStack() as context_stack:
-        validate_train_args(
-            args,
-        )
-
         if get_is_master():
             os.makedirs(args.dump_dir, exist_ok=True)
             dump_config(args, Path(args.dump_dir) / "config.yaml")
@@ -674,141 +592,61 @@ def evaluate(args: TrainArgs):
         torch.manual_seed(args.seed)
         logger.info("Building model")
 
-        if False:
-            # Load the model from the checkpoint.
-            with torch.device("meta"):
-                model = EncoderDecoder(args.model) # load from yaml file
+        # print("LOAD THE MODEL FROM HUGGINGFACE.")
+        # In your shell, set your HF_TOKEN environment variable:
+        # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
+        def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
+            cfg = OmegaConf.load(config_path)
+            cfg_obj = OmegaConf.to_container(cfg, resolve=True)
+            return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
 
-            logger.info("Model is built !")
-            model_param_count = get_num_params(model)
+        def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
+            config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+            return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
 
-            model.sample = torch.compile(model.sample)
-            model.encoder = torch.compile(model.encoder)
-            model = model.to_empty(device=device) 
+        REPO_ID = "Zyphra/ZUNA"
+        WEIGHTS = "model-00001-of-00001.safetensors"
+        # arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
+        CONFIG  = "config.json"
 
-            if device.type == "cuda":
-                if args.checkpoint.init_ckpt_path:
-                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                        torch.manual_seed(args.model.seed)
-                        model.init_weights()
-                    check_model_value_range(model, range=10.0, std=1.0)
-                    logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-                    load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                    logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-                    check_model_value_range(model, range=10.0, std=1.0)
-                else:
-                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                        torch.manual_seed(args.model.seed)
-                        model.init_weights()
-            check_model_value_range(model, range=10.0, std=1.0)
+        # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
+        # model_args = load_model_args_local(arg_path)
+        model_args = load_model_args_from_hf(REPO_ID, CONFIG)
 
-            # log model size
-            logger.info(f"Model size: {model_param_count:,} total parameters")
+        weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+        sd_st_raw = safe_load(weights_path, device="cpu")
 
+        # Normalize: strip leading "model." if present
+        sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
 
-        if True:
-            print("LOAD THE MODEL FROM HUGGINGFACE.")
-            # In your shell, set your HF_TOKEN environment variable:
-            # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
-            def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
-                cfg = OmegaConf.load(config_path)
-                cfg_obj = OmegaConf.to_container(cfg, resolve=True)
-                return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
+        model = EncoderDecoder(model_args).to(device)
+        sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
+        model.load_state_dict(sd_st_on_dev, strict=True)
+        model.eval()
 
-            def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
-                config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
-                with open(config_path, "r") as f:
-                    cfg = json.load(f)
-                # expects {"model": {...}} like you showed
-                return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
+        logger.info("Model is built !")
+        model_param_count = get_num_params(model)
 
-            REPO_ID = "Zyphra/ZUNA"
-            WEIGHTS = "model-00001-of-00001.safetensors"
-            arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
-            CONFIG  = "config.json"
+        model.sample = torch.compile(model.sample)
+        model.encoder = torch.compile(model.encoder)
+        model.eval()
 
-            # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
-            # model_args = load_model_args_local(arg_path)
-            model_args = load_model_args_from_hf(REPO_ID, CONFIG)
+        check_model_value_range(model, range=10.0, std=1.0)
 
-            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
-            sd_st_raw = safe_load(weights_path, device="cpu")
+        # log model size
+        logger.info(f"Model size: {model_param_count:,} total parameters")
 
-            # Normalize: strip leading "model." if present
-            sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
-
-            model = EncoderDecoder(model_args).to(device)
-            sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
-            model.load_state_dict(sd_st_on_dev, strict=True)
-            model.eval()
-
-            logger.info("Model is built !")
-            model_param_count = get_num_params(model)
-
-            model.sample = torch.compile(model.sample)
-            model.encoder = torch.compile(model.encoder)
-
-            check_model_value_range(model, range=10.0, std=1.0)
-
-            # log model size
-            logger.info(f"Model size: {model_param_count:,} total parameters")
-
-            if False:
-                # Check that model and model2 have the same weights:
-                all_match, result = compare_models_weight_by_weight(model, model2)
-                if all_match:
-                    print("All weights match (within rtol=1e-5, atol=1e-8).")
-                else:
-                    if isinstance(result, dict):
-                        print("Key sets differ:", result)
-                    else:
-                        print("Mismatches:")
-                        for t in result:
-                            print(f"  {t}")
-
-                # print("After loading model from checkpoint and loading model2 from HF. Compare model2 and model.")
-                # import IPython; print('\n\n\Debug:'); IPython.embed(); import time; time.sleep(0.3)
-
-            if device.type == "cuda":
-                gpu_memory_monitor = GPUMemoryMonitor("cuda")
-                logger.info(
-                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-                )
-                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
-            else:
-                logger.info(f"Running on CPU")
-
-
-        ## DONT THINK WE NEED THIS FOR EVALS
-        # build optimizer after apply parallelisms to the model
-        optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
-        # data_loader_state = init_dataloader_state_from_args(
-        #     args.data, dp_rank, dp_degree
-        # )
-        
-        train_state = TrainState(
-            step=0,
-            acc_step=0,
-            # data_loader_state=data_loader_state,
-            scheduler=scheduler,
-        )
-        
-        checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
-        checkpoint.load(model, optimizer, train_state, world_mesh)
-        # Either load from latest checkpoint or start from scratch
-        if args.probe_freq is not None:
-            if get_is_master():
-                os.makedirs(Path(args.dump_dir) / "probe", exist_ok=True)
-            torch.distributed.barrier()
-            probe = AutoProbeD(
-                model,
-                (
-                    Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl"
-                    if (dp_rank % 128 == 0)
-                    else None
-                ),
+        if device.type == "cuda":
+            gpu_memory_monitor = GPUMemoryMonitor("cuda")
+            logger.info(
+                f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
             )
+            logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+        else:
+            logger.info(f"Running on CPU")
 
         gc.disable()
 
@@ -824,28 +662,22 @@ def evaluate(args: TrainArgs):
         np.random.seed(rank_seed)
         random.seed(rank_seed)
 
-        model.eval()
-        metric_logger = context_stack.enter_context(
-            MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
-        )
-
+        # Create dataloader
         print("Entering create dataloader on rank", dp_rank)
         data_loader = create_dataloader_v2(args.data, args.seed, dp_rank)
         print("Finishing create dataloader on rank", dp_rank)
 
 
         epoch = 0 # if using nonlocal epoch
-        def make_batch_iterator(dataloader):  # (CW) Use with IterableDataset.
+        def make_batch_iterator(dataloader, data_args):  # Use with IterableDataset.
             """
             Moving sequence packing into Dataset/Dataloader/Collator. Too slow when done here.
             """
             nonlocal epoch
-            # epoch = 0 # if not using nonlocal epoch
-            # dataloader.sampler.set_epoch(epoch)
             print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
 
-            eeg_sig_norm = 10.0 # normalization factor for eeg signal.
-            eeg_sig_clip = 1.0 #None  # clipping factor for eeg signal.
+            eeg_sig_norm = data_args.data_norm
+            eeg_sig_clip = data_args.data_clip
 
             while True:
                 epoch += 1
@@ -853,14 +685,12 @@ def evaluate(args: TrainArgs):
                 for idx,batch in enumerate(dataloader):
 
                     eeg_signal = batch['eeg_signal']
-
                     eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
 
                     if eeg_sig_clip is not None:
                         print(f"Clipping input at +/-{eeg_sig_clip}")
-                        eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip) # 
+                        eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip)
 
-                    #jm saving pt files - pass through metadata fields
                     yield {
                         'eeg_signal': eeg_signal, # pass out the clipped and normalized eeg signal.
                         'chan_pos': batch['chan_pos'],
@@ -876,14 +706,11 @@ def evaluate(args: TrainArgs):
                         'metadata': batch['metadata'],           # Pass through metadata
                     }
 
-                # dataloader.sampler.set_epoch(epoch)
                 print("Finished epoch", epoch)
 
-        batch_iterator = make_batch_iterator(data_loader)
+        batch_iterator = make_batch_iterator(data_loader, args.data)
         print("Entering create batch iterator on rank", dp_rank)
 
-        torch_profiler = None
-        #make sure all model parameters require gradients
         for p in model.parameters():
             p.requires_grad = False #(False for eval, True for training)
 
@@ -891,62 +718,29 @@ def evaluate(args: TrainArgs):
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-
-
-        # Loop through batches of data from dataloader and gather up mean & std of data
-        if print_batch_stats:
-            batch_mean = []
-            batch_std = []
-            batch_cntr = 0
-            while True:
-                batch = next(batch_iterator)     
-                batch_cntr += 1
-                print(f"{batch_cntr=}, {epoch=}")
-                batch_mean.append( batch['eeg_signal'].mean().item() )
-                batch_std.append( batch['eeg_signal'].std().item() )
-                if epoch > 1 or batch_cntr > 20000:
-                    break
-
-            print(f"After {batch_cntr} batches through data loader:")
-            print(f"Batch std: (mn, std) ({np.array(batch_std).mean()}, {np.array(batch_std).std()})")
-            print(f"Batch mean: (mn, std) ({np.array(batch_mean).mean()}, {np.array(batch_mean).std()})")
-
-            # print(f"After Loop through batches of data from dataloader and gather up mean & std of data")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-
-    
         while True:
             batch = next(batch_iterator)
             batch_cntr += 1
 
-            # if batch_cntr < 3:
-            #     continue
-
             eeg_signal = batch['eeg_signal']
-            # batch_ids = batch.pop('ids', None)
             batch_idx = batch.pop('idx', None)
-            batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
+            batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. if left in, breaks things below and not training on these.
 
-            #jm saving pt files - pop metadata fields before processing
+            # saving pt files - pop metadata fields before processing
             batch_filenames = batch.pop('filename', None)
             batch_sample_indices = batch.pop('sample_idx', None)
             batch_metadata_list = batch.pop('metadata', None)
 
             with torch.no_grad():
-                batch = data_processor.process(**batch)                             #  > option 3. (CW)
+                batch = data_processor.process(**batch)
 
-            # print(f"After data_processor.process: {batch.keys()}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-            
-            # batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
             batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
 
             tf = args.data.num_fine_time_pts
             tc = args.data.seq_len // tf
 
             if args.data.use_coarse_time=="C":
-                tc = 1 # (CW) - HARDCODE: USE THIS when chop_signals_only, using first tf seconds in signal.
+                tc = 1 # HARDCODE: USE THIS when chop_signals_only, using first tf seconds in signal.
 
             # ## Options for tok_idx.  Choose 1 in config.
             if args.model.tok_idx_type is None:
@@ -980,8 +774,8 @@ def evaluate(args: TrainArgs):
             # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #     
 
             signals_to_plot = []
-            # signals_to_plot = inference_at_step # [ inference_at_step[-2] ] # UNCOMMENT IF YOU WANT TO PLOT THE INTERMEDIATE STEPS OF THE DIFFUSION PROCESS
-                                                                              # NOTE: If computing reconstruction-based metrics, we need only the final sample from the diffusion process.
+            # signals_to_plot = inference_at_step # UNCOMMENT IF YOU WANT TO PLOT THE INTERMEDIATE STEPS OF THE DIFFUSION PROCESS
+                                                  # NOTE: If computing reconstruction-based metrics, we need only the final sample from the diffusion process.
 
             signals_to_plot.append(z) # Always append the final sample from the diffusion process
 
@@ -1005,49 +799,44 @@ def evaluate(args: TrainArgs):
                                                             batch=batch, 
                                                             args=args)    
 
-                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
-                # eeg_signal_unwrapped: original data | is list, each item has ch*timepoints
-                # model_signal_input_unwrapped: input with dropped channels
-                # model_signal_output_unwrapped, output of the model
-                # chan_pos = model_position_input_unwrapped[0].reshape(-1,tc,3)[:,0,:] #channel position requires this reshape
+                # saving pt files - accumulate results for each sample
+                if False:
+                    # THIS BREAKS
+                    for i in range(len(model_signal_output_unwrapped)):
+                        filename = batch_filenames[i]
+                        sample_idx = batch_sample_indices[i]
+                        metadata = batch_metadata_list[i]
 
-                #jm saving pt files - accumulate results for each sample
-                # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
-                eeg_sig_norm = 10.0  # Must match the value in make_batch_iterator
+                        # Initialize file entry if first time seeing this file
+                        if filename not in results_accumulator:
+                            num_samples = parse_filename_num_samples(filename)
+                            if num_samples is None:
+                                logger.warning(f"Skipping file with unparseable filename: {filename}")
+                                continue
 
-                for i in range(len(model_signal_output_unwrapped)):
-                    filename = batch_filenames[i]
-                    sample_idx = batch_sample_indices[i]
-                    metadata = batch_metadata_list[i]
+                            results_accumulator[filename] = {
+                                'expected_samples': num_samples,
+                                'collected_samples': 0,
+                                'data_original': [None] * num_samples,
+                                'data_reconstructed': [None] * num_samples,
+                                'channel_positions': [None] * num_samples,
+                                'metadata': metadata
+                            }
 
-                    # Initialize file entry if first time seeing this file
-                    if filename not in results_accumulator:
-                        num_samples = parse_filename_num_samples(filename)
-                        if num_samples is None:
-                            logger.warning(f"Skipping file with unparseable filename: {filename}")
-                            continue
-
-                        results_accumulator[filename] = {
-                            'expected_samples': num_samples,
-                            'collected_samples': 0,
-                            'data_original': [None] * num_samples,
-                            'data_reconstructed': [None] * num_samples,
-                            'channel_positions': [None] * num_samples,
-                            'metadata': metadata
-                        }
-
-                    # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
-                    file_entry = results_accumulator[filename]
-                    file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
-                    file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
-                    file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
-                    file_entry['collected_samples'] += 1
+                        # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
+                        eeg_sig_norm = args.data.data_norm
+                        file_entry = results_accumulator[filename]
+                        file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
+                        file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
+                        file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
+                        file_entry['collected_samples'] += 1
 
                 # Check if any files are complete and save them
-                completed = check_and_save_complete_files(results_accumulator, export_dir)
-                for filename in completed:
-                    del results_accumulator[filename]  # Free memory
+                if False:
+                    completed = check_and_save_complete_files(results_accumulator, export_dir)
+                    for filename in completed:
+                        del results_accumulator[filename]  # Free memory
 
                 # Apply MNE interpolation to dropped-out channels
                 if compute_mne_interpolated_signals:
@@ -1076,37 +865,35 @@ def evaluate(args: TrainArgs):
 
 
             # # Here if you want to only do a certain number of batches (like for making a couple plots))
-            if batch_cntr >= num_batches:
-                break
+            # if batch_cntr >= num_batches:
+            #     break
 
-            # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
+            # # Here if you want to only do a certain number of epochs - like go thru whole dataset once (as when computng eval metric stats)
             if epoch > 1:
                 break
 
-        #jm saving pt files - save any remaining incomplete files at the end
-        if results_accumulator:
-            logger.info(f"\nProcessing complete. Saving {len(results_accumulator)} remaining files...")
-            for filename, file_data in results_accumulator.items():
-                expected = file_data['expected_samples']
-                collected = file_data['collected_samples']
+        #saving pt files - save any remaining incomplete files at the end
+        if False:
+            if results_accumulator:
+                logger.info(f"\nProcessing complete. Saving {len(results_accumulator)} remaining files...")
+                for filename, file_data in results_accumulator.items():
+                    expected = file_data['expected_samples']
+                    collected = file_data['collected_samples']
 
-                if collected == expected:
-                    # Complete file that hasn't been saved yet
-                    save_reconstructed_file(filename, file_data, export_dir)
-                else:
-                    # Incomplete file - save with warning
-                    logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
-                    # You can choose to save incomplete files or skip them
-                    # For now, let's save them with a flag
-                    file_data['metadata']['incomplete'] = True
-                    file_data['metadata']['collected_samples'] = collected
-                    file_data['metadata']['expected_samples'] = expected
-                    save_reconstructed_file(filename, file_data, export_dir)
+                    if collected == expected:
+                        # Complete file that hasn't been saved yet
+                        save_reconstructed_file(filename, file_data, export_dir)
+                    else:
+                        # Incomplete file - save with warning
+                        logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
+                        # You can choose to save incomplete files or skip them
+                        # For now, let's save them with a flag
+                        file_data['metadata']['incomplete'] = True
+                        file_data['metadata']['collected_samples'] = collected
+                        file_data['metadata']['expected_samples'] = expected
+                        save_reconstructed_file(filename, file_data, export_dir)
 
-            logger.info(f"All files saved to: {export_dir}")
-
-        # print("After looping over dataloader")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
+                logger.info(f"All files saved to: {export_dir}")
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
