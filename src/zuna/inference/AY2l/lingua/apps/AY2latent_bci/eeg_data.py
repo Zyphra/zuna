@@ -318,8 +318,9 @@ def invert_reshape_signals(sig_reshaped, pos_reshaped=None, pos_discrete_reshape
 @dataclass
 class BCIDatasetArgs:
     use_b2: bool = False # If true, use Backblaze B2 for dataset loading, otherwise use local filesystem.
-    # data_paths: list[str] = field(default_factory=lambda: ["/mnt/shared/datasets/eeg_data.dat"]) 
+    # data_paths: list[str] = field(default_factory=lambda: ["/mnt/shared/datasets/eeg_data.dat"])
     data_dir: str = "/mnt/shared/datasets/bci/"
+    export_dir: str = "./output/"  #jm saving pt files - directory to save reconstructed pt files
     glob_filter: str = "**/*.pt" # default is to use all .pt files in all subdirectories.
     chan_num_filter: Union[int, None] = None # None or integer number of channels we want in each sample
     sample_rate: int = 256 # 512 # Passing in from config now.
@@ -566,13 +567,16 @@ class EEGDataset_v2(IterableDataset):
             # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3) 
 
             # Handle different dataset structures
+            #jm saving pt files - extract and store metadata
             if isinstance(mmap,dict):
                 num_samps = len(mmap['data'])
                 chan_pos = mmap['channel_positions']
+                file_metadata = mmap.get('metadata', {})  # Get metadata for this file
                 mmap = mmap['data']
             else: # assuming mmap is a tensor
                 num_samps, num_chans, num_t = mmap.shape
                 chan_pos = [torch.zeros(num_chans,3) for i in range(num_samps)]     # list of dummy channel positions (all-zeros).
+                file_metadata = {}  # Empty metadata for tensor format
                 mmap = list(torch.unbind(mmap, dim=0))                              # turn 3D-tensor into list of tensors.
 
             chan_pos_discrete = [discretize_chan_pos(cp, self.xyz_extremes, self.num_bins) for cp in chan_pos]
@@ -641,6 +645,7 @@ class EEGDataset_v2(IterableDataset):
                 chan_pos = chan_pos_filt
                 chan_pos_discrete = chan_pos_discrete_filt
                 # print(f"Filtering out samples that do not have 21 channels. {len(mmap_filt)} remain.")
+                #jm saving pt files - Note: metadata is per-file, not per-sample, so no filtering needed
 
 
             # Shuffle the channels randomly to see if the model can still learn from concat'd {x,y,z}-position or RoPE on discretized xyz positions
@@ -902,7 +907,7 @@ class EEGDataset_v2(IterableDataset):
             # print(f"{rank=} : {ids=} : {m_path}")
 
             # print(f"At the end of EEGDataset_v2.__iter__, pass out dropout?")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3) 
+            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             for s in indx:
                 try:
@@ -917,16 +922,20 @@ class EEGDataset_v2(IterableDataset):
                         for d in chan_do:
                             dropout_bool[chan_id==d] = True
 
+                        #jm saving pt files - add tracking fields for metadata and file reconstruction
                         packed_batch.append(
-                            {"eeg_signal": eeg_cat[s], 
-                            "chan_pos": reshaped[s][1], 
-                            "chan_pos_discrete": reshaped[s][2], 
+                            {"eeg_signal": eeg_cat[s],
+                            "chan_pos": reshaped[s][1],
+                            "chan_pos_discrete": reshaped[s][2],
                             "chan_id": reshaped[s][3],
-                            "t_coarse":reshaped[s][4], 
-                            "seq_lens":reshaped[s][5],  
+                            "t_coarse":reshaped[s][4],
+                            "seq_lens":reshaped[s][5],
                             "chan_dropout": dropout_bool,
-                            "ids": ids, 
-                            "dataset_id": dataset_id}
+                            "ids": ids,
+                            "dataset_id": dataset_id,
+                            "filename": str(m_path.name),      # Track source filename
+                            "sample_idx": s,                    # Track sample index within file
+                            "metadata": file_metadata}          # Pass through file metadata
                         )
                     else:
                         # Then yield packed_batch and reset list to []
@@ -1448,8 +1457,8 @@ class EEGProcessor:
             print("\n" + "="*80 + "\n")
 
 
-            print(f"INside EEGProcessor.process, plotting sample of noisy and clean signals.")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+            # print(f"INside EEGProcessor.process, plotting sample of noisy and clean signals.")
+            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             print(
                 eeg_signal, 
@@ -1503,11 +1512,12 @@ def worker_init_fn(worker_id, seed=42, rank=0):
         # print(f"Worker {worker_id} on rank {rank} using seed {worker_seed}")
 
 
-def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch, 
+def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
     """
     Do Sequence packing here and in EEGDataset_v2
     """
     def pack_chans_collate_fn(batch):
+        #jm saving pt files - include tracking fields for metadata
         packed_batch_dict = {
             'eeg_signal':               torch.vstack([item['eeg_signal'] for item in batch[0]]),
             'chan_pos':                 torch.vstack([item['chan_pos'] for item in batch[0]]),
@@ -1517,8 +1527,11 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
             'chan_dropout':             torch.vstack([item['chan_dropout'] for item in batch[0]]),
             #
             'seq_lens':                 torch.tensor([item['seq_lens'] for item in batch[0]]),
-            'ids':                      torch.tensor([item['ids'] for item in batch[0]]),                
-            'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),  
+            'ids':                      torch.tensor([item['ids'] for item in batch[0]]),
+            'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),
+            'filename':                 [item['filename'] for item in batch[0]],      # List of filenames
+            'sample_idx':               [item['sample_idx'] for item in batch[0]],    # List of sample indices
+            'metadata':                 [item['metadata'] for item in batch[0]],      # List of metadata dicts
         }
         return packed_batch_dict
 
