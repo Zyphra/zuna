@@ -7,7 +7,6 @@ from typing import Optional, Union, Tuple
 import torch
 from torch import nn
 from torch.nn import functional as F
-# from xformers.ops import fmha, AttentionBias (CW)
 from torch.nn.attention.flex_attention import (
     BlockMask,
     flex_attention,
@@ -499,11 +498,11 @@ class TransformerBlock(nn.Module):
 
         if print_layerwise_activation_stats and do_idx is not None:
 
-            # # Print all the activation stats for the dropped and non-dropped tokens if do_idx is provided
+            # Print all the activation stats for the dropped and non-dropped tokens if do_idx is provided
             x_normed = self.attention_norm(x)
-            print(f"\n\t Encoder attn_norm (drop-out): mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"\n\t Encoder attn_norm (drop-out): mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ")
             print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") 
-            print(f"\t Encoder attn_norm (non-drop): mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"\t Encoder attn_norm (non-drop): mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ")
             print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") 
             h = x + self.attention(                         #  lingua.transformer.Attention
                 x_normed,
@@ -513,9 +512,9 @@ class TransformerBlock(nn.Module):
                 attn_impl=attn_impl,
             )
             h_normed = self.ffn_norm(h) 
-            print(f"\n\t Encoder ffn_norm (drop-out): mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"\n\t Encoder ffn_norm (drop-out): mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") 
             print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") 
-            print(f"\t Encoder ffn_norm (non-drop): mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"\t Encoder ffn_norm (non-drop): mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ")
             print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") 
             out = h + self.feed_forward(h_normed)  #  lingua.transformer.FeedForward
 

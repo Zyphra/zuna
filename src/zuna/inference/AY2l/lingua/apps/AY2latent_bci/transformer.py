@@ -1,5 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
 from dataclasses import dataclass, field
 from math import inf
 from typing import Optional, Tuple, Union, List
@@ -277,7 +275,7 @@ class BaseTransformerDecoder(nn.Module):
         cross_attn_mask: Optional[Union[BlockMask,  str]] = None,
         attn_impl: str = "sdpa",
         repa_target: Optional[torch.Tensor] = None,
-        do_idx: Optional[torch.Tensor] = None, # (CW)
+        do_idx: Optional[torch.Tensor] = None,
     ):
 
         freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, tok_idx=tok_idx)
@@ -293,7 +291,7 @@ class BaseTransformerDecoder(nn.Module):
                       self_attn_mask=mask,
                       cross_attn_mask=cross_attn_mask,
                       attn_impl=attn_impl,
-                      do_idx=do_idx, # (CW)
+                      do_idx=do_idx,
             )
 
             if self.training and self.repa_index != inf and i == self.repa_index:
@@ -419,13 +417,13 @@ class BaseTransformer(nn.Module):
              nn.init.trunc_normal_(
                  self.repa_proj.weight,
                  mean=0.0,
-                 std=init_std, # Use out_init_std based on repa_dim if desired, using self.dim for now
+                 std=init_std, 
                  a=-3 * init_std,
                  b=3 * init_std,
              )
              if self.repa_proj.bias is not None:
                  nn.init.zeros_(self.repa_proj.bias)
-             self.repa_norm.reset_parameters() # Ensure repa_norm is also reset
+             self.repa_norm.reset_parameters() 
 
 class DecoderTransformer(BaseTransformerDecoder):
     def __init__(self, args: DecoderTransformerArgs):
@@ -667,7 +665,7 @@ class EncoderTransformer(BaseTransformer):
         self.registers = torch.nn.Parameter(torch.zeros(1, args.encoder_input_dim))
         self.dropout_type = args.dropout_type
         if self.dropout_type=="learnable":
-            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) #, device='cuda')) # rand init for learnable dropout vector # (CW)
+            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) # rand init for learnable dropout vector
         else:
             self.dropout_vec = None # If None, it will just use zeros for dropped out chans (rather than learnable vector).
 
@@ -1067,8 +1065,8 @@ class EncoderDecoder(nn.Module):
             dt_time = torch.tensor([1.0 / sample_steps] * bsz, device=enc_out.device).view(-1)
 
 
-            z = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device) # (CW) - was init to rand
-            # z = torch.zeros_like(encoder_input).to(enc_out.device) # (CW) - trying init to zeros
+            z = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device) # init to rand
+            # z = torch.zeros_like(encoder_input).to(enc_out.device) # init to zeros
 
             # Do not noise channel {x,y,z}-position in eeg_signal
             if self.dont_noise_chan_xyz:
