@@ -29,12 +29,6 @@ model:
 
 data:
   use_b2: false # If true, use Backblaze B2 for dataset loading, otherwise use local filesystem.
-
-  # data_dir: /workspace/bci/data/pt3d_eval_filterraw/localizeMI/ # eval dataset locally.
-
-  # data_dir: /workspace/bci/data/pt3d_eval_jonas01/ # validation dataset locally.
-
-  # data_dir: /workspace/bci/data/pt3d/v5/train # training dataset locally.
   # data_dir: datasets/v5/train/                  # training dataset on B2. 
 
   data_dir: ./tutorials/data/2_pt_input/
@@ -50,14 +44,13 @@ data:
   randomly_permute_sequence: false #true
   channel_dropout_prob: 0.0 # Probability of applying channel dropout to the EEG signal during training if float. of downsampling grid if int
   stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for stft noise schedule.
-  # masked_in_decoder: false # (SHOULD NOT MATTER IN EVAL.) - If true, mask out channels in decoder input when channel is dropped.
 
   num_bins_discretize_xyz_chan_pos: 50 # Number of bins to discretize channel positions to use in 4d-RoPE. # 40 with "old" xyz_extremes, 100 with "thirteens" xyz_extremes
   chan_pos_xyz_extremes_type: "twelves" # "old" for v4 dataset or "thirteens" or "twelves" for v5 dataset
 
   # data_norm: 1 #5 #1 # (CW) - this is the norm to divide the data by, to normalize it to [-1,1] range. (1 for TUH data, 5 for OpenNeuro data.)
   batch_size: 1 #64 #1024 # 32              # (CW) - editted this for debug. KEEP AT 1 NOW. PACKING IN DATALOADER!
-  target_packed_seqlen: 1 #3000 #50000 #4 # 32768              # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  target_packed_seqlen: 3000 #50000 #4 # 32768              # (CW) - Target seqlen for packed samples. This is essentially batch size.
   # do_N_epochs: None
   num_workers: 0              # (CW) - editted this for debug.
   prefetch_factor: null          # (CW) - editted this for debug.
