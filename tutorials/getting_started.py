@@ -17,16 +17,20 @@ from zuna.pipeline import run_zuna, zuna_preprocessing, zuna_inference, zuna_pt_
 # CONFIGURE YOUR PATHS HERE
 # =============================================================================
 
-INPUT_DIR = "data/1_fif_input"                # Input .fif files
-OUTPUT_DIR = "data/4_fif_output"              # Output reconstructed .fif files
+# INPUT_DIR = "data/1_fif_input"                # Input .fif files
+# PT_INPUT_DIR = 'data/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
+# PT_OUTPUT_DIR = 'data/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
+# OUTPUT_DIR = "data/4_fif_output"              # Output reconstructed .fif files
+# CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
+
+INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif"                # Input .fif files
+PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
+PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
+OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Output reconstructed .fif files
 CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
 UPSAMPLE_FACTOR = None  # None for no upsampling, or integer (e.g., 2, 4)
 GPU_DEVICE = 1          # GPU device ID
-
-# Optional: Specify custom paths for intermediate .pt files (None = use tmp folders in OUTPUT_DIR)
-PT_INPUT_DIR = 'data/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
-PT_OUTPUT_DIR = 'data/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
 
 # =============================================================================
 # OPTION 1: Complete Pipeline (Recommended)
