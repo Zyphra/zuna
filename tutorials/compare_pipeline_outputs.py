@@ -20,6 +20,7 @@ import random
 # =============================================================================
 
 NUM_SAMPLES = 1  # Number of random files to compare (set to 1 for quick check)
+NORMALIZE_FOR_COMPARISON = True  # Normalize both to same scale for visual comparison
 
 # Directory paths
 FIF_INPUT_DIR = "data/1_fif_input"
@@ -27,6 +28,12 @@ FIF_OUTPUT_DIR = "data/4_fif_output"
 PT_INPUT_DIR = "data/2_pt_input"
 PT_OUTPUT_DIR = "data/3_pt_output"
 OUTPUT_DIR = "eval_figures"
+
+FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"   # Preprocessed .fif files (ground truth)
+PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'                  # Preprocessed .pt files
+PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'                # Model output .pt files
+FIF_OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Reconstructed .fif files
+OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/FIGURES"
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -65,18 +72,41 @@ def compare_pt_files(input_file, output_file, output_dir, file_idx):
         if isinstance(recon_output, torch.Tensor):
             recon_output = recon_output.numpy()
 
+        print(f"\nSample {i} shapes:")
+        print(f"  Input:  {orig_input.shape}")
+        print(f"  Output: {recon_output.shape}")
+
+        # Handle channel count mismatch
+        n_input_channels = orig_input.shape[0]
+        n_output_channels = recon_output.shape[0]
+
+        if n_output_channels != n_input_channels:
+            print(f"  Channel mismatch: padding output from {n_output_channels} to {n_input_channels} channels")
+            if n_output_channels < n_input_channels:
+                # Pad with zeros
+                padding = np.zeros((n_input_channels - n_output_channels, recon_output.shape[1]))
+                recon_output = np.vstack([recon_output, padding])
+            else:
+                # Truncate
+                recon_output = recon_output[:n_input_channels, :]
+
         # Compute metrics
         mse = np.mean((orig_input - recon_output) ** 2)
         mae = np.mean(np.abs(orig_input - recon_output))
 
         correlations = []
         for ch in range(orig_input.shape[0]):
-            corr = np.corrcoef(orig_input[ch], recon_output[ch])[0, 1]
-            correlations.append(corr)
-        mean_corr = np.mean(correlations)
+            if ch < n_output_channels:
+                corr = np.corrcoef(orig_input[ch], recon_output[ch])[0, 1]
+                correlations.append(corr)
+            else:
+                correlations.append(0.0)
+
+        # Mean correlation only over non-padded channels
+        non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
+        mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
 
         print(f"\nSample {i} metrics:")
-        print(f"  Shape: {orig_input.shape}")
         print(f"  MSE: {mse:.6f}")
         print(f"  MAE: {mae:.6f}")
         print(f"  Mean correlation: {mean_corr:.4f}")
@@ -92,24 +122,42 @@ def compare_pt_files(input_file, output_file, output_dir, file_idx):
             time = np.arange(num_timepoints) / 256  # 256 Hz sampling rate
 
             ax.plot(time, orig_input[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
-            ax.plot(time, recon_output[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
 
-            corr = np.corrcoef(orig_input[ch], recon_output[ch])[0, 1]
+            # Mark zero-padded channels differently
+            if ch < n_output_channels:
+                ax.plot(time, recon_output[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
+            else:
+                ax.plot(time, recon_output[ch], 'gray', alpha=0.3, linewidth=0.8, label='Zero-padded', linestyle='--')
 
-            ax.set_ylabel(f'Ch {ch}', fontsize=8)
+            corr = correlations[ch]
+
+            ch_label = f'Ch {ch}'
+            if ch >= n_output_channels:
+                ch_label = f'Ch {ch} (dropped)'
+
+            ax.set_ylabel(ch_label, fontsize=8)
             ax.tick_params(labelsize=6)
             ax.grid(True, alpha=0.3)
-            ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
-                    ha='right', va='top', fontsize=7,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+            if ch < n_output_channels:
+                ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
+                        ha='right', va='top', fontsize=7,
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+            else:
+                ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
+                        ha='right', va='top', fontsize=7,
+                        bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
 
             if ch == 0:
                 ax.legend(fontsize=8, loc='upper left')
             if ch == num_channels - 1:
                 ax.set_xlabel('Time (s)', fontsize=10)
 
-        plt.suptitle(f'PT File {file_idx} - Sample {i}: Original vs Reconstructed\nMean Corr: {mean_corr:.4f}, MSE: {mse:.6f}',
-                     fontsize=14, fontweight='bold')
+        n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
+        title = f'PT File {file_idx} - Sample {i}: Original vs Reconstructed\nMean Corr: {mean_corr:.4f}, MSE: {mse:.6f}'
+        if n_padded > 0:
+            title += f' ({n_padded} channels zero-padded)'
+        plt.suptitle(title, fontsize=14, fontweight='bold')
         plt.tight_layout()
 
         output_path = output_dir / f"pt_file{file_idx}_sample{i}_comparison.png"
@@ -132,34 +180,136 @@ def compare_fif_files(input_file, output_file, output_dir, file_idx):
     raw_input = mne.io.read_raw_fif(input_file, preload=True, verbose=False)
     raw_output = mne.io.read_raw_fif(output_file, preload=True, verbose=False)
 
-    print(f"\nInput:  {raw_input.info['nchan']} channels, {raw_input.n_times} samples, {raw_input.info['sfreq']} Hz")
-    print(f"Output: {raw_output.info['nchan']} channels, {raw_output.n_times} samples, {raw_output.info['sfreq']} Hz")
+    print(f"\nInput (before filtering):  {raw_input.info['nchan']} channels, {raw_input.n_times} samples, {raw_input.info['sfreq']} Hz")
+    print(f"Output (before filtering): {raw_output.info['nchan']} channels, {raw_output.n_times} samples, {raw_output.info['sfreq']} Hz")
+
+    # Filter to EEG channels only (exclude EOG, ECG, etc.)
+    try:
+        raw_input.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
+        raw_output.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
+        print(f"\nAfter EEG filtering:")
+        print(f"  Input:  {raw_input.info['nchan']} EEG channels")
+        print(f"  Output: {raw_output.info['nchan']} EEG channels")
+    except Exception as e:
+        print(f"  Warning: Could not filter to EEG channels: {e}")
 
     # Get data
     data_input = raw_input.get_data()  # (n_channels, n_times)
     data_output = raw_output.get_data()
 
-    # Take a 5-second window for visualization
+    # Print data statistics BEFORE any processing
+    print(f"\nData statistics (RAW - before padding):")
+    print(f"  Input:  mean={data_input.mean():.6e}, std={data_input.std():.6e}, range=[{data_input.min():.6e}, {data_input.max():.6e}]")
+    print(f"  Output: mean={data_output.mean():.6e}, std={data_output.std():.6e}, range=[{data_output.min():.6e}, {data_output.max():.6e}]")
+    print(f"  Input in µV:  mean={data_input.mean()*1e6:.2f}, std={data_input.std()*1e6:.2f}")
+    print(f"  Output in µV: mean={data_output.mean()*1e6:.2f}, std={data_output.std()*1e6:.2f}")
+
+    # Pad output to match input channel count if needed
+    n_input_channels = data_input.shape[0]
+    n_output_channels = data_output.shape[0]
+
+    if n_output_channels < n_input_channels:
+        print(f"  Padding output from {n_output_channels} to {n_input_channels} channels with zeros")
+        # Pad with zeros to match input channel count
+        padding = np.zeros((n_input_channels - n_output_channels, data_output.shape[1]))
+        data_output = np.vstack([data_output, padding])
+    elif n_output_channels > n_input_channels:
+        print(f"  WARNING: Output has more channels ({n_output_channels}) than input ({n_input_channels})")
+        # Truncate output to match input
+        data_output = data_output[:n_input_channels, :]
+
+    # Take a 30-second window for visualization (longer for continuous data)
     sfreq = raw_input.info['sfreq']
-    window_duration = 5.0  # seconds
+    window_duration = 30.0  # seconds (increased from 5s)
     window_samples = int(window_duration * sfreq)
 
-    # Use middle portion of the data
-    start_sample = max(0, (data_input.shape[1] - window_samples) // 2)
-    end_sample = start_sample + window_samples
+    # Pick a RANDOM 30-second window (instead of always the middle)
+    min_samples = min(data_input.shape[1], data_output.shape[1])
+    max_start = max(0, min_samples - window_samples)
+    if max_start > 0:
+        start_sample = random.randint(0, max_start)
+        print(f"\nRandom window: {start_sample / sfreq:.1f}s - {(start_sample + window_samples) / sfreq:.1f}s")
+    else:
+        start_sample = 0
+    end_sample = min(start_sample + window_samples, min_samples)
+    actual_window_samples = end_sample - start_sample
 
     data_input_window = data_input[:, start_sample:end_sample]
     data_output_window = data_output[:, start_sample:end_sample]
 
-    # Compute metrics
-    mse = np.mean((data_input_window - data_output_window) ** 2)
-    mae = np.mean(np.abs(data_input_window - data_output_window))
+    # Normalize for visual comparison if enabled
+    if NORMALIZE_FOR_COMPARISON:
+        print(f"\n⚠️  NORMALIZE_FOR_COMPARISON=True: Normalizing both to same scale (ignoring zeros)")
+
+        # For output, compute stats ONLY on non-zero samples (ignore None epochs)
+        output_nonzero_mask = data_output_window != 0
+        output_nonzero_data = data_output_window[output_nonzero_mask]
+
+        # Input stats (all data)
+        input_mean = data_input_window[:n_output_channels].mean()
+        input_std = data_input_window[:n_output_channels].std()
+
+        # Output stats (only non-zero samples)
+        if len(output_nonzero_data) > 0:
+            output_mean = output_nonzero_data.mean()
+            output_std = output_nonzero_data.std()
+        else:
+            output_mean = 0.0
+            output_std = 1.0
+
+        print(f"  Before normalization:")
+        print(f"    Input:  mean={input_mean:.6e}, std={input_std:.6e}")
+        print(f"    Output: mean={output_mean:.6e}, std={output_std:.6e} (non-zero only)")
+        print(f"    Output: {len(output_nonzero_data)} / {output_nonzero_mask.size} non-zero samples ({100*len(output_nonzero_data)/output_nonzero_mask.size:.1f}%)")
+
+        # Normalize input
+        if input_std > 0:
+            data_input_window_normalized = (data_input_window - input_mean) / input_std
+        else:
+            data_input_window_normalized = data_input_window.copy()
+
+        # Normalize output (only non-zero samples)
+        data_output_window_normalized = data_output_window.copy()
+        if output_std > 0 and len(output_nonzero_data) > 0:
+            data_output_window_normalized[output_nonzero_mask] = (output_nonzero_data - output_mean) / output_std
+
+        # Use normalized data for plotting
+        data_input_window_plot = data_input_window_normalized
+        data_output_window_plot = data_output_window_normalized
+        scale_label = "(normalized)"
+    else:
+        # Use original data converted to µV
+        data_input_window_plot = data_input_window * 1e6
+        data_output_window_plot = data_output_window * 1e6
+        scale_label = "(µV)"
+
+    # Compute metrics (only on non-zero channels in output)
+    # Identify which channels have actual data (not just padding)
+    non_zero_channels = []
+    for ch in range(data_input_window.shape[0]):
+        if ch < n_output_channels:
+            non_zero_channels.append(ch)
+
+    if len(non_zero_channels) > 0:
+        mse = np.mean((data_input_window[non_zero_channels] - data_output_window[non_zero_channels]) ** 2)
+        mae = np.mean(np.abs(data_input_window[non_zero_channels] - data_output_window[non_zero_channels]))
+    else:
+        mse = np.nan
+        mae = np.nan
 
     correlations = []
     for ch in range(data_input_window.shape[0]):
-        corr = np.corrcoef(data_input_window[ch], data_output_window[ch])[0, 1]
-        correlations.append(corr)
-    mean_corr = np.mean(correlations)
+        if ch < n_output_channels and np.any(data_output_window[ch] != 0):
+            # Compute correlation for channels with actual data
+            corr = np.corrcoef(data_input_window[ch], data_output_window[ch])[0, 1]
+            correlations.append(corr)
+        else:
+            # Zero-padded channel - no correlation
+            correlations.append(0.0)
+
+    # Mean correlation only over non-zero channels
+    non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
+    mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
 
     print(f"\nMetrics (5s window):")
     print(f"  MSE: {mse:.6e}")
@@ -175,28 +325,49 @@ def compare_fif_files(input_file, output_file, output_dir, file_idx):
 
     for ch in range(num_channels):
         ax = axes[ch]
-        time = np.arange(window_samples) / sfreq
+        time = np.arange(actual_window_samples) / sfreq
 
-        ax.plot(time, data_input_window[ch] * 1e6, 'b-', alpha=0.7, linewidth=0.8, label='Original')  # Convert to µV
-        ax.plot(time, data_output_window[ch] * 1e6, 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
+        ax.plot(time, data_input_window_plot[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
+
+        # Mark zero-padded channels differently
+        if ch < n_output_channels:
+            ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
+        else:
+            ax.plot(time, data_output_window_plot[ch], 'gray', alpha=0.3, linewidth=0.8, label='Zero-padded', linestyle='--')
 
         corr = correlations[ch]
 
         ch_name = raw_input.ch_names[ch] if ch < len(raw_input.ch_names) else f'Ch {ch}'
-        ax.set_ylabel(f'{ch_name}\n(µV)', fontsize=8)
+
+        # Add indicator for zero-padded channels
+        if ch >= n_output_channels:
+            ch_name = f'{ch_name} (dropped)'
+
+        ax.set_ylabel(f'{ch_name}\n{scale_label}', fontsize=8)
         ax.tick_params(labelsize=6)
         ax.grid(True, alpha=0.3)
-        ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
-                ha='right', va='top', fontsize=7,
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+
+        # Show correlation text (or "N/A" for zero-padded)
+        if ch < n_output_channels:
+            ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
+                    ha='right', va='top', fontsize=7,
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+        else:
+            ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
+                    ha='right', va='top', fontsize=7,
+                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
 
         if ch == 0:
             ax.legend(fontsize=8, loc='upper left')
         if ch == num_channels - 1:
             ax.set_xlabel('Time (s)', fontsize=10)
 
-    plt.suptitle(f'FIF File {file_idx}: Original vs Reconstructed (5s window)\nMean Corr: {mean_corr:.4f}, MSE: {mse:.6e}',
-                 fontsize=14, fontweight='bold')
+    n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
+    title = f'FIF File {file_idx}: Original vs Reconstructed ({window_duration:.0f}s window)\n'
+    title += f'Mean Corr: {mean_corr:.4f}, MSE: {mse:.6e}'
+    if n_padded > 0:
+        title += f' ({n_padded} channels zero-padded)'
+    plt.suptitle(title, fontsize=14, fontweight='bold')
     plt.tight_layout()
 
     output_path = output_dir / f"fif_file{file_idx}_comparison.png"

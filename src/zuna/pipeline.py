@@ -19,7 +19,12 @@ def zuna_preprocessing(
     output_dir: str,
     target_sfreq: float = 256.0,
     epoch_duration: float = 5.0,
-    apply_notch_filter: bool = False
+    apply_notch_filter: bool = False,
+    save_preprocessed_fif: bool = True,
+    preprocessed_fif_dir: Optional[str] = None,
+    drop_bad_channels: bool = False,
+    drop_bad_epochs: bool = False,
+    zero_out_artifacts: bool = False,
 ) -> None:
     """
     Preprocess .fif files to .pt format.
@@ -30,22 +35,39 @@ def zuna_preprocessing(
         target_sfreq: Target sampling frequency (default: 256.0 Hz)
         epoch_duration: Duration of each epoch in seconds (default: 5.0)
         apply_notch_filter: Whether to apply notch filter (default: False)
+        save_preprocessed_fif: Save preprocessed FIF for comparison (default: True)
+        preprocessed_fif_dir: Where to save preprocessed FIF (default: input_dir/preprocessed)
+        drop_bad_channels: Whether to detect and drop bad channels (default: False)
+        drop_bad_epochs: Whether to drop bad epochs (default: False)
+        zero_out_artifacts: Whether to zero out artifact samples (default: False)
     """
     from zuna import process_directory
+    from pathlib import Path
 
     print("="*80)
     print("STEP 1: Preprocessing .fif → .pt")
     print("="*80)
+
+    # Setup preprocessed FIF directory if not specified
+    if save_preprocessed_fif and preprocessed_fif_dir is None:
+        preprocessed_fif_dir = str(Path(input_dir) / "preprocessed")
 
     process_directory(
         input_dir=input_dir,
         output_dir=output_dir,
         target_sfreq=target_sfreq,
         epoch_duration=epoch_duration,
-        apply_notch_filter=apply_notch_filter
+        apply_notch_filter=apply_notch_filter,
+        save_preprocessed_fif=save_preprocessed_fif,
+        preprocessed_fif_dir=preprocessed_fif_dir,
+        drop_bad_channels=drop_bad_channels,
+        drop_bad_epochs=drop_bad_epochs,
+        zero_out_artifacts=zero_out_artifacts
     )
 
     print(f"✓ Preprocessing complete")
+    if save_preprocessed_fif and preprocessed_fif_dir:
+        print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
 
 
 def zuna_inference(
@@ -160,12 +182,25 @@ def zuna_pt_to_fif(
     print("="*80)
 
     # TODO: Add support for upsample_factor and data_key selection
-    pt_directory_to_fif(
+    results = pt_directory_to_fif(
         input_dir=input_dir,
         output_dir=output_dir
     )
 
-    print(f"✓ Conversion complete")
+    # Print results
+    print(f"\n  Successful: {results['successful']}")
+    print(f"  Failed: {results['failed']}")
+    print(f"  Total: {results['total']}")
+
+    if results['errors']:
+        print(f"\n  Errors:")
+        for error in results['errors']:
+            print(f"    {error['original_filename']}: {error['error']}")
+
+    if results['successful'] > 0:
+        print(f"\n✓ Conversion complete")
+    else:
+        print(f"\n⚠️  No files converted successfully")
 
 
 def run_zuna(
@@ -238,15 +273,28 @@ def run_zuna(
         dir_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Step 1: Preprocessing
+        # Setup preprocessed FIF directory (for ground truth comparison)
+        # Create a sibling folder at the same level as input, with _processed suffix
+        # E.g., if input is "1_fif_input", create "1_fif_input_processed"
+        preprocessed_fif_dir = input_path.parent / f"{input_path.name}_processed"
+
+        # Step 1: Preprocessing (with preprocessed FIF saving)
         print()
-        zuna_preprocessing(
+        from zuna import process_directory
+        process_directory(
             input_dir=str(input_path),
             output_dir=str(pt_input_path),
             target_sfreq=256.0,
             epoch_duration=5.0,
-            apply_notch_filter=False  # Disable for short files
+            apply_notch_filter=False,  # Disable for short files
+            save_preprocessed_fif=True,  # Save for comparison
+            preprocessed_fif_dir=str(preprocessed_fif_dir),
+            drop_bad_channels=False,  # Keep all channels (no removal)
+            drop_bad_epochs=False,    # Keep all epochs (no removal)
+            zero_out_artifacts=False, # Keep all data (no zeroing)
         )
+        print(f"✓ Preprocessing complete")
+        print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
 
         # Step 2: Model Inference
         print()
