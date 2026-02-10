@@ -32,6 +32,7 @@ data:
   # data_dir: datasets/v5/train/                  # training dataset on B2. 
 
   data_dir: ./tutorials/data/2_pt_input/
+  export_dir: ./tutorials/data/3_pt_output/
 
   glob_filter: "**/*.pt" #"**/*_06664*.pt" #"**/*.pt" # this filters the dataset to only contain files with this string in it.
   chan_num_filter: null # null or integer number of channels we want in each sample
