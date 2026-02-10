@@ -225,7 +225,7 @@ def pt_directory_to_fif(input_dir: str, output_dir: str) -> dict:
 # Expose key classes for advanced usage
 from .preprocessing import ProcessingConfig, EEGProcessor
 from .preprocessing.batch import process_directory
-from .pipeline import run_zuna
+from .pipeline import run_zuna, zuna_preprocessing, zuna_inference, zuna_pt_to_fif
 
 __all__ = [
     'raw_to_pt',
@@ -233,6 +233,9 @@ __all__ = [
     'pt_directory_to_fif',
     'process_directory',
     'run_zuna',
+    'zuna_preprocessing',
+    'zuna_inference',
+    'zuna_pt_to_fif',
     'ProcessingConfig',
     'EEGProcessor',
 ]

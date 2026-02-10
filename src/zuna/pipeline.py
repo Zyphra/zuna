@@ -1,8 +1,10 @@
 """
 Zuna Complete Pipeline
 
-This module provides a single function to run the complete EEG reconstruction pipeline:
+This module provides functions to run the complete EEG reconstruction pipeline:
 .fif → .pt → model inference → .pt → .fif
+
+Each step can be run independently or as a complete pipeline.
 """
 
 import os
@@ -11,11 +13,168 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+
+def zuna_preprocessing(
+    input_dir: str,
+    output_dir: str,
+    target_sfreq: float = 256.0,
+    epoch_duration: float = 5.0,
+    apply_notch_filter: bool = False
+) -> None:
+    """
+    Preprocess .fif files to .pt format.
+
+    Args:
+        input_dir: Directory containing input .fif files
+        output_dir: Directory to save preprocessed .pt files
+        target_sfreq: Target sampling frequency (default: 256.0 Hz)
+        epoch_duration: Duration of each epoch in seconds (default: 5.0)
+        apply_notch_filter: Whether to apply notch filter (default: False)
+    """
+    from zuna import process_directory
+
+    print("="*80)
+    print("STEP 1: Preprocessing .fif → .pt")
+    print("="*80)
+
+    process_directory(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        target_sfreq=target_sfreq,
+        epoch_duration=epoch_duration,
+        apply_notch_filter=apply_notch_filter
+    )
+
+    print(f"✓ Preprocessing complete")
+
+
+def zuna_inference(
+    input_dir: str,
+    output_dir: str,
+    checkpoint_path: str,
+    gpu_device: int = 0
+) -> None:
+    """
+    Run model inference on .pt files.
+
+    Args:
+        input_dir: Directory containing preprocessed .pt files
+        output_dir: Directory to save model output .pt files
+        checkpoint_path: Path to model checkpoint
+        gpu_device: GPU device ID (default: 0)
+    """
+    from omegaconf import OmegaConf
+    import subprocess
+
+    print("="*80)
+    print("STEP 2: Running model inference")
+    print("="*80)
+
+    # Validate checkpoint
+    checkpoint = Path(checkpoint_path)
+    if not checkpoint.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    # Create output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Load the base config file
+    config_path = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found at {config_path}")
+
+    # Load and modify config with our paths
+    config = OmegaConf.load(str(config_path))
+    config.data.data_dir = str(Path(input_dir).absolute())
+    config.data.export_dir = str(output_path.absolute())
+    config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
+    config.dump_dir = str(output_path.absolute())
+
+    # Save modified config to temporary file
+    temp_config_path = output_path / "temp_config.yaml"
+    OmegaConf.save(config, str(temp_config_path))
+
+    # Build command to run eeg_eval.py
+    eeg_eval_script = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py"
+
+    cmd = [
+        "python3",
+        str(eeg_eval_script),
+        f"config={temp_config_path}"
+    ]
+
+    # Set environment variable for GPU
+    env = os.environ.copy()
+    env['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+
+    print(f"Running: CUDA_VISIBLE_DEVICES={gpu_device} python3 {eeg_eval_script.name} config=...")
+
+    # Run the command
+    result = subprocess.run(cmd, env=env, check=True)
+
+    # Clean up temporary files created during inference
+    temp_config_path.unlink()
+
+    # Remove other temporary files/folders created by eeg_eval.py
+    cleanup_files = [
+        output_path / "checkpoints",  # folder
+        output_path / "config.yaml",
+        output_path / "metrics.jsonl",
+        output_path / "train.log"
+    ]
+
+    for path in cleanup_files:
+        try:
+            if path.exists():
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+        except Exception:
+            pass  # Ignore cleanup errors
+
+    print(f"✓ Inference complete")
+
+
+def zuna_pt_to_fif(
+    input_dir: str,
+    output_dir: str,
+    upsample_factor: Optional[int] = None
+) -> None:
+    """
+    Convert .pt files back to .fif format.
+
+    Args:
+        input_dir: Directory containing .pt files from model inference
+        output_dir: Directory to save reconstructed .fif files
+        upsample_factor: Upsampling factor (None for no upsampling)
+    """
+    from zuna import pt_directory_to_fif
+
+    print("="*80)
+    print("STEP 3: Converting .pt → .fif")
+    if upsample_factor:
+        print(f"  Upsampling factor: {upsample_factor}x")
+    print("="*80)
+
+    # TODO: Add support for upsample_factor and data_key selection
+    pt_directory_to_fif(
+        input_dir=input_dir,
+        output_dir=output_dir
+    )
+
+    print(f"✓ Conversion complete")
+
+
 def run_zuna(
     input_dir: str,
     output_dir: str,
     checkpoint_path: str,
     upsample_factor: Optional[int] = None,
+    pt_input_dir: Optional[str] = None,
+    pt_output_dir: Optional[str] = None,
     tmp_dir: Optional[str] = None,  # Auto-creates in output_dir/tmp if None
     gpu_device: int = 0,
     cleanup_tmp: bool = True
@@ -28,7 +187,9 @@ def run_zuna(
         output_dir: Directory to save final reconstructed .fif files
         checkpoint_path: Path to model checkpoint
         upsample_factor: Upsampling factor (None for no upsampling)
-        tmp_dir: Temporary directory for intermediate .pt files
+        pt_input_dir: Custom path for preprocessed .pt files (None = auto tmp)
+        pt_output_dir: Custom path for model output .pt files (None = auto tmp)
+        tmp_dir: Temporary directory (ignored if pt_input_dir/pt_output_dir specified)
         gpu_device: GPU device ID (default: 0)
         cleanup_tmp: Whether to delete tmp directory after completion (default: True)
 
@@ -54,116 +215,58 @@ def run_zuna(
     if not input_path.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    checkpoint = Path(checkpoint_path)
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-
-    # Create directories - put tmp inside output_dir
+    # Setup paths for intermediate files
     output_path = Path(output_dir)
-    if tmp_dir is None:
-        tmp_path = output_path / "tmp"
+
+    # Use custom paths if provided, otherwise create tmp directories
+    if pt_input_dir is not None or pt_output_dir is not None:
+        # Custom paths specified
+        pt_input_path = Path(pt_input_dir) if pt_input_dir else output_path / "tmp" / "pt_input"
+        pt_output_path = Path(pt_output_dir) if pt_output_dir else output_path / "tmp" / "pt_output"
+        tmp_path = None  # Don't cleanup custom directories
     else:
-        tmp_path = Path(tmp_dir)
+        # Auto tmp directories
+        if tmp_dir is None:
+            tmp_path = output_path / "tmp"
+        else:
+            tmp_path = Path(tmp_dir)
+        pt_input_path = tmp_path / "pt_input"
+        pt_output_path = tmp_path / "pt_output"
 
-    pt_input_dir = tmp_path / "pt_input"
-    pt_output_dir = tmp_path / "pt_output"
-
-    for dir_path in [pt_input_dir, pt_output_dir, output_path]:
+    # Create directories
+    for dir_path in [pt_input_path, pt_output_path, output_path]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        # =============================================================================
-        # Step 1: Preprocess .fif → .pt
-        # =============================================================================
-        print("\n" + "="*80)
-        print("STEP 1: Preprocessing .fif → .pt")
-        print("="*80)
-
-        from zuna import process_directory
-
-        process_directory(
+        # Step 1: Preprocessing
+        print()
+        zuna_preprocessing(
             input_dir=str(input_path),
-            output_dir=str(pt_input_dir),
+            output_dir=str(pt_input_path),
             target_sfreq=256.0,
             epoch_duration=5.0,
             apply_notch_filter=False  # Disable for short files
         )
 
-        print(f"✓ Preprocessing complete")
-
-        # =============================================================================
-        # Step 2: Run Model Inference
-        # =============================================================================
-        print("\n" + "="*80)
-        print("STEP 2: Running model inference")
-        print("="*80)
-
-        from omegaconf import OmegaConf
-        import subprocess
-
-        # Load the base config file
-        config_path = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
-
-        if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found at {config_path}")
-
-        # Load and modify config with our paths
-        config = OmegaConf.load(str(config_path))
-        config.data.data_dir = str(pt_input_dir.absolute())
-        config.data.export_dir = str(pt_output_dir.absolute())
-        config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
-        config.dump_dir = str(pt_output_dir.absolute())
-
-        # Save modified config to temporary file
-        temp_config_path = pt_output_dir / "temp_config.yaml"
-        OmegaConf.save(config, str(temp_config_path))
-
-        # Build command to run eeg_eval.py
-        eeg_eval_script = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py"
-
-        cmd = [
-            "python3",
-            str(eeg_eval_script),
-            f"config={temp_config_path}"
-        ]
-
-        # Set environment variable for GPU
-        env = os.environ.copy()
-        env['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
-
-        print(f"Running: CUDA_VISIBLE_DEVICES={gpu_device} python3 {eeg_eval_script.name} config=...")
-
-        # Run the command
-        result = subprocess.run(cmd, env=env, check=True)
-
-        # Clean up temp config
-        temp_config_path.unlink()
-
-        print(f"✓ Inference complete")
-
-        # =============================================================================
-        # Step 3: Convert .pt → .fif (with optional upsampling)
-        # =============================================================================
-        print("\n" + "="*80)
-        print("STEP 3: Converting .pt → .fif")
-        if upsample_factor:
-            print(f"  Upsampling factor: {upsample_factor}x")
-        print("="*80)
-
-        from zuna import pt_directory_to_fif
-
-        # TODO: Add support for upsample_factor and data_key selection
-        pt_directory_to_fif(
-            input_dir=str(pt_output_dir),
-            output_dir=str(output_path)
+        # Step 2: Model Inference
+        print()
+        zuna_inference(
+            input_dir=str(pt_input_path),
+            output_dir=str(pt_output_path),
+            checkpoint_path=checkpoint_path,
+            gpu_device=gpu_device
         )
 
-        print(f"✓ Conversion complete")
+        # Step 3: PT to FIF conversion
+        print()
+        zuna_pt_to_fif(
+            input_dir=str(pt_output_path),
+            output_dir=str(output_path),
+            upsample_factor=upsample_factor
+        )
 
-        # =============================================================================
         # Cleanup
-        # =============================================================================
-        if cleanup_tmp:
+        if cleanup_tmp and tmp_path is not None:
             print("\n" + "="*80)
             print("Cleaning up temporary files...")
             print("="*80)
@@ -182,7 +285,7 @@ def run_zuna(
         traceback.print_exc()
 
         # Optionally cleanup on failure too
-        if cleanup_tmp and tmp_path.exists():
+        if cleanup_tmp and tmp_path is not None and tmp_path.exists():
             print(f"\nCleaning up tmp directory after error...")
             shutil.rmtree(tmp_path)
 
