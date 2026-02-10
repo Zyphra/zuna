@@ -76,7 +76,7 @@ def load_pt(pt_path: str) -> Dict[str, Any]:
     data : dict
         Dictionary with 'data', 'channel_positions', 'metadata' keys
     """
-    return torch.load(pt_path)
+    return torch.load(pt_path, weights_only=False)
 
 
 def pt_to_raw(pt_path: str) -> mne.io.Raw:
@@ -100,9 +100,11 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
     pt_data = load_pt(pt_path)
     metadata = pt_data['metadata']
 
-    # Extract data
-    epochs_list = [tensor.numpy() for tensor in pt_data['data']]
-    positions_list = [tensor.numpy() for tensor in pt_data['channel_positions']]
+    # Extract data - handle both tensors and numpy arrays, filter out None values
+    epochs_list = [tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
+                   for tensor in pt_data['data'] if tensor is not None]
+    positions_list = [tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
+                      for tensor in pt_data['channel_positions'] if tensor is not None]
 
     # Get channel info
     if 'channel_names' in metadata:

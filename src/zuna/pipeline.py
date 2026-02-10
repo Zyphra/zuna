@@ -98,71 +98,46 @@ def run_zuna(
         print("STEP 2: Running model inference")
         print("="*80)
 
-        # Add inference code to path - need to add both the main path and the apps directory
-        inference_path = Path(__file__).parent / "inference/AY2l/lingua"
-        apps_path = inference_path / "apps/AY2latent_bci"
-        sys.path.insert(0, str(inference_path))
-        sys.path.insert(0, str(apps_path))
-
-        from apps.AY2latent_bci import eeg_eval
         from omegaconf import OmegaConf
+        import subprocess
 
-        config_dict = {
-            'model': {
-                'dim': 1024,
-                'n_layers': 16,
-                'head_dim': 64,
-                'input_dim': 32,
-                'encoder_input_dim': 32,
-                'encoder_output_dim': 32,
-                'encoder_latent_downsample_factor': 1,
-                'sliding_window': 65536,
-                'encoder_sliding_window': 65536,
-                'xattn_sliding_window': 65536,
-                'max_seqlen': 50,
-                'num_fine_time_pts': 32,
-                'rope_dim': 4,
-                'rope_theta': 10000.0,
-                'tok_idx_type': "{x,y,z,tc}",
-                'stft_global_sigma': 0.1,
-                'dropout_type': "zeros",
-            },
-            'data': {
-                'use_b2': False,
-                'data_dir': str(pt_input_dir),
-                'export_dir': str(pt_output_dir),
-                'glob_filter': "**/*.pt",
-                'sample_rate': 256,
-                'seq_len': 1280,
-                'num_fine_time_pts': 32,
-                'use_coarse_time': "B",
-                'cat_chan_xyz_and_eeg': False,
-                'randomly_permute_sequence': False,
-                'channel_dropout_prob': 0.0,
-                'stft_global_sigma': 0.1,
-                'num_bins_discretize_xyz_chan_pos': 50,
-                'chan_pos_xyz_extremes_type': "twelves",
-                'batch_size': 1,
-                'target_packed_seqlen': 1,
-                'num_workers': 0,
-                'prefetch_factor': None,
-                'persistent_workers': False,
-                'pin_memory': False,
-                'diffusion_forcing': False,
-                'shuffle': False,
-                'seed': 316,
-            },
-            'checkpoint': {
-                'init_ckpt_path': str(checkpoint),
-            },
-            'dump_dir': str(pt_output_dir),
-            'name': 'zuna_pipeline',
-        }
+        # Load the base config file
+        config_path = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
 
-        # Keep as OmegaConf object (don't convert to dict)
-        config = OmegaConf.create(config_dict)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found at {config_path}")
 
-        eeg_eval.evaluate(config)
+        # Load and modify config with our paths
+        config = OmegaConf.load(str(config_path))
+        config.data.data_dir = str(pt_input_dir.absolute())
+        config.data.export_dir = str(pt_output_dir.absolute())
+        config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
+        config.dump_dir = str(pt_output_dir.absolute())
+
+        # Save modified config to temporary file
+        temp_config_path = pt_output_dir / "temp_config.yaml"
+        OmegaConf.save(config, str(temp_config_path))
+
+        # Build command to run eeg_eval.py
+        eeg_eval_script = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py"
+
+        cmd = [
+            "python3",
+            str(eeg_eval_script),
+            f"config={temp_config_path}"
+        ]
+
+        # Set environment variable for GPU
+        env = os.environ.copy()
+        env['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+
+        print(f"Running: CUDA_VISIBLE_DEVICES={gpu_device} python3 {eeg_eval_script.name} config=...")
+
+        # Run the command
+        result = subprocess.run(cmd, env=env, check=True)
+
+        # Clean up temp config
+        temp_config_path.unlink()
 
         print(f"✓ Inference complete")
 

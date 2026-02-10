@@ -1,0 +1,182 @@
+name: bci_AY2l_eval
+dump_dir: /data/home/jonas/workspace/zuna/tutorials/data/3_pt_output
+seed: 42
+grad_acc_steps: 1
+gc_collect_freq: 1000
+probe_freq: null
+steps: 1000
+data:
+  use_b2: false
+  data_dir: /data/home/jonas/workspace/zuna/tutorials/data/2_pt_input
+  export_dir: /data/home/jonas/workspace/zuna/tutorials/data/3_pt_output
+  glob_filter: '**/*.pt'
+  chan_num_filter: null
+  sample_rate: 256
+  seq_len: 1280
+  num_fine_time_pts: 32
+  use_coarse_time: B
+  cat_chan_xyz_and_eeg: false
+  dont_noise_chan_xyz: false
+  randomly_permute_sequence: false
+  sample_duration_seconds: 5.0
+  num_batches: null
+  crop_size: null
+  encoder_input_channels: 64
+  decoder_input_channels: 64
+  channel_dropout_prob: 0.0
+  batch_size: 1
+  target_packed_seqlen: 1
+  do_N_epochs: null
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+  prefetch_factor: null
+  shuffle: true
+  seed: 316
+  diffusion_forcing: false
+  diffusion_noise_schedule: linear
+  diffusion_forcing_num_frames: 1
+  patching_type: frames
+  stft_global_sigma: 0.1
+  masked_in_decoder: true
+  num_bins_discretize_xyz_chan_pos: 50
+  chan_pos_xyz_extremes_type: twelves
+  b2_bucket_name: zyphra-bci
+  b2_endpoint_url: https://s3.us-west-004.backblazeb2.com
+  b2_access_key_id: null
+  b2_secret_access_key: null
+  b2_local_cache_dir: /mnt/shared/datasets/bci/b2_cache
+  b2_cache_files: false
+optim:
+  optim_cls: adamw
+  lr: 0.0003
+  weight_decay: 0.1
+  epsilon: 1.0e-08
+  beta1: 0.9
+  beta2: 0.95
+  clip: 1.0
+  scheduler: cosine
+  warmup: 2000
+  lr_min_ratio: 0.1
+  cycle_length: 1.0
+  cosine_theta: 1.0
+  annealing_step: 1000
+  decay_fraction: 0.1
+  exp_factor: 0.5
+model:
+  dim: 1024
+  n_layers: 16
+  head_dim: 64
+  n_heads: 8
+  n_kv_heads: null
+  ffn_dim_multiplier: null
+  multiple_of: 256
+  norm_eps: 1.0e-05
+  rope_theta: 10000.0
+  init_base_std: 0.02
+  init_std_factor: disabled
+  max_seqlen: 50
+  rope_dim: 4
+  tok_idx_type: '{x,y,z,tc}'
+  t_dim: 64
+  seqlen_t: false
+  seed: 42
+  weight_tying: false
+  sliding_window: 65536
+  xattn_sliding_window: 65536
+  input_dim: 32
+  decoder_encoder_dropout: 0.1
+  decoder_timestep_dropout: 0.1
+  encoder_sliding_window: 65536
+  encoder_input_dim: 32
+  encoder_output_dim: 32
+  encoder_latent_downsample_factor: 1
+  encoder_hidden_dim: null
+  adaptive_loss_weighting: true
+  num_fine_time_pts: 32
+  dont_noise_chan_xyz: false
+  stft_global_sigma: 0.1
+  dropout_type: zeros
+  bottleneck_type: mmd
+  distill_output_dim: 0
+  codebook_size: 1024
+  levels: []
+  learnable_bias: false
+  huber_c: null
+  decoder_repa_index: .inf
+  encoder_repa_index: .inf
+  repa_dim: 1024
+  repa_loss_fn: cosine
+  compression_free_conv_stem: false
+distributed:
+  dp_shard: 1
+  dp_replicate: 1
+  tp_size: 1
+  selective_activation_checkpointing: false
+  compile: false
+  fsdp_type: no_shard
+  model_dtype: bf16
+  float8_recipe: null
+  float8_filter: layers\.[0-9]+\.
+  matmul_allow_tf32: false
+  detect_anomaly: false
+  compile_cache_size_limit: 8
+  spawn_method: forkserver
+env:
+  MKL_SERVICE_FORCE_INTEL: GNU
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  ENABLE_INTRA_NODE_COMM: '1'
+  TORCH_NCCL_AVOID_RECORD_STREAMS: '1'
+  NCCL_IB_TIMEOUT: '22'
+  NCCL_DEBUG: INFO
+  TORCH_NCCL_ASYNC_ERROR_HANDLING: '1'
+checkpoint:
+  dump:
+    every: 1000
+    keep: 0
+  eval:
+    every: 1000
+    keep: 0
+  path: /data/home/jonas/workspace/zuna/tutorials/data/3_pt_output/checkpoints
+  init_ckpt_path: /data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000
+  continue_training_from_init: false
+  load_optimizer_state: true
+logging:
+  freq: 10
+  acc_freq: null
+  wandb:
+    job_type: null
+    dir: null
+    project: null
+    entity: null
+    tags: null
+    group: null
+    name: bci_AY2l_eval
+    notes: null
+    config_exclude_keys: null
+    config_include_keys: null
+    anonymous: null
+    mode: null
+    allow_val_change: null
+    resume: null
+    force: null
+    tensorboard: null
+    sync_tensorboard: null
+    monitor_gym: null
+    save_code: null
+    id: null
+    fork_from: null
+    resume_from: null
+async_eval_gpus: null
+eval: null
+load_distillation_model: false
+channel_loss_weighting: false
+distill_into_encoder: false
+repa_into_encoder: false
+repa_into_decoder: false
+decoder_loss_weight: 1.0
+decoder_repa_weight: 1.0
+encoder_mmd_weight: 1.0
+encoder_repa_weight: 1.0
+encoder_distill_weight: 1.0
