@@ -178,7 +178,16 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
     # Denormalize if reversibility params available
     if 'reversibility' in metadata:
         rev_params = metadata['reversibility']
+        #JM - Debug denormalization
+        std_before = continuous_data.std()
+        print(f"[DENORM] Before: std={std_before:.6e} V ({std_before*1e6:.2f} µV)")
+        print(f"[DENORM] Params: global_std={rev_params.get('global_std', 0):.6e}, final_std={rev_params.get('final_std', 0):.6e}")
         continuous_data = Normalizer.denormalize(continuous_data, rev_params)
+        std_after = continuous_data.std()
+        print(f"[DENORM] After:  std={std_after:.6e} V ({std_after*1e6:.2f} µV)")
+        print(f"[DENORM] Scale change: {std_after/std_before:.2f}x")
+    else:
+        print(f"[DENORM] ⚠️  No reversibility params in metadata - skipping denormalization!")
 
     # Re-zero the None epochs AFTER denormalization
     # The model may output None for epochs it skips (e.g., wrong channel count).

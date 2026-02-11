@@ -30,7 +30,7 @@ OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"    
 CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
 UPSAMPLE_FACTOR = None  # None for no upsampling, or integer (e.g., 2, 4)
-GPU_DEVICE = 5          # GPU device ID
+GPU_DEVICE = 6          # GPU device ID
 
 # =============================================================================
 # OPTION 1: Complete Pipeline (Recommended)

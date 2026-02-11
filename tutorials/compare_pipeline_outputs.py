@@ -19,15 +19,15 @@ import random
 # CONFIGURATION
 # =============================================================================
 
-NUM_SAMPLES = 1  # Number of random files to compare (set to 1 for quick check)
-NORMALIZE_FOR_COMPARISON = True  # Normalize both to same scale for visual comparison
+NUM_SAMPLES = 10  # Number of random files to compare (set to 1 for quick check)
+NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
 
 # Directory paths
-FIF_INPUT_DIR = "data/1_fif_input"
-FIF_OUTPUT_DIR = "data/4_fif_output"
-PT_INPUT_DIR = "data/2_pt_input"
-PT_OUTPUT_DIR = "data/3_pt_output"
-OUTPUT_DIR = "eval_figures"
+# FIF_INPUT_DIR = "data/1_fif_input"
+# FIF_OUTPUT_DIR = "data/4_fif_output"
+# PT_INPUT_DIR = "data/2_pt_input"
+# PT_OUTPUT_DIR = "data/3_pt_output"
+# OUTPUT_DIR = "eval_figures"
 
 FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"   # Preprocessed .fif files (ground truth)
 PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'                  # Preprocessed .pt files
@@ -281,19 +281,21 @@ def compare_fif_files(input_file, output_file, output_dir, file_idx):
     print(f"  Input in µV:  mean={data_input.mean()*1e6:.2f}, std={data_input.std()*1e6:.2f}")
     print(f"  Output in µV: mean={data_output.mean()*1e6:.2f}, std={data_output.std()*1e6:.2f}")
 
-    # Pad output to match input channel count if needed
+    # Handle channel count mismatch
     n_input_channels = data_input.shape[0]
     n_output_channels = data_output.shape[0]
 
     if n_output_channels < n_input_channels:
         print(f"  Padding output from {n_output_channels} to {n_input_channels} channels with zeros")
-        # Pad with zeros to match input channel count
+        # Pad output with zeros to match input channel count
         padding = np.zeros((n_input_channels - n_output_channels, data_output.shape[1]))
         data_output = np.vstack([data_output, padding])
     elif n_output_channels > n_input_channels:
-        print(f"  WARNING: Output has more channels ({n_output_channels}) than input ({n_input_channels})")
-        # Truncate output to match input
-        data_output = data_output[:n_input_channels, :]
+        print(f"  Output has more channels ({n_output_channels}) than input ({n_input_channels})")
+        print(f"  → Padding input with zeros to match output (channels {n_input_channels}-{n_output_channels-1} are model-generated)")
+        # Pad INPUT with zeros to match output channel count
+        padding = np.zeros((n_output_channels - n_input_channels, data_input.shape[1]))
+        data_input = np.vstack([data_input, padding])
 
     # Take a 30-second window for visualization (longer for continuous data)
     sfreq = raw_input.info['sfreq']
@@ -404,21 +406,23 @@ def compare_fif_files(input_file, output_file, output_dir, file_idx):
         ax = axes[ch]
         time = np.arange(actual_window_samples) / sfreq
 
-        ax.plot(time, data_input_window_plot[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
-
-        # Mark zero-padded channels differently
-        if ch < n_output_channels:
+        # Mark model-generated channels differently (where input was padded with zeros)
+        if ch < n_input_channels:
+            # Real channel in both input and output
+            ax.plot(time, data_input_window_plot[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
             ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
         else:
-            ax.plot(time, data_output_window_plot[ch], 'gray', alpha=0.3, linewidth=0.8, label='Zero-padded', linestyle='--')
+            # Model-generated channel (input was zero-padded)
+            ax.plot(time, data_input_window_plot[ch], 'gray', alpha=0.3, linewidth=0.8, label='Input (zero-padded)', linestyle='--')
+            ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Model-generated')
 
         corr = correlations[ch]
 
         ch_name = raw_input.ch_names[ch] if ch < len(raw_input.ch_names) else f'Ch {ch}'
 
-        # Add indicator for zero-padded channels
-        if ch >= n_output_channels:
-            ch_name = f'{ch_name} (dropped)'
+        # Add indicator for model-generated channels
+        if ch >= n_input_channels:
+            ch_name = f'{ch_name} (model-generated)'
 
         ax.set_ylabel(f'{ch_name}\n{scale_label}', fontsize=8)
         ax.tick_params(labelsize=6)

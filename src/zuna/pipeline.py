@@ -25,6 +25,7 @@ def zuna_preprocessing(
     drop_bad_channels: bool = False,
     drop_bad_epochs: bool = False,
     zero_out_artifacts: bool = False,
+    upsample_to_channels: Optional[int] = None,
 ) -> None:
     """
     Preprocess .fif files to .pt format.
@@ -40,6 +41,7 @@ def zuna_preprocessing(
         drop_bad_channels: Whether to detect and drop bad channels (default: False)
         drop_bad_epochs: Whether to drop bad epochs (default: False)
         zero_out_artifacts: Whether to zero out artifact samples (default: False)
+        upsample_to_channels: Upsample to this many channels (None for no upsampling, e.g., 40)
     """
     from zuna import process_directory
     from pathlib import Path
