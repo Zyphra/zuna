@@ -29,8 +29,9 @@ PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'  
 OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Output reconstructed .fif files
 CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
-UPSAMPLE_FACTOR = None  # None for no upsampling, or integer (e.g., 2, 4)
-GPU_DEVICE = 6          # GPU device ID
+UPSAMPLE_TO_CHANNELS = None  # None for no upsampling, or target channel count (e.g., 40, 64, 128)
+                             # New channels are added with zeros for the model to interpolate
+GPU_DEVICE = 6              # GPU device ID
 
 # =============================================================================
 # OPTION 1: Complete Pipeline (Recommended)
@@ -49,7 +50,7 @@ if __name__ == "__main__" and True:
         input_dir=INPUT_DIR,
         output_dir=OUTPUT_DIR,
         checkpoint_path=CHECKPOINT,
-        upsample_factor=UPSAMPLE_FACTOR,
+        upsample_factor=UPSAMPLE_TO_CHANNELS,  # Note: parameter name is 'upsample_factor' but it's the target channel count
         pt_input_dir=PT_INPUT_DIR,
         pt_output_dir=PT_OUTPUT_DIR,
         gpu_device=GPU_DEVICE,
@@ -87,7 +88,8 @@ if __name__ == "__main__" and False:  # Change False to True to use this option
         output_dir=pt_input,
         target_sfreq=256.0,
         epoch_duration=5.0,
-        apply_notch_filter=False
+        apply_notch_filter=False,
+        upsample_to_channels=UPSAMPLE_TO_CHANNELS  # Upsample to target channels (e.g., 40)
         # Uncomment to enable artifact removal:
         # drop_bad_channels=True,
         # drop_bad_epochs=True,
@@ -111,8 +113,8 @@ if __name__ == "__main__" and False:  # Change False to True to use this option
     print("="*80)
     zuna_pt_to_fif(
         input_dir=pt_output,
-        output_dir=OUTPUT_DIR,
-        upsample_factor=UPSAMPLE_FACTOR
+        output_dir=OUTPUT_DIR
+        # Note: Upsampling happens in preprocessing step, not here
     )
 
     # Optional: Clean up tmp directories if they were auto-created

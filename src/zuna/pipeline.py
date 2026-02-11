@@ -64,7 +64,8 @@ def zuna_preprocessing(
         preprocessed_fif_dir=preprocessed_fif_dir,
         drop_bad_channels=drop_bad_channels,
         drop_bad_epochs=drop_bad_epochs,
-        zero_out_artifacts=zero_out_artifacts
+        zero_out_artifacts=zero_out_artifacts,
+        upsample_to_channels=upsample_to_channels
     )
 
     print(f"✓ Preprocessing complete")
@@ -223,7 +224,8 @@ def run_zuna(
         input_dir: Directory containing input .fif files
         output_dir: Directory to save final reconstructed .fif files
         checkpoint_path: Path to model checkpoint
-        upsample_factor: Upsampling factor (None for no upsampling)
+        upsample_factor: Target number of channels for upsampling (None for no upsampling, e.g., 40).
+                        New channels are added with zeros for the model to interpolate.
         pt_input_dir: Custom path for preprocessed .pt files (None = auto tmp)
         pt_output_dir: Custom path for model output .pt files (None = auto tmp)
         tmp_dir: Temporary directory (ignored if pt_input_dir/pt_output_dir specified)
@@ -294,6 +296,7 @@ def run_zuna(
             drop_bad_channels=False,  # Keep all channels (no removal)
             drop_bad_epochs=False,    # Keep all epochs (no removal)
             zero_out_artifacts=False, # Keep all data (no zeroing)
+            upsample_to_channels=upsample_factor,  # Upsample to target channel count
         )
         print(f"✓ Preprocessing complete")
         print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")

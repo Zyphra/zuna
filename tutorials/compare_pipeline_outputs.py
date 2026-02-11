@@ -19,7 +19,7 @@ import random
 # CONFIGURATION
 # =============================================================================
 
-NUM_SAMPLES = 10  # Number of random files to compare (set to 1 for quick check)
+NUM_SAMPLES = 2  # Number of random files to compare (set to 1 for quick check)
 NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
 
 # Directory paths
