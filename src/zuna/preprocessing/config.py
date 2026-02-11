@@ -87,6 +87,11 @@ class ProcessingConfig:
                                                                     # If list: add specific channel names from 10-05 montage
                                                                     # e.g., 40 or ['Cz', 'Pz', 'Oz']
 
+    # Bad channels (zero out specific channels for interpolation testing)
+    bad_channels: Optional[List[str]] = None  # List of channel names to zero out (e.g., ['Cz', 'Fz'])
+                                              # These channels will be set to zero but not removed
+                                              # Use this to test interpolation or mark known bad channels
+
     # Save preprocessed FIF for comparison
     save_preprocessed_fif: bool = False  # Save preprocessed raw (before epoching) for ground truth comparison
     preprocessed_fif_dir: Optional[str] = None  # Where to save preprocessed FIF files (None = don't save)

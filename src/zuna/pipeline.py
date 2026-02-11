@@ -219,6 +219,7 @@ def run_zuna(
     working_dir: str,
     checkpoint_path: str,
     target_channel_count: Optional[Union[int, List[str]]] = None,
+    bad_channels: Optional[List[str]] = None,
     keep_intermediate_files: bool = True,
     gpu_device: int = 0,
     plot_pt_comparison: bool = False,
@@ -238,6 +239,8 @@ def run_zuna(
         target_channel_count: None for no upsampling,
                              int (e.g., 40, 64) for greedy selection to N channels,
                              list (e.g., ['Cz', 'Pz']) for specific channels from 10-05 montage
+        bad_channels: List of channel names to zero out (e.g., ['Cz', 'Fz'])
+                     Channels will be set to zero but not removed
         keep_intermediate_files: If False, deletes .pt files after reconstruction (default: True)
         gpu_device: GPU device ID (default: 0)
         plot_pt_comparison: Whether to plot .pt file comparisons (default: False)
@@ -286,6 +289,7 @@ def run_zuna(
             save_preprocessed_fif=True,
             preprocessed_fif_dir=str(preprocessed_fif_dir),
             target_channel_count=target_channel_count,
+            bad_channels=bad_channels,
         )
 
         # Step 2: Model Inference
@@ -343,6 +347,7 @@ def zuna_step1_preprocess(
     input_dir: str,
     working_dir: str,
     target_channel_count: Optional[Union[int, List[str]]] = None,
+    bad_channels: Optional[List[str]] = None,
 ) -> None:
     """
     Step 1: Preprocess .fif files to .pt format.
@@ -358,12 +363,15 @@ def zuna_step1_preprocess(
         target_channel_count: None for no upsampling,
                              int (e.g., 40, 64) for greedy selection to N channels,
                              list (e.g., ['Cz', 'Pz']) for specific channels
+        bad_channels: List of channel names to zero out (e.g., ['Cz', 'Fz'])
+                     Channels will be set to zero but not removed
 
     Example:
         >>> zuna_step1_preprocess(
         ...     input_dir="/data/input",
         ...     working_dir="/data/working",
-        ...     target_channel_count=40
+        ...     target_channel_count=40,
+        ...     bad_channels=['Cz', 'Fz']
         ... )
     """
     from zuna import process_directory
@@ -381,6 +389,8 @@ def zuna_step1_preprocess(
     print("="*80)
     print(f"Input:  {input_dir}")
     print(f"Output: {pt_input_path}")
+    if bad_channels:
+        print(f"Bad channels (will be zeroed): {bad_channels}")
     if target_channel_count:
         print(f"Target channels: {target_channel_count}")
     print("="*80 + "\n")
@@ -391,6 +401,7 @@ def zuna_step1_preprocess(
         save_preprocessed_fif=True,
         preprocessed_fif_dir=str(preprocessed_fif_dir),
         target_channel_count=target_channel_count,
+        bad_channels=bad_channels,
     )
 
     print(f"\n✓ Preprocessing complete")
@@ -493,3 +504,50 @@ def zuna_step3_reconstruct(
 
     print(f"\n✓ Reconstruction complete")
     print(f"  Output: {fif_output_path}")
+
+
+def zuna_step4_visualize(
+    working_dir: str,
+    plot_pt: bool = False,
+    plot_fif: bool = True,
+) -> None:
+    """
+    Step 4: Generate comparison plots (optional).
+
+    This visualizes the pipeline input vs output for quality inspection.
+    It automatically uses:
+    - working_dir/1_fif_input/preprocessed/ (preprocessed FIF files)
+    - working_dir/2_pt_input/ (preprocessed PT files)
+    - working_dir/3_pt_output/ (model output PT files)
+    - working_dir/4_fif_output/ (reconstructed FIF files)
+    - working_dir/FIGURES/ (output plots)
+
+    Args:
+        working_dir: Working directory containing pipeline outputs
+        plot_pt: Whether to plot PT file comparisons (default: False)
+        plot_fif: Whether to plot FIF file comparisons (default: True)
+
+    Example:
+        >>> zuna_step4_visualize(
+        ...     working_dir="/data/working",
+        ...     plot_fif=True
+        ... )
+    """
+    print("="*80)
+    print("STEP 4: Generating Comparison Plots")
+    print("="*80)
+    print(f"Working dir: {working_dir}")
+    print(f"Plot PT:     {plot_pt}")
+    print(f"Plot FIF:    {plot_fif}")
+    print("="*80 + "\n")
+
+    from zuna.visualization import compare_pipeline_outputs
+
+    compare_pipeline_outputs(
+        working_dir=working_dir,
+        plot_pt=plot_pt,
+        plot_fif=plot_fif,
+    )
+
+    print(f"\n✓ Visualization complete")
+    print(f"  Plots saved to: {Path(working_dir) / 'FIGURES'}")

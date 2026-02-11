@@ -6,6 +6,72 @@ import mne
 from typing import List, Tuple, Optional
 
 
+def zero_bad_channels(
+    epochs_list: List[np.ndarray],
+    channel_names: List[str],
+    bad_channel_names: List[str]
+) -> List[np.ndarray]:
+    """
+    Zero out specified bad channels in all epochs.
+
+    This sets the data for specified channels to all zeros, effectively marking
+    them as bad and forcing the model to interpolate them. The channels are NOT
+    removed from the data - they remain in place but with zero values.
+
+    Args:
+        epochs_list: List of epoch arrays, each shape (n_channels, n_times)
+        channel_names: List of channel names corresponding to the epochs
+        bad_channel_names: List of channel names to zero out (e.g., ['Cz', 'Fz'])
+
+    Returns:
+        epochs_list: List of epochs with bad channels zeroed out
+
+    Example:
+        >>> epochs = zero_bad_channels(epochs, ['Fp1', 'Fp2', 'Cz'], ['Cz'])
+        >>> # Now channel 'Cz' is all zeros in all epochs
+    """
+    if not bad_channel_names or len(epochs_list) == 0:
+        return epochs_list
+
+    # Normalize channel names (remove spaces, convert to lowercase)
+    def normalize_name(name):
+        return name.replace(' ', '').lower()
+
+    # Create mapping of normalized names to original indices
+    normalized_to_idx = {
+        normalize_name(name): idx
+        for idx, name in enumerate(channel_names)
+    }
+
+    # Find indices of bad channels
+    bad_indices = []
+    skipped_channels = []
+    for bad_name in bad_channel_names:
+        normalized = normalize_name(bad_name)
+        if normalized in normalized_to_idx:
+            bad_indices.append(normalized_to_idx[normalized])
+        else:
+            skipped_channels.append(bad_name)
+
+    if not bad_indices:
+        print(f"⚠️  Bad channels: No matching channels found. Skipped: {skipped_channels}")
+        return epochs_list
+
+    # Zero out bad channels in all epochs
+    zeroed_count = 0
+    for epoch in epochs_list:
+        for idx in bad_indices:
+            if idx < epoch.shape[0]:
+                epoch[idx, :] = 0.0
+                zeroed_count += 1
+
+    print(f"✓ Zeroed out {len(bad_indices)} bad channels in {len(epochs_list)} epochs: {[channel_names[i] for i in bad_indices]}")
+    if skipped_channels:
+        print(f"  Skipped (not found): {skipped_channels}")
+
+    return epochs_list
+
+
 def upsample_channels(
     epochs_list: List[np.ndarray],
     positions_list: List[np.ndarray],

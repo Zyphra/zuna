@@ -487,6 +487,50 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 
         # print(f"Saved: {output_path}")  # Disabled verbose output
 
+    # =========================================================================
+    # Generate third plot: Full duration, single channel (first channel)
+    # =========================================================================
+    channel_idx = 0  # First channel
+    ch_name = raw_preprocessed.ch_names[channel_idx] if channel_idx < len(raw_preprocessed.ch_names) else f'Ch {channel_idx}'
+
+    # Use full duration
+    full_duration = min_samples / sfreq
+    time = np.arange(min_samples) / sfreq
+
+    # Get data for first channel
+    if include_original:
+        data_orig_ch = data_original[channel_idx, :min_samples] * 1e6  # Convert to µV
+    data_prep_ch = data_preprocessed[channel_idx, :min_samples] * 1e6
+    data_out_ch = data_output[channel_idx, :min_samples] * 1e6
+
+    # Compute correlation
+    corr = np.corrcoef(data_prep_ch, data_out_ch)[0, 1]
+    mse = np.mean((data_prep_ch - data_out_ch) ** 2)
+
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(20, 4))
+
+    # Plot
+    if include_original:
+        ax.plot(time, data_orig_ch, 'gray', alpha=0.5, linewidth=0.5, label='Original', linestyle=':')
+    ax.plot(time, data_prep_ch, 'b-', alpha=0.7, linewidth=0.6, label='Preprocessed')
+    ax.plot(time, data_out_ch, 'r-', alpha=0.7, linewidth=0.6, label='Reconstructed')
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel('Amplitude (µV)', fontsize=12)
+    ax.set_title(f'FIF File {file_idx}: Full Duration - Channel {ch_name}\nr={corr:.4f}, MSE={mse:.6e}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10, loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    output_path = output_dir / f"fif_file{file_idx}_comparison_full_duration_ch{channel_idx}.png"
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # print(f"Saved: {output_path}")  # Disabled verbose output
+
 
 # =============================================================================
 # MAIN FUNCTION
