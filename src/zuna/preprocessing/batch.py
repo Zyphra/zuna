@@ -234,6 +234,8 @@ def _process_single_file(
             }
 
         # Check if file needs chunking (for processing/normalization)
+        # NOTE: With max_duration_minutes = 999999, chunking is effectively disabled
+        # and preprocessed FIF will be saved correctly in processor.py
         max_duration_seconds = config.max_duration_minutes * 60
         file_duration = raw.times[-1]
 

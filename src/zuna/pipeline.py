@@ -20,6 +20,8 @@ def zuna_preprocessing(
     target_sfreq: float = 256.0,
     epoch_duration: float = 5.0,
     apply_notch_filter: bool = False,
+    apply_highpass_filter: bool = True,
+    apply_average_reference: bool = True,
     save_preprocessed_fif: bool = True,
     preprocessed_fif_dir: Optional[str] = None,
     drop_bad_channels: bool = False,
@@ -36,6 +38,8 @@ def zuna_preprocessing(
         target_sfreq: Target sampling frequency (default: 256.0 Hz)
         epoch_duration: Duration of each epoch in seconds (default: 5.0)
         apply_notch_filter: Whether to apply notch filter (default: False)
+        apply_highpass_filter: Whether to apply highpass filter at 0.5 Hz (default: True)
+        apply_average_reference: Whether to apply average reference (default: True)
         save_preprocessed_fif: Save preprocessed FIF for comparison (default: True)
         preprocessed_fif_dir: Where to save preprocessed FIF (default: input_dir/preprocessed)
         drop_bad_channels: Whether to detect and drop bad channels (default: False)
@@ -60,6 +64,8 @@ def zuna_preprocessing(
         target_sfreq=target_sfreq,
         epoch_duration=epoch_duration,
         apply_notch_filter=apply_notch_filter,
+        apply_highpass_filter=apply_highpass_filter,
+        apply_average_reference=apply_average_reference,
         save_preprocessed_fif=save_preprocessed_fif,
         preprocessed_fif_dir=preprocessed_fif_dir,
         drop_bad_channels=drop_bad_channels,
