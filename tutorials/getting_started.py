@@ -2,141 +2,49 @@
 """
 Zuna Complete Pipeline Tutorial
 
-This tutorial shows two ways to run the pipeline:
-1. Complete pipeline (all steps in one call)
-2. Individual steps (for more control over intermediate files)
+This tutorial runs the complete EEG reconstruction pipeline:
+1. Preprocessing: .fif → .pt (filtered, epoched, normalized)
+2. Model Inference: .pt → .pt (reconstructed by model)
+3. Reconstruction: .pt → .fif (denormalized, continuous)
 
 Simply edit the paths below and run:
-    python 4_tutorial_complete_pipeline.py
+    python getting_started.py
 """
 
 from pathlib import Path
-from zuna.pipeline import run_zuna, zuna_preprocessing, zuna_inference, zuna_pt_to_fif
+from zuna.pipeline import run_zuna
 
 # =============================================================================
-# CONFIGURE YOUR PATHS HERE
+# CONFIGURATION
 # =============================================================================
 
-# INPUT_DIR = "data/1_fif_input"                # Input .fif files
-# PT_INPUT_DIR = 'data/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
-# PT_OUTPUT_DIR = 'data/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
-# OUTPUT_DIR = "data/4_fif_output"              # Output reconstructed .fif files
-# CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
+# Paths
+INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"
+WORKING_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/working"
+CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
-INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"                # Input .fif files
-PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
-PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
-OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Output reconstructed .fif files
+# Processing options
+TARGET_CHANNEL_COUNT = 40  # None for no upsampling, or target channel count (e.g., 40, 64, 128)
+                             # New channels added with zeros for model to interpolate
+KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
+GPU_DEVICE = 5
 
-* output files always in output_dir
-* choose if it gets deleted
-* FLAG TO RETAIN PT FILES
-
-* keep the plotting functino 
-* (maybe remove pt and foucs on fif plotting)
-
-
-
-
-UPSAMPLE_TO_CHANNELS = None     # None for no upsampling, or target channel count (e.g., 40, 64, 128)
-                                # New channels are added with zeros for the model to interpolate
-GPU_DEVICE = 5                  # GPU device ID
+# Visualization options
+PLOT_PT_COMPARISON = False  # Plot .pt file comparisons (preprocessed vs model output)
+PLOT_FIF_COMPARISON = True  # Plot .fif file comparisons (preprocessed vs reconstructed)
 
 # =============================================================================
-# OPTION 1: Complete Pipeline (Recommended)
+# RUN PIPELINE
 # =============================================================================
-# Runs all 3 steps automatically and cleans up tmp files
-#
-# NOTE: By default, artifact removal is DISABLED to preserve all data.
-# To enable artifact removal (clean noisy data), the preprocessing step would need:
-#   drop_bad_channels=True, drop_bad_epochs=True, zero_out_artifacts=True
-# These are set in the pipeline defaults and cannot be changed via run_zuna().
-# Use OPTION 2 if you need to control these settings.
 
-if __name__ == "__main__" and True:
-    print("Running complete pipeline...")
+if __name__ == "__main__":
     run_zuna(
         input_dir=INPUT_DIR,
-        output_dir=OUTPUT_DIR,
+        working_dir=WORKING_DIR,
         checkpoint_path=CHECKPOINT,
-        upsample_factor=UPSAMPLE_TO_CHANNELS,  # Note: parameter name is 'upsample_factor' but it's the target channel count
-        pt_input_dir=PT_INPUT_DIR,
-        pt_output_dir=PT_OUTPUT_DIR,
+        target_channel_count=TARGET_CHANNEL_COUNT,
+        keep_intermediate_files=KEEP_INTERMEDIATE_FILES,
         gpu_device=GPU_DEVICE,
+        plot_pt_comparison=PLOT_PT_COMPARISON,
+        plot_fif_comparison=PLOT_FIF_COMPARISON,
     )
-
-# =============================================================================
-# OPTION 2: Individual Steps (For Advanced Users)
-# =============================================================================
-# Run each step separately for more control
-
-if __name__ == "__main__" and False:  # Change False to True to use this option
-    
-    print("Running individual steps...")
-    # Setup paths for intermediate files
-    output_path = Path(OUTPUT_DIR)
-    pt_input = PT_INPUT_DIR if PT_INPUT_DIR else str(output_path / "tmp" / "pt_input")
-    pt_output = PT_OUTPUT_DIR if PT_OUTPUT_DIR else str(output_path / "tmp" / "pt_output")
-
-    # Create directories
-    Path(pt_input).mkdir(parents=True, exist_ok=True)
-    Path(pt_output).mkdir(parents=True, exist_ok=True)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    import pdb; pdb.set_trace()
-
-    # Step 1: Preprocessing (.fif → .pt)
-    # NOTE: By default, artifact removal is DISABLED to preserve all data.
-    # To enable artifact removal (clean noisy data), add these parameters:
-    #   drop_bad_channels=True, drop_bad_epochs=True, zero_out_artifacts=True
-    print("\n" + "="*80)
-    print("STEP 1: Preprocessing")
-    print("="*80)
-    zuna_preprocessing(
-        input_dir=INPUT_DIR,
-        output_dir=pt_input,
-        target_sfreq=256.0,
-        epoch_duration=5.0,
-        apply_notch_filter=False,
-        upsample_to_channels=UPSAMPLE_TO_CHANNELS  # Upsample to target channels (e.g., 40)
-        # Uncomment to enable artifact removal:
-        # drop_bad_channels=True,
-        # drop_bad_epochs=True,
-        # zero_out_artifacts=True,
-    )
-
-    # Step 2: Model Inference (.pt → .pt)
-    print("\n" + "="*80)
-    print("STEP 2: Model Inference")
-    print("="*80)
-    zuna_inference(
-        input_dir=pt_input,
-        output_dir=pt_output,
-        checkpoint_path=CHECKPOINT,
-        gpu_device=GPU_DEVICE
-    )
-
-    # Step 3: Reverse (.pt → .fif)
-    print("\n" + "="*80)
-    print("STEP 3: Reverse (.pt → .fif)")
-    print("="*80)
-    zuna_pt_to_fif(
-        input_dir=pt_output,
-        output_dir=OUTPUT_DIR
-        # Note: Upsampling happens in preprocessing step, not here
-    )
-
-    # Optional: Clean up tmp directories if they were auto-created
-    if PT_INPUT_DIR is None and PT_OUTPUT_DIR is None:
-        import shutil
-        tmp_path = output_path / "tmp"
-        if tmp_path.exists():
-            print("\nCleaning up temporary files...")
-            shutil.rmtree(tmp_path)
-            print(f"✓ Removed: {tmp_path}")
-
-    print("\n" + "="*80)
-    print("✓ PIPELINE COMPLETE!")
-    print("="*80)
-    print(f"Final output: {OUTPUT_DIR}")
-    print("="*80)
