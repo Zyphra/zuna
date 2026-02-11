@@ -274,7 +274,7 @@ def save_reconstructed_file(filename, file_data, export_dir):
     output_path = Path(export_dir) / filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save with same structure as input files
+    #JM save pt - Save reconstructed PT file with same structure as input
     output_dict = {
         'data': file_data['data_reconstructed'],        # List of reconstructed samples
         'data_original': file_data['data_original'],    # List of original samples (for comparison)
@@ -282,7 +282,21 @@ def save_reconstructed_file(filename, file_data, export_dir):
         'metadata': file_data['metadata']
     }
 
-    torch.save(output_dict, output_path)
+    #JM - Debug: Show reversibility params in metadata
+    if 'reversibility' in file_data['metadata']:
+        rev = file_data['metadata']['reversibility']
+        print(f"[METADATA] Saving with reversibility params: global_std={rev.get('global_std', 0)*1e6:.2f} µV, final_std={rev.get('final_std', 0)*1e6:.2f} µV")
+    else:
+        print(f"[METADATA] ⚠️  No reversibility params in metadata for {filename}!")
+
+    torch.save(output_dict, output_path)  #JM save pt - Actual save to disk
+
+    #JM - Debug: Show how many epochs are valid vs None
+    total_epochs = len(file_data['data_reconstructed'])
+    none_epochs = sum(1 for x in file_data['data_reconstructed'] if x is None)
+    valid_epochs = total_epochs - none_epochs
+    print(f"[DEBUG] Saved {filename}: {valid_epochs}/{total_epochs} valid ({none_epochs} None, {100*none_epochs/total_epochs:.0f}% filtered)")
+
     logger.info(f"✓ Saved and freed: {filename} ({len(file_data['data_reconstructed'])} samples)")
 
 
@@ -298,7 +312,6 @@ def check_and_save_complete_files(results_accumulator, export_dir):
         List of filenames that were saved (to be removed from accumulator)
     """
     completed_files = []
-
     for filename, file_data in results_accumulator.items():
         expected = file_data['expected_samples']
         collected = file_data['collected_samples']
@@ -526,8 +539,11 @@ def evaluate(args: TrainArgs):
     num_batches = 5
     batch_cntr = 0
 
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
+
+    tmp_sample_idx = []
+    tmp_filenames = []
 
     dir_base = f'figures/zuna/cfg{cfg}/'
     print(f"Saving output figures to: {dir_base=}")
@@ -570,7 +586,7 @@ def evaluate(args: TrainArgs):
         torch.manual_seed(args.seed)
         logger.info("Building model")
 
-        # print("LOAD THE MODEL FROM HUGGINGFACE.")
+        
         # In your shell, set your HF_TOKEN environment variable:
         # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
         def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
@@ -698,18 +714,74 @@ def evaluate(args: TrainArgs):
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+        #JM debug - Track (filename, sample_idx) occurrences as a matrix
+        from collections import defaultdict
+        sample_occurrence_matrix = defaultdict(lambda: defaultdict(int))  # [filename][sample_idx] = count
+        file_max_samples = {}  # Track expected max samples per file
+
         while True:
             batch = next(batch_iterator)
             batch_cntr += 1
+
+            # Break after epoch 1 completes to avoid duplicate processing during inference
+            if epoch > 1:
+                print(f"\n[DEBUG] Stopping at batch {batch_cntr}: epoch {epoch} > 1, breaking to avoid duplicate processing")
+                break
 
             eeg_signal = batch['eeg_signal']
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. if left in, breaks things below and not training on these.
 
-            # saving pt files - pop metadata fields before processing
-            batch_filenames = batch.pop('filename', None)
-            batch_sample_indices = batch.pop('sample_idx', None)
-            batch_metadata_list = batch.pop('metadata', None)
+            batch_filenames = batch.pop('filename', None)           #JM
+            batch_sample_indices = batch.pop('sample_idx', None)    #JM
+            batch_metadata_list = batch.pop('metadata', None)       #JM
+
+            #JM debug - Populate occurrence matrix for this batch
+            if batch_filenames and batch_sample_indices:
+                for filename, sample_idx in zip(batch_filenames, batch_sample_indices):
+                    sample_occurrence_matrix[filename][sample_idx] += 1
+
+                    # Track max samples expected per file (from metadata if available)
+                    if filename not in file_max_samples:
+                        # Try to get from metadata or infer from filename
+                        import re
+                        match = re.search(r'_d\d+_(\d+)_', filename)  # Extract num samples from filename like d30_00064_
+                        if match:
+                            file_max_samples[filename] = int(match.group(1))
+                        else:
+                            file_max_samples[filename] = 64  # Default assumption
+
+            #JM debug - Print matrix every 50 batches to show duplicates/missing
+            if batch_cntr % 50 == 0:
+                print(f"\n{'='*80}")
+                print(f"[DEBUG MATRIX] After {batch_cntr} batches:")
+                print(f"{'='*80}")
+                for filename in sorted(sample_occurrence_matrix.keys()):
+                    max_samples = file_max_samples.get(filename, 64)
+                    counts = sample_occurrence_matrix[filename]
+
+                    # Count issues
+                    zeros = sum(1 for i in range(max_samples) if counts[i] == 0)
+                    ones = sum(1 for i in range(max_samples) if counts[i] == 1)
+                    duplicates = sum(1 for i in range(max_samples) if counts[i] > 1)
+                    total_occurrences = sum(counts.values())
+
+                    print(f"\n{filename} (expected {max_samples} samples):")
+                    print(f"  0x (missing): {zeros}, 1x (good): {ones}, 2+x (duplicates): {duplicates}")
+                    print(f"  Total occurrences: {total_occurrences}")
+
+                    if duplicates > 0:
+                        # Show which indices are duplicated
+                        dup_indices = [i for i in range(max_samples) if counts[i] > 1]
+                        print(f"  ⚠️  DUPLICATES at indices: {dup_indices[:20]}")
+                        print(f"      Counts: {[counts[i] for i in dup_indices[:20]]}")
+
+                    if zeros > 0 and zeros < max_samples:  # Don't show if ALL are zero
+                        # Show which indices are missing
+                        missing_indices = [i for i in range(max_samples) if counts[i] == 0]
+                        print(f"  ⚠️  MISSING indices: {missing_indices[:20]}")
+                print(f"{'='*80}\n")
+
 
             with torch.no_grad():
                 batch = data_processor.process(**batch)
@@ -779,44 +851,64 @@ def evaluate(args: TrainArgs):
                                                             batch=batch, 
                                                             args=args)    
 
+                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
-                # saving pt files - accumulate results for each sample
-                if False:
-                    # THIS BREAKS
-                    for i in range(len(model_signal_output_unwrapped)):
-                        filename = batch_filenames[i]
-                        sample_idx = batch_sample_indices[i]
-                        metadata = batch_metadata_list[i]
+                # eeg_signal_unwrapped: original data | is list, each item has ch*timepoints
+                # model_signal_input_unwrapped: input with dropped channels
+                # model_signal_output_unwrapped, output of the model
+                # chan_pos = model_position_input_unwrapped[0].reshape(-1,tc,3)[:,0,:] #channel position requires this reshape
 
-                        # Initialize file entry if first time seeing this file
-                        if filename not in results_accumulator:
-                            num_samples = parse_filename_num_samples(filename)
-                            if num_samples is None:
-                                logger.warning(f"Skipping file with unparseable filename: {filename}")
-                                continue
+                #jm saving pt files - accumulate results for each sample
+                # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
+                eeg_sig_norm = args.data.data_norm
 
-                            results_accumulator[filename] = {
-                                'expected_samples': num_samples,
-                                'collected_samples': 0,
-                                'data_original': [None] * num_samples,
-                                'data_reconstructed': [None] * num_samples,
-                                'channel_positions': [None] * num_samples,
-                                'metadata': metadata
-                            }
+                # #JM - Debug: Show which samples are in this batch
+                # if batch_cntr % 10 == 0:  # Print every 10th batch to avoid spam
+                #     print(f"[DEBUG] Batch {batch_cntr}: Processing {len(model_signal_output_unwrapped)} samples")
+                #     print(f"  Files: {set(batch_filenames)}")
+                #     print(f"  Sample indices: {batch_sample_indices[:10]}{'...' if len(batch_sample_indices) > 10 else ''}")
 
-                        # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
-                        eeg_sig_norm = args.data.data_norm
-                        file_entry = results_accumulator[filename]
-                        file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
-                        file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
-                        file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
-                        file_entry['collected_samples'] += 1
+                for i in range(len(model_signal_output_unwrapped)):
+                    filename = batch_filenames[i]
+                    sample_idx = batch_sample_indices[i]
+                    metadata = batch_metadata_list[i]
+                    tmp_sample_idx.append(sample_idx)
+                    tmp_filenames.append(filename)
+
+                    # Initialize file entry if first time seeing this file
+                    if filename not in results_accumulator:
+                        num_samples = parse_filename_num_samples(filename)
+                        if num_samples is None:
+                            logger.warning(f"Skipping file with unparseable filename: {filename}")
+                            continue
+
+                        results_accumulator[filename] = {
+                            'expected_samples': num_samples,
+                            'collected_samples': 0,
+                            'data_original': [None] * num_samples,
+                            'data_reconstructed': [None] * num_samples,
+                            'channel_positions': [None] * num_samples,
+                            'metadata': metadata
+                        }
+
+                    # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
+                    file_entry = results_accumulator[filename]
+                    #JM - Debug: Track which sample indices are being processed
+                    if file_entry['collected_samples'] == 0:  # First sample from this file
+                        print(f"[DEBUG] Starting file {filename}: expecting {file_entry['expected_samples']} samples")
+                    if file_entry['collected_samples'] < 5 or file_entry['collected_samples'] >= file_entry['expected_samples'] - 3:
+                        print(f"  Storing sample_idx={sample_idx} (#{file_entry['collected_samples']+1}/{file_entry['expected_samples']})")
+
+                    file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
+                    file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
+                    file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
+                    file_entry['collected_samples'] += 1
+
 
                 # Check if any files are complete and save them
-                if False:
-                    completed = check_and_save_complete_files(results_accumulator, export_dir)
-                    for filename in completed:
-                        del results_accumulator[filename]  # Free memory
+                completed = check_and_save_complete_files(results_accumulator, export_dir)
+                for filename in completed:
+                    del results_accumulator[filename]  # Free memory
 
                 # Apply MNE interpolation to dropped-out channels
                 if compute_mne_interpolated_signals:
@@ -853,27 +945,135 @@ def evaluate(args: TrainArgs):
                 break
 
         #saving pt files - save any remaining incomplete files at the end
-        if False:
-            if results_accumulator:
-                logger.info(f"\nProcessing complete. Saving {len(results_accumulator)} remaining files...")
-                for filename, file_data in results_accumulator.items():
-                    expected = file_data['expected_samples']
-                    collected = file_data['collected_samples']
+        if results_accumulator:
+            logger.info(f"\nProcessing complete. Saving {len(results_accumulator)} remaining files...")
+            for filename, file_data in results_accumulator.items():
+                expected = file_data['expected_samples']
+                collected = file_data['collected_samples']
 
-                    if collected == expected:
-                        # Complete file that hasn't been saved yet
-                        save_reconstructed_file(filename, file_data, export_dir)
-                    else:
-                        # Incomplete file - save with warning
-                        logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
-                        # You can choose to save incomplete files or skip them
-                        # For now, let's save them with a flag
-                        file_data['metadata']['incomplete'] = True
-                        file_data['metadata']['collected_samples'] = collected
-                        file_data['metadata']['expected_samples'] = expected
-                        save_reconstructed_file(filename, file_data, export_dir)
+                if collected == expected:
+                    # Complete file that hasn't been saved yet
+                    save_reconstructed_file(filename, file_data, export_dir)
+                else:
+                    # Incomplete file - save with warning
+                    logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
+                    # You can choose to save incomplete files or skip them
+                    # For now, let's save them with a flag
+                    file_data['metadata']['incomplete'] = True
+                    file_data['metadata']['collected_samples'] = collected
+                    file_data['metadata']['expected_samples'] = expected
+                    save_reconstructed_file(filename, file_data, export_dir)
 
-                logger.info(f"All files saved to: {export_dir}")
+            logger.info(f"All files saved to: {export_dir}")
+
+        # print("After looping over dataloader")
+        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+    #JM debug - Analyze tmp_sample_idx and tmp_filenames before final check
+    print("\n" + "="*80)
+    print("DEBUG: Analyzing processed samples (tmp_sample_idx, tmp_filenames)")
+    print("="*80)
+
+    from collections import Counter
+    counts_idx = Counter(tmp_sample_idx)
+    counts_filenames = Counter(tmp_filenames)
+
+    print(f"\nTotal samples processed: {len(tmp_sample_idx)}")
+    print(f"Unique filenames: {len(set(tmp_filenames))}")
+
+    print("\nFilename occurrence counts:")
+    for filename, count in sorted(counts_filenames.items()):
+        print(f"  {filename}: {count} times")
+
+    print("\nChecking for duplicate sample indices:")
+    duplicates = {idx: count for idx, count in counts_idx.items() if count > 1}
+    if duplicates:
+        print(f"  Found {len(duplicates)} duplicate indices!")
+        for idx, count in sorted(duplicates.items())[:10]:
+            print(f"    Index {idx}: appeared {count} times")
+    else:
+        print("  No duplicates found")
+
+    # Check per-file
+    print("\nPer-file analysis:")
+    for filename in sorted(set(tmp_filenames)):
+        indices = [idx for idx, f in zip(tmp_sample_idx, tmp_filenames) if f == filename]
+        expected = 64  # Assuming 64 samples per file
+        print(f"\n  {filename}:")
+        print(f"    Processed: {len(indices)} times")
+        print(f"    Unique indices: {len(set(indices))}")
+        print(f"    Expected: {expected}")
+
+        # Check for missing indices
+        unique_indices = set(indices)
+        missing = [i for i in range(expected) if i not in unique_indices]
+        if missing:
+            print(f"    Missing indices: {missing[:20]}{'...' if len(missing) > 20 else ''}")
+
+        # Check for duplicates within this file
+        dup_count = len(indices) - len(unique_indices)
+        if dup_count > 0:
+            print(f"    ⚠️  {dup_count} duplicate entries!")
+
+    print("="*80 + "\n")
+
+    # import pdb; pdb.set_trace()
+
+    #JM debug - Final verification: Check all saved PT files for None/missing samples
+    print("\n" + "="*80)
+    print("FINAL VERIFICATION: Checking all saved PT files")
+    print("="*80)
+
+    # Both torch and Path are already imported at module level, don't re-import
+
+    export_path = Path(export_dir)
+    saved_pt_files = sorted(export_path.glob("*.pt"))
+
+    print(f"\nFound {len(saved_pt_files)} saved PT files\n")
+
+    total_files = 0
+    total_samples = 0
+    total_none = 0
+    total_valid = 0
+
+    for pt_file in saved_pt_files:
+        try:
+            data = torch.load(pt_file, weights_only=False)
+            reconstructed = data.get('data', [])
+
+            n_samples = len(reconstructed)
+            n_none = sum(1 for x in reconstructed if x is None)
+            n_valid = n_samples - n_none
+
+            total_files += 1
+            total_samples += n_samples
+            total_none += n_none
+            total_valid += n_valid
+
+            status = "✓" if n_none == 0 else "⚠️"
+            print(f"{status} {pt_file.name}")
+            print(f"   Total: {n_samples} | Valid: {n_valid} | None: {n_none} ({100*n_none/n_samples if n_samples > 0 else 0:.0f}%)")
+
+            if n_none > 0:
+                # Show which indices are None
+                none_indices = [i for i, x in enumerate(reconstructed) if x is None]
+                print(f"   None at indices: {none_indices[:30]}{'...' if len(none_indices) > 30 else ''}")
+
+        except Exception as e:
+            print(f"✗ {pt_file.name}: ERROR - {e}")
+
+    print("\n" + "="*80)
+    print("SUMMARY")
+    print("="*80)
+    print(f"Total files: {total_files}")
+    print(f"Total samples: {total_samples}")
+    print(f"Valid samples: {total_valid} ({100*total_valid/total_samples if total_samples > 0 else 0:.1f}%)")
+    print(f"None samples: {total_none} ({100*total_none/total_samples if total_samples > 0 else 0:.1f}%)")
+    print("="*80 + "\n")
+
+
+            
+
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
