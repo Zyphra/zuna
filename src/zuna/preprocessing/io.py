@@ -58,7 +58,7 @@ def save_pt(epochs_list: List[np.ndarray],
         'metadata': meta
     }
 
-    # Save
+    #JM save pt - Save preprocessing PT file to disk
     torch.save(data_dict, output_path)
 
 
@@ -76,7 +76,7 @@ def load_pt(pt_path: str) -> Dict[str, Any]:
     data : dict
         Dictionary with 'data', 'channel_positions', 'metadata' keys
     """
-    return torch.load(pt_path)
+    return torch.load(pt_path, weights_only=False)
 
 
 def pt_to_raw(pt_path: str) -> mne.io.Raw:
@@ -100,20 +100,59 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
     pt_data = load_pt(pt_path)
     metadata = pt_data['metadata']
 
-    # Extract data
-    epochs_list = [tensor.numpy() for tensor in pt_data['data']]
-    positions_list = [tensor.numpy() for tensor in pt_data['channel_positions']]
-
-    # Get channel info
+    # Get channel info first (needed for creating zero arrays)
     if 'channel_names' in metadata:
         channel_names = metadata['channel_names']
     else:
-        # Fallback: use first epoch's channel count
-        n_channels = epochs_list[0].shape[0]
+        # Fallback: find first non-None epoch to get channel count
+        n_channels = None
+        for tensor in pt_data['data']:
+            if tensor is not None:
+                if isinstance(tensor, torch.Tensor):
+                    n_channels = tensor.shape[0]
+                else:
+                    n_channels = tensor.shape[0]
+                break
+        if n_channels is None:
+            raise ValueError("No valid epochs found in PT file")
         channel_names = [f'Ch{i+1}' for i in range(n_channels)]
 
-    # Get sampling rate
+    # Get sampling rate and epoch duration
     sfreq = metadata.get('sampling_rate', metadata.get('resampled_sampling_rate', 256.0))
+    samples_per_epoch = metadata.get('samples_per_epoch', 1280)  # default 5s at 256 Hz
+
+    # Extract data - handle both tensors and numpy arrays
+    # IMPORTANT: Replace None epochs with zero arrays to preserve temporal alignment
+    epochs_list = []
+    positions_list = []
+    none_epoch_indices = []  # Track which epochs were None
+
+    # Find a valid position array to use for None epochs
+    reference_positions = None
+    for pos_tensor in pt_data['channel_positions']:
+        if pos_tensor is not None:
+            reference_positions = pos_tensor.numpy() if isinstance(pos_tensor, torch.Tensor) else pos_tensor
+            break
+
+    if reference_positions is None:
+        raise ValueError("No valid channel positions found in PT file")
+
+    for i, (tensor, pos_tensor) in enumerate(zip(pt_data['data'], pt_data['channel_positions'])):
+        if tensor is None:
+            # Bad epoch removed by model - replace with zeros to maintain temporal alignment
+            zero_epoch = np.zeros((len(channel_names), samples_per_epoch), dtype=np.float32)
+            epochs_list.append(zero_epoch)
+            positions_list.append(reference_positions.copy())
+            none_epoch_indices.append(i)  # Track this epoch as None
+        else:
+            epoch_data = tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
+            epochs_list.append(epoch_data)
+
+            if pos_tensor is not None:
+                pos_data = pos_tensor.numpy() if isinstance(pos_tensor, torch.Tensor) else pos_tensor
+                positions_list.append(pos_data)
+            else:
+                positions_list.append(reference_positions.copy())
 
     # Concatenate epochs into continuous data
     # Each epoch might have different number of channels (some were zeroed)
@@ -139,7 +178,29 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
     # Denormalize if reversibility params available
     if 'reversibility' in metadata:
         rev_params = metadata['reversibility']
+        #JM - Debug denormalization
+        std_before = continuous_data.std()
+        print(f"[DENORM] Before: std={std_before:.6e} V ({std_before*1e6:.2f} µV)")
+        print(f"[DENORM] Params: global_std={rev_params.get('global_std', 0):.6e}, final_std={rev_params.get('final_std', 0):.6e}")
         continuous_data = Normalizer.denormalize(continuous_data, rev_params)
+        std_after = continuous_data.std()
+        print(f"[DENORM] After:  std={std_after:.6e} V ({std_after*1e6:.2f} µV)")
+        print(f"[DENORM] Scale change: {std_after/std_before:.2f}x")
+    else:
+        print(f"[DENORM] ⚠️  No reversibility params in metadata - skipping denormalization!")
+
+    # Re-zero the None epochs AFTER denormalization
+    # The model may output None for epochs it skips (e.g., wrong channel count).
+    # We replaced these with zeros before denormalization to maintain temporal alignment.
+    # After denormalization, the mean offsets transform zeros into tiny non-zero values,
+    # so we re-zero them here to ensure they remain exactly zero.
+    # Note: This means the global std will be lower than expected due to zero epochs,
+    # but the non-zero (valid) epochs have the correct scale matching the preprocessed data.
+    if none_epoch_indices:
+        for epoch_idx in none_epoch_indices:
+            start_sample = epoch_idx * samples_per_epoch
+            end_sample = start_sample + samples_per_epoch
+            continuous_data[:, start_sample:end_sample] = 0
 
     # Create MNE info
     # Use channel names from metadata, pad if needed

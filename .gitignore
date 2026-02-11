@@ -36,3 +36,5 @@ Thumbs.db
 .env
 figures/
 wandb
+
+tutorials/data/

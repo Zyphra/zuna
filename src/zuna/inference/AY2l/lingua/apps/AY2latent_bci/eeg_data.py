@@ -437,6 +437,22 @@ class EEGDataset_v2(IterableDataset):
         #
         global_worker_id = rank * num_workers_per_rank + worker_id
         total_global_workers = world_size * num_workers_per_rank
+
+        #JM debug - Check for duplicate files in memmap_paths
+        from collections import Counter
+        print(f"\n{'='*80}")
+        print(f"[DATALOADER 🔍] Checking memmap_paths for duplicate files")
+        print(f"{'='*80}")
+        file_basenames = [p.name for p in self.memmap_paths]
+        file_counts = Counter(file_basenames)
+        duplicates = {name: count for name, count in file_counts.items() if count > 1}
+        if duplicates:
+            print(f"[DATALOADER 🔍] ⚠️  DUPLICATE FILES DETECTED in memmap_paths:")
+            for name, count in duplicates.items():
+                print(f"  📂 {name}: appears {count} times")
+        else:
+            print(f"[DATALOADER 🔍] ✓ No duplicate files in memmap_paths ({len(self.memmap_paths)} unique files)")
+        print(f"{'='*80}\n")
         
         if self.shuffle:
             # print("SHUFFLING DATASET!", end=" ")
@@ -466,24 +482,40 @@ class EEGDataset_v2(IterableDataset):
             # 2nd. shuffle whole dataset files list with global seed (different for each epoch)
             rng_base.shuffle(self.memmap_paths) # in place shuffle of entire list of memmap files.
 
-        # 3rd. Shard the indices of the memmap files across global workers. Each global worker processes a subset of memmap files. 
+        # 3rd. Shard the indices of the memmap files across global workers. Each global worker processes a subset of memmap files.
         sharded_indices_for_this_worker = list(
             range(global_worker_id, len(self.memmap_paths), total_global_workers)
         )
 
-        if self.shuffle:    
+        #JM debug - Show sharding logic
+        print(f"[DATALOADER 🔍] Worker {global_worker_id}/{total_global_workers} assigned {len(sharded_indices_for_this_worker)} files")
+        print(f"  Indices range: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
+
+        if self.shuffle:
             # 4th. Shuffle the indices assigned to this worker.\
             rng_worker.shuffle(sharded_indices_for_this_worker)
+            #JM debug - Show shuffling effect
+            print(f"[DATALOADER 🔍] After shuffle: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
 
 
         # Init for sequence packing
         seqlen_accum = 0
         packed_batch = []
 
+        #JM debug - Track file loads to detect duplicates
+        loaded_files = []
+        print(f"[DATALOADER 🔍] Starting to load {len(sharded_indices_for_this_worker)} files...\n")
+
         # Loop over all the dataset files in this worker's shard.
-        for ids in sharded_indices_for_this_worker:
+        for file_load_idx, ids in enumerate(sharded_indices_for_this_worker):
             m_path = self.memmap_paths[int(ids)]
-            # mmap = torch.load(m_path) #original line that worked for ALL TRAINING AND EVAL 
+
+            #JM debug - Track each file load
+            loaded_files.append(m_path.name)
+            if file_load_idx < 5 or file_load_idx >= len(sharded_indices_for_this_worker) - 3:
+                print(f"[DATALOADER 🔍] 📂 Loading file #{file_load_idx}: {m_path.name} (index {ids} in memmap_paths)")
+
+            # mmap = torch.load(m_path) #original line that worked for ALL TRAINING AND EVAL
             mmap = torch.load(m_path, weights_only=False) #jm | this line was needed ONLY for the Moabb eval datasets (not sure why)
 
             # Handle different dataset structures
@@ -552,11 +584,23 @@ class EEGDataset_v2(IterableDataset):
                 mmap_filt = []
                 chan_pos_filt = []
                 chan_pos_discrete_filt = []
+                filtered_indices = []  # Track which epochs are kept
                 for i in range(len(mmap)):
                     if mmap[i].shape[0]==self.chan_num_filter:
                         mmap_filt.append(mmap[i])
                         chan_pos_filt.append(chan_pos[i])
                         chan_pos_discrete_filt.append(chan_pos_discrete[i])
+                    else:
+                        filtered_indices.append(i)
+
+                # Debug output
+                if len(filtered_indices) > 0:
+                    print(f"[DEBUG] Channel filter: expecting {self.chan_num_filter} channels")
+                    print(f"[DEBUG] Filtered {len(filtered_indices)}/{len(mmap)} epochs")
+                    if len(filtered_indices) <= 20:
+                        print(f"[DEBUG] Filtered epoch indices: {filtered_indices}")
+                        print(f"[DEBUG] Channel counts: {[mmap[i].shape[0] for i in filtered_indices[:10]]}")
+
                 mmap = mmap_filt
                 chan_pos = chan_pos_filt
                 chan_pos_discrete = chan_pos_discrete_filt
@@ -704,42 +748,67 @@ class EEGDataset_v2(IterableDataset):
             dataset_id = int(m_path.name.split('_')[0].removeprefix('ds'))    # standardized dataset id 🎉
 
             for s in indx:
-                try:
-                    if seqlen_accum < self.target_packed_seqlen:
-                        # Collect up samples in packed_batch until seqlen_accum > self.target_seqlen
-                        seqlen_accum += reshaped[s][5]
+                # try:
+                if seqlen_accum < self.target_packed_seqlen:
+                    # Collect up samples in packed_batch until seqlen_accum > self.target_seqlen
+                    seqlen_accum += reshaped[s][5]
 
-                        # Apply channel dropout here to get boolean mask
-                        chan_id = reshaped[s][3]
-                        chan_do = chan_dropout[s]
-                        dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
-                        for d in chan_do:
-                            dropout_bool[chan_id==d] = True
+                    # Apply channel dropout here to get boolean mask
+                    chan_id = reshaped[s][3]
+                    chan_do = chan_dropout[s]
+                    dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
+                    for d in chan_do:
+                        dropout_bool[chan_id==d] = True
 
-                        #jm saving pt files - add tracking fields for metadata and file reconstruction
-                        packed_batch.append(
-                            {"eeg_signal": eeg_cat[s],
-                            "chan_pos": reshaped[s][1],
-                            "chan_pos_discrete": reshaped[s][2],
-                            "chan_id": reshaped[s][3],
-                            "t_coarse":reshaped[s][4],
-                            "seq_lens":reshaped[s][5],
-                            "chan_dropout": dropout_bool,
-                            "ids": ids,
-                            "dataset_id": dataset_id,
-                            "filename": str(m_path.name),      # Track source filename
-                            "sample_idx": s,                    # Track sample index within file
-                            "metadata": file_metadata}          # Pass through file metadata
-                        )
-                    else:
-                        # Then yield packed_batch and reset list to []
-                        yield packed_batch
-                        seqlen_accum = 0
-                        packed_batch = []
+                    #jm saving pt files - add tracking fields for metadata and file reconstruction
+                    packed_batch.append(
+                        {"eeg_signal": eeg_cat[s],
+                        "chan_pos": reshaped[s][1],
+                        "chan_pos_discrete": reshaped[s][2],
+                        "chan_id": reshaped[s][3],
+                        "t_coarse":reshaped[s][4],
+                        "seq_lens":reshaped[s][5],
+                        "chan_dropout": dropout_bool,
+                        "ids": ids,
+                        "dataset_id": dataset_id,
+                        "filename": str(m_path.name),      # Track source filename
+                        "sample_idx": s,                    # Track sample index within file
+                        "metadata": file_metadata}          # Pass through file metadata
+                    )
+                else:
+                    # Batch is full, yield it
+                    yield packed_batch
+                    # Reset for next batch
+                    packed_batch = []
+                    seqlen_accum = 0
 
-                except Exception as e:
-                    print(f"Error processing sample: {e} : {ids} : {m_path}")
-                    continue
+                # except Exception as e:
+                #     print(f"Error processing sample: {e} : {ids} : {m_path}")
+                #     import pdb; pdb.set_trace()
+                #     continue
+
+        #JM FIX FIX FIX - Yield any remaining samples in the last partial batch
+        # After processing all files, if there are leftover samples in packed_batch
+        # that didn't fill up a complete batch, we need to yield them.
+        # Without this, the last ~40 samples get lost!
+        if len(packed_batch) > 0:
+            print(f"[DATALOADER 🔍] Yielding final partial batch with {len(packed_batch)} samples")
+            yield packed_batch
+
+        #JM debug - Summary of loaded files
+        print(f"\n{'='*80}")
+        print(f"[DATALOADER 🔍] Summary of files loaded by worker {global_worker_id}")
+        print(f"{'='*80}")
+        loaded_file_counts = Counter(loaded_files)
+        duplicates_loaded = {name: count for name, count in loaded_file_counts.items() if count > 1}
+        if duplicates_loaded:
+            print(f"[DATALOADER 🔍] ⚠️  FILES LOADED MULTIPLE TIMES by this worker:")
+            for name, count in duplicates_loaded.items():
+                print(f"  📂 {name}: loaded {count} times")
+        else:
+            print(f"[DATALOADER 🔍] ✓ No files loaded multiple times")
+        print(f"[DATALOADER 🔍] Worker {global_worker_id} finished: loaded {len(loaded_files)} files total ({len(set(loaded_files))} unique)")
+        print(f"{'='*80}\n")
 
 
 def beta_sched(t_shape, device, dtype):

@@ -97,17 +97,36 @@ class EEGProcessor:
         # Resample
         raw = self.filter.resample(raw)
 
-        # Initial normalization (global z-score)
-        raw, norm_params_1 = self.normalizer.normalize_raw(raw)
-
-        # Bad channel detection
-        bad_channels = self.artifact_remover.detect_bad_channels(raw)
-        raw.info['bads'] = sorted(list(bad_channels))
-
-        # Filtering
+        # Apply filtering BEFORE normalization
+        # This ensures filtered data is used for both preprocessing and comparison
         raw = self.filter.apply_highpass(raw)
         raw = self.filter.apply_reference(raw)
         raw, notch_freqs = self.filter.apply_notch(raw)
+
+        # Save preprocessed FIF AFTER filtering but BEFORE normalization
+        # This ensures the preprocessed FIF has the same filtering as the model input,
+        # but is in the original scale (not normalized) for comparison
+        if self.config.save_preprocessed_fif and self.config.preprocessed_fif_dir:
+            from pathlib import Path
+            preprocessed_dir = Path(self.config.preprocessed_fif_dir)
+            preprocessed_dir.mkdir(parents=True, exist_ok=True)
+
+            # Keep original filename but save in preprocessed directory
+            import os
+            original_name = os.path.basename(raw.filenames[0]) if raw.filenames else "preprocessed_raw.fif"
+            if not original_name.endswith('.fif'):
+                original_name = original_name.replace('.fif', '') + '_preprocessed.fif'
+            preprocessed_path = preprocessed_dir / original_name
+
+            # Save filtered raw data BEFORE normalization (original scale, filtered)
+            raw.save(str(preprocessed_path), overwrite=True, verbose=False)
+
+        # Initial normalization (global z-score)
+        raw, norm_params_1 = self.normalizer.normalize_raw(raw)
+
+        # Bad channel detection (on normalized data for better detection)
+        bad_channels = self.artifact_remover.detect_bad_channels(raw)
+        raw.info['bads'] = sorted(list(bad_channels))
 
         # Create epochs
         epochs = mne.make_fixed_length_epochs(
@@ -127,32 +146,39 @@ class EEGProcessor:
         # Remove bad epochs
         epoch_data_cleaned = self.artifact_remover.remove_bad_epochs(epoch_data_cleaned, zero_mask)
 
-        # Final normalization
+        # Zero out channels from raw.info['bads'] BEFORE final normalization
+        # This ensures normalization stats are computed correctly
+        for ch_idx, ch_name in enumerate(raw.ch_names):
+            if ch_name in channels_marked_bad_in_raw:
+                epoch_data_cleaned[:, ch_idx, :] = 0.0
+                zero_mask[:, ch_idx, :] = True
+
+        # Final normalization (after all channels are zeroed)
         epoch_data_cleaned, norm_params_2 = self.normalizer.normalize_epochs(
             epoch_data_cleaned, zero_mask
         )
 
-        # Convert to list format (remove all-zero channels/epochs)
-        # Zero out channels that were marked bad in the original raw file
+        # Convert to list format (keep all channels for consistency)
+        # Note: channels are already zeroed above, so we don't pass zero_channels here
         epochs_list, positions_list = epochs_to_list(
             epoch_data_cleaned,
             channel_positions,
-            remove_all_zero=True,
-            zero_channels=channels_marked_bad_in_raw,
+            remove_all_zero=False,  # Keep all channels for consistent structure
+            zero_channels=None,  # Already zeroed above
             channel_names=raw.ch_names
         )
 
         # Apply upsampling if configured
         channel_names_final = list(raw.ch_names)  # Convert to list for potential modification
-        if self.config.upsample_to_channels is not None and len(epochs_list) > 0:
+        if self.config.target_channel_count is not None and len(epochs_list) > 0:
             from .interpolation import upsample_channels
             current_n_channels = len(channel_names_final)
-            if current_n_channels < self.config.upsample_to_channels:
+            if current_n_channels < self.config.target_channel_count:
                 epochs_list, positions_list, channel_names_final = upsample_channels(
                     epochs_list,
                     positions_list,
                     channel_names_final,
-                    target_n_channels=self.config.upsample_to_channels
+                    target_n_channels=self.config.target_channel_count
                 )
 
         # Check if we have enough epochs to save
