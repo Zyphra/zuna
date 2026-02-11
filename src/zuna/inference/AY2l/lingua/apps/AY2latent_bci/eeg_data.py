@@ -636,11 +636,23 @@ class EEGDataset_v2(IterableDataset):
                 mmap_filt = []
                 chan_pos_filt = []
                 chan_pos_discrete_filt = []
+                filtered_indices = []  # Track which epochs are kept
                 for i in range(len(mmap)):
                     if mmap[i].shape[0]==self.chan_num_filter:
                         mmap_filt.append(mmap[i])
                         chan_pos_filt.append(chan_pos[i])
                         chan_pos_discrete_filt.append(chan_pos_discrete[i])
+                    else:
+                        filtered_indices.append(i)
+
+                # Debug output
+                if len(filtered_indices) > 0:
+                    print(f"[DEBUG] Channel filter: expecting {self.chan_num_filter} channels")
+                    print(f"[DEBUG] Filtered {len(filtered_indices)}/{len(mmap)} epochs")
+                    if len(filtered_indices) <= 20:
+                        print(f"[DEBUG] Filtered epoch indices: {filtered_indices}")
+                        print(f"[DEBUG] Channel counts: {[mmap[i].shape[0] for i in filtered_indices[:10]]}")
+
                 mmap = mmap_filt
                 chan_pos = chan_pos_filt
                 chan_pos_discrete = chan_pos_discrete_filt
@@ -910,42 +922,43 @@ class EEGDataset_v2(IterableDataset):
             # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             for s in indx:
-                try:
-                    if seqlen_accum < self.target_packed_seqlen:
-                        # Collect up samples in packed_batch until seqlen_accum > self.target_seqlen
-                        seqlen_accum += reshaped[s][5]
+                # try:
+                if seqlen_accum < self.target_packed_seqlen:
+                    # Collect up samples in packed_batch until seqlen_accum > self.target_seqlen
+                    seqlen_accum += reshaped[s][5]
 
-                        # Apply channel dropout here to get boolean mask
-                        chan_id = reshaped[s][3]
-                        chan_do = chan_dropout[s]
-                        dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
-                        for d in chan_do:
-                            dropout_bool[chan_id==d] = True
+                    # Apply channel dropout here to get boolean mask
+                    chan_id = reshaped[s][3]
+                    chan_do = chan_dropout[s]
+                    dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
+                    for d in chan_do:
+                        dropout_bool[chan_id==d] = True
 
-                        #jm saving pt files - add tracking fields for metadata and file reconstruction
-                        packed_batch.append(
-                            {"eeg_signal": eeg_cat[s],
-                            "chan_pos": reshaped[s][1],
-                            "chan_pos_discrete": reshaped[s][2],
-                            "chan_id": reshaped[s][3],
-                            "t_coarse":reshaped[s][4],
-                            "seq_lens":reshaped[s][5],
-                            "chan_dropout": dropout_bool,
-                            "ids": ids,
-                            "dataset_id": dataset_id,
-                            "filename": str(m_path.name),      # Track source filename
-                            "sample_idx": s,                    # Track sample index within file
-                            "metadata": file_metadata}          # Pass through file metadata
-                        )
-                    else:
-                        # Then yield packed_batch and reset list to []
-                        yield packed_batch
-                        seqlen_accum = 0
-                        packed_batch = []
+                    #jm saving pt files - add tracking fields for metadata and file reconstruction
+                    packed_batch.append(
+                        {"eeg_signal": eeg_cat[s],
+                        "chan_pos": reshaped[s][1],
+                        "chan_pos_discrete": reshaped[s][2],
+                        "chan_id": reshaped[s][3],
+                        "t_coarse":reshaped[s][4],
+                        "seq_lens":reshaped[s][5],
+                        "chan_dropout": dropout_bool,
+                        "ids": ids,
+                        "dataset_id": dataset_id,
+                        "filename": str(m_path.name),      # Track source filename
+                        "sample_idx": s,                    # Track sample index within file
+                        "metadata": file_metadata}          # Pass through file metadata
+                    )
+                else:
+                    # Then yield packed_batch and reset list to []
+                    yield packed_batch
+                    seqlen_accum = 0
+                    packed_batch = []
 
-                except Exception as e:
-                    print(f"Error processing sample: {e} : {ids} : {m_path}")
-                    continue
+                # except Exception as e:
+                #     print(f"Error processing sample: {e} : {ids} : {m_path}")
+                #     import pdb; pdb.set_trace()
+                #     continue
 
 
 class EEGDataset_b2(IterableDataset):

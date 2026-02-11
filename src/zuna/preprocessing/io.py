@@ -58,7 +58,7 @@ def save_pt(epochs_list: List[np.ndarray],
         'metadata': meta
     }
 
-    # Save
+    #JM save pt - Save preprocessing PT file to disk
     torch.save(data_dict, output_path)
 
 
