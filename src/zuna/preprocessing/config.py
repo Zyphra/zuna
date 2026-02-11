@@ -83,7 +83,9 @@ class ProcessingConfig:
     max_duration_minutes: float = 999999.0  # Effectively disable chunking (process full files)
 
     # Channel upsampling
-    target_channel_count: Optional[int] = None  # If set, upsample to this many channels (e.g., 40, 64, 128)
+    target_channel_count: Optional[Union[int, List[str]]] = None  # If int: upsample to N channels with zeros
+                                                                    # If list: add specific channel names from 10-05 montage
+                                                                    # e.g., 40 or ['Cz', 'Pz', 'Oz']
 
     # Save preprocessed FIF for comparison
     save_preprocessed_fif: bool = False  # Save preprocessed raw (before epoching) for ground truth comparison

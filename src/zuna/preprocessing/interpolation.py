@@ -156,3 +156,139 @@ def upsample_channels(
         upsampled_positions.append(new_positions)
 
     return upsampled_epochs, upsampled_positions, upsampled_names
+
+
+def add_specific_channels(
+    epochs_list: List[np.ndarray],
+    positions_list: List[np.ndarray],
+    channel_names: List[str],
+    target_channel_names: List[str],
+    montage_source: str = 'standard_1005'
+) -> Tuple[List[np.ndarray], List[np.ndarray], List[str]]:
+    """
+    Add specific channels by name with 3D coordinates from standard montage.
+
+    New channels are added with all values set to 0, signaling the model to interpolate them.
+
+    Parameters
+    ----------
+    epochs_list : list of np.ndarray
+        List of epoch arrays, each (n_channels, n_times)
+    positions_list : list of np.ndarray
+        List of 3D channel position arrays, each (n_channels, 3)
+    channel_names : list of str
+        Current channel names
+    target_channel_names : list of str
+        List of channel names to add (e.g., ['Cz', 'Pz', 'Oz'])
+    montage_source : str, optional
+        MNE montage name to use for channel positions
+        Default: 'standard_1005'
+
+    Returns
+    -------
+    upsampled_epochs : list of np.ndarray
+        Epoch arrays with added channels
+    upsampled_positions : list of np.ndarray
+        Position arrays with added channels
+    upsampled_names : list of str
+        Channel names after adding new channels
+
+    Examples
+    --------
+    >>> epochs_up, positions_up, names_up = add_specific_channels(
+    ...     epochs_list, positions_list, channel_names,
+    ...     target_channel_names=['Cz', 'Pz', 'Oz']
+    ... )
+    """
+    if len(epochs_list) == 0:
+        return epochs_list, positions_list, channel_names
+
+    # Load source montage
+    try:
+        montage = mne.channels.make_standard_montage(montage_source)
+    except Exception as e:
+        raise ValueError(f"Failed to load montage '{montage_source}': {e}")
+
+    # Get all positions from montage
+    montage_pos = montage.get_positions()['ch_pos']
+
+    # Normalize channel names for comparison
+    current_names_normalized = {name.lower(): name for name in channel_names}
+    montage_names_normalized = {name.lower(): name for name in montage_pos.keys()}
+
+    # Process target channels
+    new_channel_names = []
+    new_channel_positions = []
+    skipped_existing = []
+    skipped_not_in_montage = []
+
+    for target_name in target_channel_names:
+        target_name_norm = target_name.lower()
+
+        # Check if channel already exists
+        if target_name_norm in current_names_normalized:
+            skipped_existing.append(target_name)
+            continue
+
+        # Check if channel is in montage
+        if target_name_norm not in montage_names_normalized:
+            skipped_not_in_montage.append(target_name)
+            continue
+
+        # Get position from montage
+        montage_orig_name = montage_names_normalized[target_name_norm]
+        pos = montage_pos[montage_orig_name]
+        pos_array = np.array([pos[0], pos[1], pos[2]])
+
+        # Skip if position is all zeros
+        if np.allclose(pos_array, [0.0, 0.0, 0.0]):
+            skipped_not_in_montage.append(target_name)
+            continue
+
+        new_channel_names.append(montage_orig_name)
+        new_channel_positions.append(pos_array)
+
+    # Print summary
+    if skipped_existing:
+        print(f"  Skipped {len(skipped_existing)} channels (already exist): {', '.join(skipped_existing)}")
+
+    if skipped_not_in_montage:
+        print(f"  Skipped {len(skipped_not_in_montage)} channels (not in {montage_source}): {', '.join(skipped_not_in_montage)}")
+
+    # If no new channels to add, return original
+    if len(new_channel_names) == 0:
+        print(f"  No new channels to add")
+        return epochs_list, positions_list, channel_names
+
+    print(f"  Adding {len(new_channel_names)} channels: {', '.join(new_channel_names)}")
+
+    # Convert to numpy array
+    new_channel_positions = np.array(new_channel_positions)
+
+    # Use first epoch's positions as reference
+    current_positions = positions_list[0] if len(positions_list) > 0 else np.zeros((0, 3))
+
+    # Combine with existing
+    upsampled_names = list(channel_names) + new_channel_names
+
+    # Upsample each epoch
+    upsampled_epochs = []
+    upsampled_positions = []
+
+    n_times = epochs_list[0].shape[1] if len(epochs_list) > 0 else 0
+
+    for epoch_idx, epoch in enumerate(epochs_list):
+        current_epoch_channels = epoch.shape[0]
+        current_epoch_pos = positions_list[epoch_idx]
+
+        # Create new epoch with zeros for added channels
+        new_epoch = np.zeros((current_epoch_channels + len(new_channel_names), n_times), dtype=epoch.dtype)
+        new_epoch[:current_epoch_channels, :] = epoch
+
+        # Combine positions
+        new_positions = np.vstack([current_epoch_pos, new_channel_positions])
+
+        upsampled_epochs.append(new_epoch)
+        upsampled_positions.append(new_positions)
+
+    return upsampled_epochs, upsampled_positions, upsampled_names
