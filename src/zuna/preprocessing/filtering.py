@@ -153,5 +153,6 @@ class Filter:
         raw_referenced : mne.io.Raw
             Referenced raw data (modified in place)
         """
-        raw.set_eeg_reference('average', projection=False, verbose=False)
+        if self.config.apply_average_reference:
+            raw.set_eeg_reference('average', projection=False, verbose=False)
         return raw

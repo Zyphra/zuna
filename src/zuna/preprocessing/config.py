@@ -19,6 +19,8 @@ class ProcessingConfig:
         Whether to apply automatic notch filtering (detects line noise peaks)
     apply_highpass_filter : bool
         Whether to apply highpass filter
+    apply_average_reference : bool
+        Whether to apply average reference
     zero_out_artifacts : bool
         Whether to zero out artifact samples (outliers, high amplitude)
 
@@ -51,6 +53,7 @@ class ProcessingConfig:
     drop_bad_epochs: bool = False
     apply_notch_filter: bool = True
     apply_highpass_filter: bool = True
+    apply_average_reference: bool = True
     zero_out_artifacts: bool = False
 
     # Basic parameters
@@ -77,7 +80,7 @@ class ProcessingConfig:
     zero_bad_channels_from_raw: bool = False  # Zero channels marked as bad in raw.info['bads']
 
     # File chunking
-    max_duration_minutes: float = 10.0  # Split files longer than this into chunks
+    max_duration_minutes: float = 999999.0  # Effectively disable chunking (process full files)
 
     # Channel upsampling
     upsample_to_channels: Optional[int] = None  # If set, upsample to this many channels (e.g., 128)

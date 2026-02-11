@@ -19,8 +19,10 @@ import random
 # CONFIGURATION
 # =============================================================================
 
-NUM_SAMPLES = 2  # Number of random files to compare (set to 1 for quick check)
+NUM_SAMPLES = 2  # Number of files to compare (set to 1 for quick check, 2 for first+last)
+SAMPLE_FROM_ENDS = True  # Set to True to pick first and last files, False for random sampling
 NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
+INCLUDE_ORIGINAL_FIF = False  # Set to True to show 3 lines (original, preprocessed, reconstructed), False for 2 lines (preprocessed, reconstructed)
 
 # Directory paths
 # FIF_INPUT_DIR = "data/1_fif_input"
@@ -29,7 +31,8 @@ NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comp
 # PT_OUTPUT_DIR = "data/3_pt_output"
 # OUTPUT_DIR = "eval_figures"
 
-FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"   # Preprocessed .fif files (ground truth)
+FIF_ORIGINAL_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"                  # Original .fif files (before preprocessing)
+FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"    # Preprocessed .fif files (after filtering)
 PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'                  # Preprocessed .pt files
 PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'                # Model output .pt files
 FIF_OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Reconstructed .fif files
@@ -244,45 +247,61 @@ def compare_pt_files(input_file, output_file, output_dir, file_idx):
     print(f"Saved: {output_path}")
 
 
-def compare_fif_files(input_file, output_file, output_dir, file_idx):
-    """Compare a single pair of .fif files (input vs output)"""
+def compare_fif_files(original_file, preprocessed_file, output_file, output_dir, file_idx):
+    """Compare .fif files: preprocessed vs reconstructed (and optionally original if provided)"""
 
     print(f"\n{'='*80}")
     print(f"FIF FILE COMPARISON {file_idx}")
     print(f"{'='*80}")
-    print(f"Input:  {input_file}")
-    print(f"Output: {output_file}")
+
+    # Check if original file is provided (3-line mode vs 2-line mode)
+    include_original = original_file is not None
+
+    if include_original:
+        print(f"Original:     {original_file}")
+    print(f"Preprocessed: {preprocessed_file}")
+    print(f"Reconstructed: {output_file}")
 
     # Load files
-    raw_input = mne.io.read_raw_fif(input_file, preload=True, verbose=False)
+    if include_original:
+        raw_original = mne.io.read_raw_fif(original_file, preload=True, verbose=False)
+    raw_preprocessed = mne.io.read_raw_fif(preprocessed_file, preload=True, verbose=False)
     raw_output = mne.io.read_raw_fif(output_file, preload=True, verbose=False)
 
-    print(f"\nInput (before filtering):  {raw_input.info['nchan']} channels, {raw_input.n_times} samples, {raw_input.info['sfreq']} Hz")
-    print(f"Output (before filtering): {raw_output.info['nchan']} channels, {raw_output.n_times} samples, {raw_output.info['sfreq']} Hz")
+    if include_original:
+        print(f"\nOriginal:      {raw_original.info['nchan']} channels, {raw_original.n_times} samples, {raw_original.info['sfreq']} Hz")
+    print(f"Preprocessed:  {raw_preprocessed.info['nchan']} channels, {raw_preprocessed.n_times} samples, {raw_preprocessed.info['sfreq']} Hz")
+    print(f"Reconstructed: {raw_output.info['nchan']} channels, {raw_output.n_times} samples, {raw_output.info['sfreq']} Hz")
 
     # Filter to EEG channels only (exclude EOG, ECG, etc.)
     try:
-        raw_input.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
+        if include_original:
+            raw_original.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
+        raw_preprocessed.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
         raw_output.pick_types(eeg=True, meg=False, eog=False, ecg=False, stim=False, exclude=[])
         print(f"\nAfter EEG filtering:")
-        print(f"  Input:  {raw_input.info['nchan']} EEG channels")
-        print(f"  Output: {raw_output.info['nchan']} EEG channels")
+        if include_original:
+            print(f"  Original:      {raw_original.info['nchan']} EEG channels")
+        print(f"  Preprocessed:  {raw_preprocessed.info['nchan']} EEG channels")
+        print(f"  Reconstructed: {raw_output.info['nchan']} EEG channels")
     except Exception as e:
         print(f"  Warning: Could not filter to EEG channels: {e}")
 
     # Get data
-    data_input = raw_input.get_data()  # (n_channels, n_times)
+    if include_original:
+        data_original = raw_original.get_data()  # (n_channels, n_times)
+    data_preprocessed = raw_preprocessed.get_data()
     data_output = raw_output.get_data()
 
     # Print data statistics BEFORE any processing
     print(f"\nData statistics (RAW - before padding):")
-    print(f"  Input:  mean={data_input.mean():.6e}, std={data_input.std():.6e}, range=[{data_input.min():.6e}, {data_input.max():.6e}]")
+    print(f"  Input:  mean={data_preprocessed.mean():.6e}, std={data_preprocessed.std():.6e}, range=[{data_preprocessed.min():.6e}, {data_preprocessed.max():.6e}]")
     print(f"  Output: mean={data_output.mean():.6e}, std={data_output.std():.6e}, range=[{data_output.min():.6e}, {data_output.max():.6e}]")
-    print(f"  Input in µV:  mean={data_input.mean()*1e6:.2f}, std={data_input.std()*1e6:.2f}")
+    print(f"  Input in µV:  mean={data_preprocessed.mean()*1e6:.2f}, std={data_preprocessed.std()*1e6:.2f}")
     print(f"  Output in µV: mean={data_output.mean()*1e6:.2f}, std={data_output.std()*1e6:.2f}")
 
     # Handle channel count mismatch
-    n_input_channels = data_input.shape[0]
+    n_input_channels = data_preprocessed.shape[0]
     n_output_channels = data_output.shape[0]
 
     if n_output_channels < n_input_channels:
@@ -294,168 +313,178 @@ def compare_fif_files(input_file, output_file, output_dir, file_idx):
         print(f"  Output has more channels ({n_output_channels}) than input ({n_input_channels})")
         print(f"  → Padding input with zeros to match output (channels {n_input_channels}-{n_output_channels-1} are model-generated)")
         # Pad INPUT with zeros to match output channel count
-        padding = np.zeros((n_output_channels - n_input_channels, data_input.shape[1]))
-        data_input = np.vstack([data_input, padding])
+        padding = np.zeros((n_output_channels - n_input_channels, data_preprocessed.shape[1]))
+        data_preprocessed = np.vstack([data_preprocessed, padding])
 
-    # Take a 30-second window for visualization (longer for continuous data)
-    sfreq = raw_input.info['sfreq']
-    window_duration = 30.0  # seconds (increased from 5s)
+    # Take 30-second windows for visualization
+    sfreq = raw_preprocessed.info['sfreq']
+    window_duration = 30.0  # seconds
     window_samples = int(window_duration * sfreq)
+    min_samples = min(data_preprocessed.shape[1], data_output.shape[1])
 
-    # Pick a RANDOM 30-second window (instead of always the middle)
-    min_samples = min(data_input.shape[1], data_output.shape[1])
-    max_start = max(0, min_samples - window_samples)
-    if max_start > 0:
-        start_sample = random.randint(0, max_start)
-        print(f"\nRandom window: {start_sample / sfreq:.1f}s - {(start_sample + window_samples) / sfreq:.1f}s")
-    else:
-        start_sample = 0
-    end_sample = min(start_sample + window_samples, min_samples)
-    actual_window_samples = end_sample - start_sample
+    # Generate TWO plots: beginning and end
+    windows_to_plot = [
+        ('beginning', 0, min(window_samples, min_samples)),
+        ('end', max(0, min_samples - window_samples), min_samples)
+    ]
 
-    data_input_window = data_input[:, start_sample:end_sample]
-    data_output_window = data_output[:, start_sample:end_sample]
+    for window_name, start_sample, end_sample in windows_to_plot:
+        actual_window_samples = end_sample - start_sample
+        print(f"\n{window_name.upper()} window: {start_sample / sfreq:.1f}s - {end_sample / sfreq:.1f}s")
 
-    # Normalize for visual comparison if enabled
-    if NORMALIZE_FOR_COMPARISON:
-        print(f"\n⚠️  NORMALIZE_FOR_COMPARISON=True: Normalizing both to same scale (ignoring zeros)")
+        if include_original:
+            data_original_window = data_original[:, start_sample:end_sample]
+        data_preprocessed_window = data_preprocessed[:, start_sample:end_sample]  # Preprocessed data
+        data_output_window = data_output[:, start_sample:end_sample]
 
-        # For output, compute stats ONLY on non-zero samples (ignore None epochs)
-        output_nonzero_mask = data_output_window != 0
-        output_nonzero_data = data_output_window[output_nonzero_mask]
+        # Normalize for visual comparison if enabled
+        if NORMALIZE_FOR_COMPARISON:
+            print(f"\n⚠️  NORMALIZE_FOR_COMPARISON=True: Normalizing both to same scale (ignoring zeros)")
 
-        # Input stats (all data)
-        input_mean = data_input_window[:n_output_channels].mean()
-        input_std = data_input_window[:n_output_channels].std()
+            # For output, compute stats ONLY on non-zero samples (ignore None epochs)
+            output_nonzero_mask = data_output_window != 0
+            output_nonzero_data = data_output_window[output_nonzero_mask]
 
-        # Output stats (only non-zero samples)
-        if len(output_nonzero_data) > 0:
-            output_mean = output_nonzero_data.mean()
-            output_std = output_nonzero_data.std()
+            # Input stats (all data)
+            input_mean = data_preprocessed_window[:n_output_channels].mean()
+            input_std = data_preprocessed_window[:n_output_channels].std()
+
+            # Output stats (only non-zero samples)
+            if len(output_nonzero_data) > 0:
+                output_mean = output_nonzero_data.mean()
+                output_std = output_nonzero_data.std()
+            else:
+                output_mean = 0.0
+                output_std = 1.0
+
+            print(f"  Before normalization:")
+            print(f"    Input:  mean={input_mean:.6e}, std={input_std:.6e}")
+            print(f"    Output: mean={output_mean:.6e}, std={output_std:.6e} (non-zero only)")
+            print(f"    Output: {len(output_nonzero_data)} / {output_nonzero_mask.size} non-zero samples ({100*len(output_nonzero_data)/output_nonzero_mask.size:.1f}%)")
+
+            # Normalize input
+            if input_std > 0:
+                data_preprocessed_window_normalized = (data_preprocessed_window - input_mean) / input_std
+            else:
+                data_preprocessed_window_normalized = data_preprocessed_window.copy()
+
+            # Normalize output (only non-zero samples)
+            data_output_window_normalized = data_output_window.copy()
+            if output_std > 0 and len(output_nonzero_data) > 0:
+                data_output_window_normalized[output_nonzero_mask] = (output_nonzero_data - output_mean) / output_std
+
+            # Use normalized data for plotting
+            if include_original:
+                data_original_window_plot = data_original_window * 1e6  # Original in µV (not normalized)
+            data_preprocessed_window_plot = data_preprocessed_window_normalized
+            data_output_window_plot = data_output_window_normalized
+            scale_label = "(normalized)"
         else:
-            output_mean = 0.0
-            output_std = 1.0
+            # Use original data converted to µV
+            if include_original:
+                data_original_window_plot = data_original_window * 1e6
+            data_preprocessed_window_plot = data_preprocessed_window * 1e6
+            data_output_window_plot = data_output_window * 1e6
+            scale_label = "(µV)"
 
-        print(f"  Before normalization:")
-        print(f"    Input:  mean={input_mean:.6e}, std={input_std:.6e}")
-        print(f"    Output: mean={output_mean:.6e}, std={output_std:.6e} (non-zero only)")
-        print(f"    Output: {len(output_nonzero_data)} / {output_nonzero_mask.size} non-zero samples ({100*len(output_nonzero_data)/output_nonzero_mask.size:.1f}%)")
+        # Compute metrics (only on non-zero channels in output)
+        # Identify which channels have actual data (not just padding)
+        non_zero_channels = []
+        for ch in range(data_preprocessed_window.shape[0]):
+            if ch < n_output_channels:
+                non_zero_channels.append(ch)
 
-        # Normalize input
-        if input_std > 0:
-            data_input_window_normalized = (data_input_window - input_mean) / input_std
+        if len(non_zero_channels) > 0:
+            mse = np.mean((data_preprocessed_window[non_zero_channels] - data_output_window[non_zero_channels]) ** 2)
+            mae = np.mean(np.abs(data_preprocessed_window[non_zero_channels] - data_output_window[non_zero_channels]))
         else:
-            data_input_window_normalized = data_input_window.copy()
+            mse = np.nan
+            mae = np.nan
 
-        # Normalize output (only non-zero samples)
-        data_output_window_normalized = data_output_window.copy()
-        if output_std > 0 and len(output_nonzero_data) > 0:
-            data_output_window_normalized[output_nonzero_mask] = (output_nonzero_data - output_mean) / output_std
+        correlations = []
+        for ch in range(data_preprocessed_window.shape[0]):
+            if ch < n_output_channels and np.any(data_output_window[ch] != 0):
+                # Compute correlation for channels with actual data
+                corr = np.corrcoef(data_preprocessed_window[ch], data_output_window[ch])[0, 1]
+                correlations.append(corr)
+            else:
+                # Zero-padded channel - no correlation
+                correlations.append(0.0)
 
-        # Use normalized data for plotting
-        data_input_window_plot = data_input_window_normalized
-        data_output_window_plot = data_output_window_normalized
-        scale_label = "(normalized)"
-    else:
-        # Use original data converted to µV
-        data_input_window_plot = data_input_window * 1e6
-        data_output_window_plot = data_output_window * 1e6
-        scale_label = "(µV)"
+        # Mean correlation only over non-zero channels
+        non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
+        mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
 
-    # Compute metrics (only on non-zero channels in output)
-    # Identify which channels have actual data (not just padding)
-    non_zero_channels = []
-    for ch in range(data_input_window.shape[0]):
-        if ch < n_output_channels:
-            non_zero_channels.append(ch)
+        print(f"\nMetrics (5s window):")
+        print(f"  MSE: {mse:.6e}")
+        print(f"  MAE: {mae:.6e}")
+        print(f"  Mean correlation: {mean_corr:.4f}")
+        print(f"  Correlation range: [{min(correlations):.4f}, {max(correlations):.4f}]")
 
-    if len(non_zero_channels) > 0:
-        mse = np.mean((data_input_window[non_zero_channels] - data_output_window[non_zero_channels]) ** 2)
-        mae = np.mean(np.abs(data_input_window[non_zero_channels] - data_output_window[non_zero_channels]))
-    else:
-        mse = np.nan
-        mae = np.nan
+        # Create plot
+        num_channels = data_preprocessed_window.shape[0]
+        fig, axes = plt.subplots(num_channels, 1, figsize=(20, 2 * num_channels))
+        if num_channels == 1:
+            axes = [axes]
 
-    correlations = []
-    for ch in range(data_input_window.shape[0]):
-        if ch < n_output_channels and np.any(data_output_window[ch] != 0):
-            # Compute correlation for channels with actual data
-            corr = np.corrcoef(data_input_window[ch], data_output_window[ch])[0, 1]
-            correlations.append(corr)
-        else:
-            # Zero-padded channel - no correlation
-            correlations.append(0.0)
+        for ch in range(num_channels):
+            ax = axes[ch]
+            time = np.arange(actual_window_samples) / sfreq
 
-    # Mean correlation only over non-zero channels
-    non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
-    mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
+            # Plot lines: Preprocessed vs Reconstructed (and optionally Original)
+            if ch < n_input_channels:
+                # Real channel
+                if include_original:
+                    ax.plot(time, data_original_window_plot[ch], 'gray', alpha=0.5, linewidth=0.6, label='Original', linestyle=':')
+                ax.plot(time, data_preprocessed_window_plot[ch], 'b-', alpha=0.7, linewidth=0.8, label='Preprocessed')
+                ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
+            else:
+                # Model-generated channel (input was zero-padded)
+                if include_original:
+                    ax.plot(time, data_original_window_plot[ch], 'gray', alpha=0.3, linewidth=0.6, label='Original', linestyle=':')
+                ax.plot(time, data_preprocessed_window_plot[ch], 'gray', alpha=0.3, linewidth=0.8, label='Preprocessed (zero-padded)', linestyle='--')
+                ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Model-generated')
 
-    print(f"\nMetrics (5s window):")
-    print(f"  MSE: {mse:.6e}")
-    print(f"  MAE: {mae:.6e}")
-    print(f"  Mean correlation: {mean_corr:.4f}")
-    print(f"  Correlation range: [{min(correlations):.4f}, {max(correlations):.4f}]")
+            corr = correlations[ch]
 
-    # Create plot
-    num_channels = data_input_window.shape[0]
-    fig, axes = plt.subplots(num_channels, 1, figsize=(20, 2 * num_channels))
-    if num_channels == 1:
-        axes = [axes]
+            ch_name = raw_preprocessed.ch_names[ch] if ch < len(raw_preprocessed.ch_names) else f'Ch {ch}'
 
-    for ch in range(num_channels):
-        ax = axes[ch]
-        time = np.arange(actual_window_samples) / sfreq
+            # Add indicator for model-generated channels
+            if ch >= n_input_channels:
+                ch_name = f'{ch_name} (model-generated)'
 
-        # Mark model-generated channels differently (where input was padded with zeros)
-        if ch < n_input_channels:
-            # Real channel in both input and output
-            ax.plot(time, data_input_window_plot[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
-            ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
-        else:
-            # Model-generated channel (input was zero-padded)
-            ax.plot(time, data_input_window_plot[ch], 'gray', alpha=0.3, linewidth=0.8, label='Input (zero-padded)', linestyle='--')
-            ax.plot(time, data_output_window_plot[ch], 'r-', alpha=0.7, linewidth=0.8, label='Model-generated')
+            ax.set_ylabel(f'{ch_name}\n{scale_label}', fontsize=8)
+            ax.tick_params(labelsize=6)
+            ax.grid(True, alpha=0.3)
 
-        corr = correlations[ch]
+            # Show correlation text (or "N/A" for zero-padded)
+            if ch < n_output_channels:
+                ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
+                        ha='right', va='top', fontsize=7,
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+            else:
+                ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
+                        ha='right', va='top', fontsize=7,
+                        bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
 
-        ch_name = raw_input.ch_names[ch] if ch < len(raw_input.ch_names) else f'Ch {ch}'
+            if ch == 0:
+                ax.legend(fontsize=8, loc='upper left')
+            if ch == num_channels - 1:
+                ax.set_xlabel('Time (s)', fontsize=10)
 
-        # Add indicator for model-generated channels
-        if ch >= n_input_channels:
-            ch_name = f'{ch_name} (model-generated)'
+        n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
+        title = f'FIF File {file_idx}: Original vs Reconstructed ({window_duration:.0f}s window)\n'
+        title += f'Mean Corr: {mean_corr:.4f}, MSE: {mse:.6e}'
+        if n_padded > 0:
+            title += f' ({n_padded} channels zero-padded)'
+        plt.suptitle(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
 
-        ax.set_ylabel(f'{ch_name}\n{scale_label}', fontsize=8)
-        ax.tick_params(labelsize=6)
-        ax.grid(True, alpha=0.3)
+        output_path = output_dir / f"fif_file{file_idx}_comparison_{window_name}.png"
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
 
-        # Show correlation text (or "N/A" for zero-padded)
-        if ch < n_output_channels:
-            ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
-                    ha='right', va='top', fontsize=7,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-        else:
-            ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
-                    ha='right', va='top', fontsize=7,
-                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
-
-        if ch == 0:
-            ax.legend(fontsize=8, loc='upper left')
-        if ch == num_channels - 1:
-            ax.set_xlabel('Time (s)', fontsize=10)
-
-    n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
-    title = f'FIF File {file_idx}: Original vs Reconstructed ({window_duration:.0f}s window)\n'
-    title += f'Mean Corr: {mean_corr:.4f}, MSE: {mse:.6e}'
-    if n_padded > 0:
-        title += f' ({n_padded} channels zero-padded)'
-    plt.suptitle(title, fontsize=14, fontweight='bold')
-    plt.tight_layout()
-
-    output_path = output_dir / f"fif_file{file_idx}_comparison.png"
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-
-    print(f"Saved: {output_path}")
+        print(f"Saved: {output_path}")
 
 
 # =============================================================================
@@ -474,12 +503,14 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Get list of files
+    fif_original_files = sorted(Path(FIF_ORIGINAL_DIR).glob("*.fif"))
     fif_input_files = sorted(Path(FIF_INPUT_DIR).glob("*.fif"))
     fif_output_files = sorted(Path(FIF_OUTPUT_DIR).glob("*.fif"))
     pt_input_files = sorted(Path(PT_INPUT_DIR).glob("*.pt"))
     pt_output_files = sorted(Path(PT_OUTPUT_DIR).glob("*.pt"))
 
-    print(f"Found {len(fif_input_files)} .fif input files")
+    print(f"Found {len(fif_original_files)} .fif original files")
+    print(f"Found {len(fif_input_files)} .fif preprocessed files")
     print(f"Found {len(fif_output_files)} .fif output files")
     print(f"Found {len(pt_input_files)} .pt input files")
     print(f"Found {len(pt_output_files)} .pt output files")
@@ -532,9 +563,19 @@ if __name__ == "__main__":
 
     # Compare .pt files FIRST (so we get these even if FIF crashes)
     if len(pt_input_files) > 0 and len(pt_output_files) > 0:
-        # Randomly sample files
-        sample_indices = random.sample(range(min(len(pt_input_files), len(pt_output_files))),
-                                      min(NUM_SAMPLES, len(pt_input_files), len(pt_output_files)))
+        # Sample files (from ends or randomly)
+        max_files = min(len(pt_input_files), len(pt_output_files))
+        if SAMPLE_FROM_ENDS:
+            # Pick first and last files
+            if NUM_SAMPLES == 1:
+                sample_indices = [0]
+            elif NUM_SAMPLES >= 2:
+                sample_indices = [0, max_files - 1]
+            else:
+                sample_indices = []
+        else:
+            # Random sampling
+            sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
 
         for idx, file_idx in enumerate(sample_indices):
             input_file = pt_input_files[file_idx]
@@ -554,27 +595,86 @@ if __name__ == "__main__":
         print("\nSkipping .pt comparison (no files found)")
 
     # Compare .fif files (after PT files, in case this crashes)
-    if len(fif_input_files) > 0 and len(fif_output_files) > 0:
-        # Randomly sample files
-        sample_indices = random.sample(range(min(len(fif_input_files), len(fif_output_files))),
-                                      min(NUM_SAMPLES, len(fif_input_files), len(fif_output_files)))
+    if INCLUDE_ORIGINAL_FIF:
+        # 3-line mode: original, preprocessed, reconstructed
+        if len(fif_original_files) > 0 and len(fif_input_files) > 0 and len(fif_output_files) > 0:
+            # Sample files (from ends or randomly)
+            max_files = min(len(fif_original_files), len(fif_input_files), len(fif_output_files))
+            if SAMPLE_FROM_ENDS:
+                # Pick first and last files
+                if NUM_SAMPLES == 1:
+                    sample_indices = [0]
+                elif NUM_SAMPLES >= 2:
+                    sample_indices = [0, max_files - 1]
+                else:
+                    sample_indices = []
+            else:
+                # Random sampling
+                sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
 
-        for idx, file_idx in enumerate(sample_indices):
-            input_file = fif_input_files[file_idx]
-            # Match output file by name
-            output_file = None
-            for f in fif_output_files:
-                if f.stem == input_file.stem or input_file.stem in f.stem:
-                    output_file = f
-                    break
+            for idx, file_idx in enumerate(sample_indices):
+                original_file = fif_original_files[file_idx]
 
-            if output_file is None:
-                print(f"\nWarning: No matching output file found for {input_file.name}")
-                continue
+                # Match preprocessed file by name (should be same name or in preprocessed subdir)
+                preprocessed_file = None
+                for f in fif_input_files:
+                    if f.stem == original_file.stem or original_file.stem in f.stem:
+                        preprocessed_file = f
+                        break
 
-            compare_fif_files(input_file, output_file, output_dir, idx + 1)
+                # Match output file by name
+                output_file = None
+                for f in fif_output_files:
+                    if f.stem == original_file.stem or original_file.stem in f.stem:
+                        output_file = f
+                        break
+
+                if preprocessed_file is None:
+                    print(f"\nWarning: No matching preprocessed file found for {original_file.name}")
+                    continue
+
+                if output_file is None:
+                    print(f"\nWarning: No matching output file found for {original_file.name}")
+                    continue
+
+                compare_fif_files(original_file, preprocessed_file, output_file, output_dir, idx + 1)
+        else:
+            print("\nSkipping .fif comparison (need all 3: original, preprocessed, output files)")
     else:
-        print("\nSkipping .fif comparison (no files found)")
+        # 2-line mode: preprocessed vs reconstructed only
+        if len(fif_input_files) > 0 and len(fif_output_files) > 0:
+            # Sample files (from ends or randomly)
+            max_files = min(len(fif_input_files), len(fif_output_files))
+            if SAMPLE_FROM_ENDS:
+                # Pick first and last files
+                if NUM_SAMPLES == 1:
+                    sample_indices = [0]
+                elif NUM_SAMPLES >= 2:
+                    sample_indices = [0, max_files - 1]
+                else:
+                    sample_indices = []
+            else:
+                # Random sampling
+                sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
+
+            for idx, file_idx in enumerate(sample_indices):
+                preprocessed_file = fif_input_files[file_idx]
+
+                # Match output file by name
+                output_file = None
+                for f in fif_output_files:
+                    if f.stem == preprocessed_file.stem or preprocessed_file.stem in f.stem:
+                        output_file = f
+                        break
+
+                if output_file is None:
+                    print(f"\nWarning: No matching output file found for {preprocessed_file.name}")
+                    continue
+
+                # Pass None for original_file to indicate 2-line mode
+                compare_fif_files(None, preprocessed_file, output_file, output_dir, idx + 1)
+        else:
+            print("\nSkipping .fif comparison (no files found)")
 
     print("\n" + "="*80)
     print("COMPARISON COMPLETE!")

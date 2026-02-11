@@ -27,11 +27,20 @@ INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"      
 PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'     # Where to save preprocessed .pt files (None = OUTPUT_DIR/tmp/pt_input)
 PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'    # Where to save model output .pt files (None = OUTPUT_DIR/tmp/pt_output)
 OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Output reconstructed .fif files
-CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
-UPSAMPLE_TO_CHANNELS = None  # None for no upsampling, or target channel count (e.g., 40, 64, 128)
-                             # New channels are added with zeros for the model to interpolate
-GPU_DEVICE = 6              # GPU device ID
+* output files always in output_dir
+* choose if it gets deleted
+* FLAG TO RETAIN PT FILES
+
+* keep the plotting functino 
+* (maybe remove pt and foucs on fif plotting)
+
+
+
+
+UPSAMPLE_TO_CHANNELS = None     # None for no upsampling, or target channel count (e.g., 40, 64, 128)
+                                # New channels are added with zeros for the model to interpolate
+GPU_DEVICE = 5                  # GPU device ID
 
 # =============================================================================
 # OPTION 1: Complete Pipeline (Recommended)
