@@ -6,24 +6,22 @@
 #   >> CUDA_VISIBLE_DEVICES=3 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
-from copy import deepcopy
 import gc
 import logging
 import os
 import time
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
-from timeit import default_timer as timer
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 import random
 import numpy as np
 from omegaconf import OmegaConf
 import torch
-import torch.nn.functional as F
-from torch.optim import lr_scheduler
-from torch.distributed.checkpoint.stateful import Stateful
 import matplotlib.pyplot as plt
+
+import torch.nn.attention.flex_attention
+torch.nn.attention.flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
 
 # To load model from HuggingFace.
 import json
@@ -70,7 +68,6 @@ load_dotenv()
 
 logger = logging.getLogger()
 
-
 @dataclass
 class TrainArgs:
     name: str = "lingua"
@@ -113,25 +110,6 @@ def process_batch_data(batch, data_processor, loss_weights,):
         batch = data_processor.process(**batch)
 
         return batch, loss_weights
-
-
-@dataclass
-class TrainState(Stateful):
-    step: int  # Nb of steps taken by the optimizer
-    acc_step: int  # Nb of accumulation steps done since last optimizer step
-    scheduler: lr_scheduler.LambdaLR
-
-    def state_dict(self) -> Dict[str, Any]:
-        return {
-            "step": self.step,
-            "acc_step": self.acc_step,
-            "scheduler": self.scheduler.state_dict(),
-        }
-
-    def load_state_dict(self, state_dict):
-        self.step = state_dict["step"]
-        self.acc_step = state_dict["acc_step"]
-        self.scheduler.load_state_dict(state_dict["scheduler"])
 
 preemption_flag = dict(flag=False)
 
@@ -548,8 +526,8 @@ def evaluate(args: TrainArgs):
     num_batches = 5
     batch_cntr = 0
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     dir_base = f'figures/zuna/cfg{cfg}/'
     print(f"Saving output figures to: {dir_base=}")
@@ -629,8 +607,10 @@ def evaluate(args: TrainArgs):
         logger.info("Model is built !")
         model_param_count = get_num_params(model)
 
-        model.sample = torch.compile(model.sample)
-        model.encoder = torch.compile(model.encoder)
+        if device.type == "cuda":
+            model.sample = torch.compile(model.sample)
+            model.encoder = torch.compile(model.encoder)
+
         model.eval()
 
         check_model_value_range(model, range=10.0, std=1.0)

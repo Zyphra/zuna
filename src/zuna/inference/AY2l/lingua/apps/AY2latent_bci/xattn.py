@@ -164,7 +164,12 @@ class CrossAttention(nn.Module):
         if attn_impl == "flex_attention":
             assert mask is None or isinstance(mask, BlockMask)
             xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-            output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+            # print(f"Inside xattn.CrossAttention.forward, xq.device.type={xq.device.type}")
+            # Use uncompiled flex_attention on CPU; flex_attention_comp triggers device-mismatch with block masks on CPU
+            if xq.device.type == "cuda":
+                output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+            else:
+                output = flex_attention(xq, xk, xv, block_mask=mask)
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
 
