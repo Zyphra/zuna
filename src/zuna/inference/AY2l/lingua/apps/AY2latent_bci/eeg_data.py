@@ -982,35 +982,11 @@ class EEGDataset_v2(IterableDataset):
                         "metadata": file_metadata}          # Pass through file metadata
                     )
                 else:
-                    #JM FIX FIX FIX - When batch is full, yield it AND add current sample to new batch
-                    # Without this, the sample that triggers overflow gets lost!
+                    # Batch is full, yield it
                     yield packed_batch
-
-                    # Reset and start new batch with current sample
-                    seqlen_accum = reshaped[s][5]
-
-                    # Apply channel dropout for current sample
-                    chan_id = reshaped[s][3]
-                    chan_do = chan_dropout[s]
-                    dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
-                    for d in chan_do:
-                        dropout_bool[chan_id==d] = True
-
-                    # Add current sample to new batch
-                    packed_batch = [
-                        {"eeg_signal": eeg_cat[s],
-                        "chan_pos": reshaped[s][1],
-                        "chan_pos_discrete": reshaped[s][2],
-                        "chan_id": reshaped[s][3],
-                        "t_coarse":reshaped[s][4],
-                        "seq_lens":reshaped[s][5],
-                        "chan_dropout": dropout_bool,
-                        "ids": ids,
-                        "dataset_id": dataset_id,
-                        "filename": str(m_path.name),
-                        "sample_idx": s,
-                        "metadata": file_metadata}
-                    ]
+                    # Reset for next batch
+                    packed_batch = []
+                    seqlen_accum = 0
 
                 # except Exception as e:
                 #     print(f"Error processing sample: {e} : {ids} : {m_path}")

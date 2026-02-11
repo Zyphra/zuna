@@ -992,6 +992,11 @@ def evaluate(args: TrainArgs):
             batch = next(batch_iterator)
             batch_cntr += 1
 
+            # Break after epoch 1 completes to avoid duplicate processing during inference
+            if epoch > 1:
+                print(f"\n[DEBUG] Stopping at batch {batch_cntr}: epoch {epoch} > 1, breaking to avoid duplicate processing")
+                break
+
             # if batch_cntr < 3:
             #     continue
 

@@ -166,6 +166,9 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     positions_for_pt = _epoch_cache['positions_list']
     n_remaining = len(epochs_for_pt)
 
+    # Increment PT file counter FIRST (before saving its value)
+    _epoch_cache['pt_file_counter'] += 1
+
     # Save metadata and channel_names to local variables before resetting
     saved_metadata = _epoch_cache['metadata'].copy() if _epoch_cache['metadata'] else {}
     saved_channel_names = _epoch_cache['channel_names']
@@ -177,9 +180,6 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     _epoch_cache['positions_list'] = []
     _epoch_cache['metadata'] = None  # Reset metadata to prevent carrying over to next file
     _epoch_cache['channel_names'] = None  # Reset channel names too
-
-    # Increment PT file counter
-    _epoch_cache['pt_file_counter'] += 1
 
     # Generate filename using saved values
     dataset_name = "ds000000"  # Always use ds000000 as base
