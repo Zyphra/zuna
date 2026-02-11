@@ -330,7 +330,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 
     for window_name, start_sample, end_sample in windows_to_plot:
         actual_window_samples = end_sample - start_sample
-        print(f"\n{window_name.upper()} window: {start_sample / sfreq:.1f}s - {end_sample / sfreq:.1f}s")
+        # print(f"\n{window_name.upper()} window: {start_sample / sfreq:.1f}s - {end_sample / sfreq:.1f}s")  # Disabled verbose output
 
         if include_original:
             data_original_window = data_original[:, start_sample:end_sample]
@@ -415,11 +415,12 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
         non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
         mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
 
-        print(f"\nMetrics (5s window):")
-        print(f"  MSE: {mse:.6e}")
-        print(f"  MAE: {mae:.6e}")
-        print(f"  Mean correlation: {mean_corr:.4f}")
-        print(f"  Correlation range: [{min(correlations):.4f}, {max(correlations):.4f}]")
+        # Disabled verbose output
+        # print(f"\nMetrics (5s window):")
+        # print(f"  MSE: {mse:.6e}")
+        # print(f"  MAE: {mae:.6e}")
+        # print(f"  Mean correlation: {mean_corr:.4f}")
+        # print(f"  Correlation range: [{min(correlations):.4f}, {max(correlations):.4f}]")
 
         # Create plot
         num_channels = data_preprocessed_window.shape[0]
@@ -484,7 +485,51 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         plt.close()
 
-        print(f"Saved: {output_path}")
+        # print(f"Saved: {output_path}")  # Disabled verbose output
+
+    # =========================================================================
+    # Generate third plot: Full duration, single channel (first channel)
+    # =========================================================================
+    channel_idx = 0  # First channel
+    ch_name = raw_preprocessed.ch_names[channel_idx] if channel_idx < len(raw_preprocessed.ch_names) else f'Ch {channel_idx}'
+
+    # Use full duration
+    full_duration = min_samples / sfreq
+    time = np.arange(min_samples) / sfreq
+
+    # Get data for first channel
+    if include_original:
+        data_orig_ch = data_original[channel_idx, :min_samples] * 1e6  # Convert to µV
+    data_prep_ch = data_preprocessed[channel_idx, :min_samples] * 1e6
+    data_out_ch = data_output[channel_idx, :min_samples] * 1e6
+
+    # Compute correlation
+    corr = np.corrcoef(data_prep_ch, data_out_ch)[0, 1]
+    mse = np.mean((data_prep_ch - data_out_ch) ** 2)
+
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(20, 4))
+
+    # Plot
+    if include_original:
+        ax.plot(time, data_orig_ch, 'gray', alpha=0.5, linewidth=0.5, label='Original', linestyle=':')
+    ax.plot(time, data_prep_ch, 'b-', alpha=0.7, linewidth=0.6, label='Preprocessed')
+    ax.plot(time, data_out_ch, 'r-', alpha=0.7, linewidth=0.6, label='Reconstructed')
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel('Amplitude (µV)', fontsize=12)
+    ax.set_title(f'FIF File {file_idx}: Full Duration - Channel {ch_name}\nr={corr:.4f}, MSE={mse:.6e}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10, loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    output_path = output_dir / f"fif_file{file_idx}_comparison_full_duration_ch{channel_idx}.png"
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # print(f"Saved: {output_path}")  # Disabled verbose output
 
 
 # =============================================================================
@@ -519,19 +564,19 @@ def compare_pipeline(
     print("="*80)
     print("ZUNA PIPELINE VISUAL INSPECTION")
     print("="*80)
-    print(f"Comparing {NUM_SAMPLES} random file(s) from input/output directories")
+    print(f"Comparing {num_samples} random file(s) from input/output directories")
     print()
 
     # Create output directory
-    output_dir = Path(OUTPUT_DIR)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Get list of files
-    fif_original_files = sorted(Path(FIF_ORIGINAL_DIR).glob("*.fif"))
-    fif_input_files = sorted(Path(FIF_INPUT_DIR).glob("*.fif"))
-    fif_output_files = sorted(Path(FIF_OUTPUT_DIR).glob("*.fif"))
-    pt_input_files = sorted(Path(PT_INPUT_DIR).glob("*.pt"))
-    pt_output_files = sorted(Path(PT_OUTPUT_DIR).glob("*.pt"))
+    fif_original_files = sorted(Path(FIF_ORIGINAL_DIR).glob("*.fif")) if Path(FIF_ORIGINAL_DIR).exists() else []
+    fif_input_files = sorted(Path(fif_input_dir).glob("*.fif"))
+    fif_output_files = sorted(Path(fif_output_dir).glob("*.fif"))
+    pt_input_files = sorted(Path(pt_input_dir).glob("*.pt"))
+    pt_output_files = sorted(Path(pt_output_dir).glob("*.pt"))
 
     print(f"Found {len(fif_original_files)} .fif original files")
     print(f"Found {len(fif_input_files)} .fif preprocessed files")
@@ -586,20 +631,20 @@ def compare_pipeline(
                 print(f"  ⚠️  {none_count} epochs filtered by model (channel count mismatch)")
 
     # Compare .pt files FIRST (so we get these even if FIF crashes)
-    if len(pt_input_files) > 0 and len(pt_output_files) > 0:
+    if plot_pt and len(pt_input_files) > 0 and len(pt_output_files) > 0:
         # Sample files (from ends or randomly)
         max_files = min(len(pt_input_files), len(pt_output_files))
-        if SAMPLE_FROM_ENDS:
+        if sample_from_ends:
             # Pick first and last files
-            if NUM_SAMPLES == 1:
+            if num_samples == 1:
                 sample_indices = [0]
-            elif NUM_SAMPLES >= 2:
+            elif num_samples >= 2:
                 sample_indices = [0, max_files - 1]
             else:
                 sample_indices = []
         else:
             # Random sampling
-            sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
+            sample_indices = random.sample(range(max_files), min(num_samples, max_files))
 
         for idx, file_idx in enumerate(sample_indices):
             input_file = pt_input_files[file_idx]
@@ -614,7 +659,7 @@ def compare_pipeline(
                 print(f"\nWarning: No matching output file found for {input_file.name}")
                 continue
 
-            compare_pt_files(input_file, output_file, output_dir, idx + 1)
+            compare_pt_files(input_file, output_file, output_dir_path, idx + 1)
     else:
         print("\nSkipping .pt comparison (no files found)")
 
@@ -624,17 +669,17 @@ def compare_pipeline(
         if len(fif_original_files) > 0 and len(fif_input_files) > 0 and len(fif_output_files) > 0:
             # Sample files (from ends or randomly)
             max_files = min(len(fif_original_files), len(fif_input_files), len(fif_output_files))
-            if SAMPLE_FROM_ENDS:
+            if sample_from_ends:
                 # Pick first and last files
-                if NUM_SAMPLES == 1:
+                if num_samples == 1:
                     sample_indices = [0]
-                elif NUM_SAMPLES >= 2:
+                elif num_samples >= 2:
                     sample_indices = [0, max_files - 1]
                 else:
                     sample_indices = []
             else:
                 # Random sampling
-                sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
+                sample_indices = random.sample(range(max_files), min(num_samples, max_files))
 
             for idx, file_idx in enumerate(sample_indices):
                 original_file = fif_original_files[file_idx]
@@ -661,25 +706,25 @@ def compare_pipeline(
                     print(f"\nWarning: No matching output file found for {original_file.name}")
                     continue
 
-                compare_fif_files(original_file, preprocessed_file, output_file, output_dir, idx + 1)
+                compare_fif_files(original_file, preprocessed_file, output_file, output_dir_path, idx + 1)
         else:
             print("\nSkipping .fif comparison (need all 3: original, preprocessed, output files)")
     else:
         # 2-line mode: preprocessed vs reconstructed only
-        if len(fif_input_files) > 0 and len(fif_output_files) > 0:
+        if plot_fif and len(fif_input_files) > 0 and len(fif_output_files) > 0:
             # Sample files (from ends or randomly)
             max_files = min(len(fif_input_files), len(fif_output_files))
-            if SAMPLE_FROM_ENDS:
+            if sample_from_ends:
                 # Pick first and last files
-                if NUM_SAMPLES == 1:
+                if num_samples == 1:
                     sample_indices = [0]
-                elif NUM_SAMPLES >= 2:
+                elif num_samples >= 2:
                     sample_indices = [0, max_files - 1]
                 else:
                     sample_indices = []
             else:
                 # Random sampling
-                sample_indices = random.sample(range(max_files), min(NUM_SAMPLES, max_files))
+                sample_indices = random.sample(range(max_files), min(num_samples, max_files))
 
             for idx, file_idx in enumerate(sample_indices):
                 preprocessed_file = fif_input_files[file_idx]
@@ -696,11 +741,11 @@ def compare_pipeline(
                     continue
 
                 # Pass None for original_file to indicate 2-line mode
-                compare_fif_files(None, preprocessed_file, output_file, output_dir, idx + 1)
+                compare_fif_files(None, preprocessed_file, output_file, output_dir_path, idx + 1)
         else:
             print("\nSkipping .fif comparison (no files found)")
 
     print("\n" + "="*80)
     print("COMPARISON COMPLETE!")
     print("="*80)
-    print(f"Plots saved to: {output_dir}")
+    print(f"Plots saved to: {output_dir_path}")

@@ -104,6 +104,28 @@ class EEGProcessor:
         raw, notch_freqs = self.filter.apply_notch(raw)
 
         # Save preprocessed FIF AFTER filtering but BEFORE normalization
+        # Zero out bad channels in raw data if specified (before saving preprocessed FIF)
+        if self.config.bad_channels is not None:
+            # Normalize channel names for matching
+            def normalize_name(name):
+                return name.replace(' ', '').lower()
+
+            # Find indices of bad channels
+            ch_names_normalized = {normalize_name(name): idx for idx, name in enumerate(raw.ch_names)}
+            bad_indices = []
+            for bad_name in self.config.bad_channels:
+                normalized = normalize_name(bad_name)
+                if normalized in ch_names_normalized:
+                    bad_indices.append(ch_names_normalized[normalized])
+
+            # Zero out bad channels in raw data
+            if bad_indices:
+                raw_data = raw.get_data()
+                for idx in bad_indices:
+                    raw_data[idx, :] = 0.0
+                raw = mne.io.RawArray(raw_data, raw.info, verbose=False)
+                print(f"✓ Zeroed out {len(bad_indices)} bad channels in raw data: {[raw.ch_names[i] for i in bad_indices]}")
+
         # This ensures the preprocessed FIF has the same filtering as the model input,
         # but is in the original scale (not normalized) for comparison
         if self.config.save_preprocessed_fif and self.config.preprocessed_fif_dir:
@@ -168,17 +190,39 @@ class EEGProcessor:
             channel_names=raw.ch_names
         )
 
-        # Apply upsampling if configured
+        # Zero out bad channels if specified
         channel_names_final = list(raw.ch_names)  # Convert to list for potential modification
+        if self.config.bad_channels is not None and len(epochs_list) > 0:
+            from .interpolation import zero_bad_channels
+            epochs_list = zero_bad_channels(
+                epochs_list,
+                channel_names_final,
+                bad_channel_names=self.config.bad_channels
+            )
+
+        # Apply upsampling if configured
         if self.config.target_channel_count is not None and len(epochs_list) > 0:
-            from .interpolation import upsample_channels
             current_n_channels = len(channel_names_final)
-            if current_n_channels < self.config.target_channel_count:
-                epochs_list, positions_list, channel_names_final = upsample_channels(
+
+            # Check if target_channel_count is an int or a list
+            if isinstance(self.config.target_channel_count, int):
+                # Mode 1: Upsample to target number of channels (greedy selection)
+                from .interpolation import upsample_channels
+                if current_n_channels < self.config.target_channel_count:
+                    epochs_list, positions_list, channel_names_final = upsample_channels(
+                        epochs_list,
+                        positions_list,
+                        channel_names_final,
+                        target_n_channels=self.config.target_channel_count
+                    )
+            elif isinstance(self.config.target_channel_count, list):
+                # Mode 2: Add specific channels by name
+                from .interpolation import add_specific_channels
+                epochs_list, positions_list, channel_names_final = add_specific_channels(
                     epochs_list,
                     positions_list,
                     channel_names_final,
-                    target_n_channels=self.config.target_channel_count
+                    target_channel_names=self.config.target_channel_count
                 )
 
         # Check if we have enough epochs to save

@@ -160,6 +160,7 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
 
     # Find maximum number of channels across all epochs
     max_channels = max(epoch.shape[0] for epoch in epochs_list)
+    print(f"[DEBUG] PT file has {len(epochs_list)} epochs, max {max_channels} channels across epochs")
 
     # Pad epochs to have same number of channels
     epochs_padded = []
@@ -174,6 +175,7 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
 
     # Concatenate along time axis
     continuous_data = np.concatenate(epochs_padded, axis=1)
+    print(f"[DEBUG] Concatenated continuous data shape: {continuous_data.shape}")
 
     # Denormalize if reversibility params available
     if 'reversibility' in metadata:
@@ -204,9 +206,12 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
 
     # Create MNE info
     # Use channel names from metadata, pad if needed
+    print(f"[DEBUG] PT to Raw: {len(channel_names)} channel names in metadata, {max_channels} channels in data")
     if len(channel_names) < max_channels:
         channel_names = channel_names + [f'Ch{i+1}' for i in range(len(channel_names), max_channels)]
+        print(f"[DEBUG] Padded channel names to {len(channel_names)}")
     elif len(channel_names) > max_channels:
+        print(f"[DEBUG] Truncating channel names from {len(channel_names)} to {max_channels}")
         channel_names = channel_names[:max_channels]
 
     info = mne.create_info(
@@ -214,6 +219,7 @@ def pt_to_raw(pt_path: str) -> mne.io.Raw:
         sfreq=sfreq,
         ch_types='eeg'
     )
+    print(f"[DEBUG] Created Raw with {len(channel_names[:max_channels])} channels: {channel_names[:5]}...{channel_names[-3:]}")
 
     # Create Raw object
     raw = mne.io.RawArray(continuous_data, info, verbose=False)

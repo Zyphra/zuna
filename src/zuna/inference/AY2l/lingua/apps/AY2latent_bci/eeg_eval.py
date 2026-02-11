@@ -283,19 +283,19 @@ def save_reconstructed_file(filename, file_data, export_dir):
     }
 
     #JM - Debug: Show reversibility params in metadata
-    if 'reversibility' in file_data['metadata']:
-        rev = file_data['metadata']['reversibility']
-        print(f"[METADATA] Saving with reversibility params: global_std={rev.get('global_std', 0)*1e6:.2f} µV, final_std={rev.get('final_std', 0)*1e6:.2f} µV")
-    else:
-        print(f"[METADATA] ⚠️  No reversibility params in metadata for {filename}!")
+    # if 'reversibility' in file_data['metadata']:
+    #     rev = file_data['metadata']['reversibility']
+    #     print(f"[METADATA] Saving with reversibility params: global_std={rev.get('global_std', 0)*1e6:.2f} µV, final_std={rev.get('final_std', 0)*1e6:.2f} µV")
+    # else:
+    #     print(f"[METADATA] ⚠️  No reversibility params in metadata for {filename}!")
 
     torch.save(output_dict, output_path)  #JM save pt - Actual save to disk
 
     #JM - Debug: Show how many epochs are valid vs None
-    total_epochs = len(file_data['data_reconstructed'])
-    none_epochs = sum(1 for x in file_data['data_reconstructed'] if x is None)
-    valid_epochs = total_epochs - none_epochs
-    print(f"[DEBUG] Saved {filename}: {valid_epochs}/{total_epochs} valid ({none_epochs} None, {100*none_epochs/total_epochs:.0f}% filtered)")
+    # total_epochs = len(file_data['data_reconstructed'])
+    # none_epochs = sum(1 for x in file_data['data_reconstructed'] if x is None)
+    # valid_epochs = total_epochs - none_epochs
+    # print(f"[DEBUG] Saved {filename}: {valid_epochs}/{total_epochs} valid ({none_epochs} None, {100*none_epochs/total_epochs:.0f}% filtered)")
 
     logger.info(f"✓ Saved and freed: {filename} ({len(file_data['data_reconstructed'])} samples)")
 
@@ -506,7 +506,7 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
         """
 
         for samp in range(len(model_signal_input_unwrapped)):
-            print(f"sample {samp}")
+            # print(f"sample {samp}")  # Disabled verbose output
 
             # (1). Plot EEG time course for data and reconstruction on same axis (one ax per channel). One figure per sample.
             if plot_eeg_signal_samples:
@@ -956,7 +956,7 @@ def evaluate(args: TrainArgs):
                     save_reconstructed_file(filename, file_data, export_dir)
                 else:
                     # Incomplete file - save with warning
-                    logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")
+                    # logger.warning(f"Incomplete file: {filename} ({collected}/{expected} samples collected)")  # Disabled verbose output
                     # You can choose to save incomplete files or skip them
                     # For now, let's save them with a flag
                     file_data['metadata']['incomplete'] = True
@@ -970,52 +970,53 @@ def evaluate(args: TrainArgs):
         # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     #JM debug - Analyze tmp_sample_idx and tmp_filenames before final check
-    print("\n" + "="*80)
-    print("DEBUG: Analyzing processed samples (tmp_sample_idx, tmp_filenames)")
-    print("="*80)
-
-    from collections import Counter
-    counts_idx = Counter(tmp_sample_idx)
-    counts_filenames = Counter(tmp_filenames)
-
-    print(f"\nTotal samples processed: {len(tmp_sample_idx)}")
-    print(f"Unique filenames: {len(set(tmp_filenames))}")
-
-    print("\nFilename occurrence counts:")
-    for filename, count in sorted(counts_filenames.items()):
-        print(f"  {filename}: {count} times")
-
-    print("\nChecking for duplicate sample indices:")
-    duplicates = {idx: count for idx, count in counts_idx.items() if count > 1}
-    if duplicates:
-        print(f"  Found {len(duplicates)} duplicate indices!")
-        for idx, count in sorted(duplicates.items())[:10]:
-            print(f"    Index {idx}: appeared {count} times")
-    else:
-        print("  No duplicates found")
-
-    # Check per-file
-    print("\nPer-file analysis:")
-    for filename in sorted(set(tmp_filenames)):
-        indices = [idx for idx, f in zip(tmp_sample_idx, tmp_filenames) if f == filename]
-        expected = 64  # Assuming 64 samples per file
-        print(f"\n  {filename}:")
-        print(f"    Processed: {len(indices)} times")
-        print(f"    Unique indices: {len(set(indices))}")
-        print(f"    Expected: {expected}")
-
-        # Check for missing indices
-        unique_indices = set(indices)
-        missing = [i for i in range(expected) if i not in unique_indices]
-        if missing:
-            print(f"    Missing indices: {missing[:20]}{'...' if len(missing) > 20 else ''}")
-
-        # Check for duplicates within this file
-        dup_count = len(indices) - len(unique_indices)
-        if dup_count > 0:
-            print(f"    ⚠️  {dup_count} duplicate entries!")
-
-    print("="*80 + "\n")
+    # Disabled verbose output - uncomment for debugging
+    # print("\n" + "="*80)
+    # print("DEBUG: Analyzing processed samples (tmp_sample_idx, tmp_filenames)")
+    # print("="*80)
+    #
+    # from collections import Counter
+    # counts_idx = Counter(tmp_sample_idx)
+    # counts_filenames = Counter(tmp_filenames)
+    #
+    # print(f"\nTotal samples processed: {len(tmp_sample_idx)}")
+    # print(f"Unique filenames: {len(set(tmp_filenames))}")
+    #
+    # print("\nFilename occurrence counts:")
+    # for filename, count in sorted(counts_filenames.items()):
+    #     print(f"  {filename}: {count} times")
+    #
+    # print("\nChecking for duplicate sample indices:")
+    # duplicates = {idx: count for idx, count in counts_idx.items() if count > 1}
+    # if duplicates:
+    #     print(f"  Found {len(duplicates)} duplicate indices!")
+    #     for idx, count in sorted(duplicates.items())[:10]:
+    #         print(f"    Index {idx}: appeared {count} times")
+    # else:
+    #     print("  No duplicates found")
+    #
+    # # Check per-file
+    # print("\nPer-file analysis:")
+    # for filename in sorted(set(tmp_filenames)):
+    #     indices = [idx for idx, f in zip(tmp_sample_idx, tmp_filenames) if f == filename]
+    #     expected = 64  # Assuming 64 samples per file
+    #     print(f"\n  {filename}:")
+    #     print(f"    Processed: {len(indices)} times")
+    #     print(f"    Unique indices: {len(set(indices))}")
+    #     print(f"    Expected: {expected}")
+    #
+    #     # Check for missing indices
+    #     unique_indices = set(indices)
+    #     missing = [i for i in range(expected) if i not in unique_indices]
+    #     if missing:
+    #         print(f"    Missing indices: {missing[:20]}{'...' if len(missing) > 20 else ''}")
+    #
+    #     # Check for duplicates within this file
+    #     dup_count = len(indices) - len(unique_indices)
+    #     if dup_count > 0:
+    #         print(f"    ⚠️  {dup_count} duplicate entries!")
+    #
+    # print("="*80 + "\n")
 
     # import pdb; pdb.set_trace()
 

@@ -439,20 +439,21 @@ class EEGDataset_v2(IterableDataset):
         total_global_workers = world_size * num_workers_per_rank
 
         #JM debug - Check for duplicate files in memmap_paths
-        from collections import Counter
-        print(f"\n{'='*80}")
-        print(f"[DATALOADER 🔍] Checking memmap_paths for duplicate files")
-        print(f"{'='*80}")
-        file_basenames = [p.name for p in self.memmap_paths]
-        file_counts = Counter(file_basenames)
-        duplicates = {name: count for name, count in file_counts.items() if count > 1}
-        if duplicates:
-            print(f"[DATALOADER 🔍] ⚠️  DUPLICATE FILES DETECTED in memmap_paths:")
-            for name, count in duplicates.items():
-                print(f"  📂 {name}: appears {count} times")
-        else:
-            print(f"[DATALOADER 🔍] ✓ No duplicate files in memmap_paths ({len(self.memmap_paths)} unique files)")
-        print(f"{'='*80}\n")
+        # Disabled verbose output - uncomment for debugging
+        # from collections import Counter
+        # print(f"\n{'='*80}")
+        # print(f"[DATALOADER 🔍] Checking memmap_paths for duplicate files")
+        # print(f"{'='*80}")
+        # file_basenames = [p.name for p in self.memmap_paths]
+        # file_counts = Counter(file_basenames)
+        # duplicates = {name: count for name, count in file_counts.items() if count > 1}
+        # if duplicates:
+        #     print(f"[DATALOADER 🔍] ⚠️  DUPLICATE FILES DETECTED in memmap_paths:")
+        #     for name, count in duplicates.items():
+        #         print(f"  📂 {name}: appears {count} times")
+        # else:
+        #     print(f"[DATALOADER 🔍] ✓ No duplicate files in memmap_paths ({len(self.memmap_paths)} unique files)")
+        # print(f"{'='*80}\n")
         
         if self.shuffle:
             # print("SHUFFLING DATASET!", end=" ")
@@ -488,14 +489,15 @@ class EEGDataset_v2(IterableDataset):
         )
 
         #JM debug - Show sharding logic
-        print(f"[DATALOADER 🔍] Worker {global_worker_id}/{total_global_workers} assigned {len(sharded_indices_for_this_worker)} files")
-        print(f"  Indices range: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
+        # Disabled verbose output
+        # print(f"[DATALOADER 🔍] Worker {global_worker_id}/{total_global_workers} assigned {len(sharded_indices_for_this_worker)} files")
+        # print(f"  Indices range: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
 
         if self.shuffle:
             # 4th. Shuffle the indices assigned to this worker.\
             rng_worker.shuffle(sharded_indices_for_this_worker)
             #JM debug - Show shuffling effect
-            print(f"[DATALOADER 🔍] After shuffle: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
+            # print(f"[DATALOADER 🔍] After shuffle: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
 
 
         # Init for sequence packing
@@ -504,7 +506,7 @@ class EEGDataset_v2(IterableDataset):
 
         #JM debug - Track file loads to detect duplicates
         loaded_files = []
-        print(f"[DATALOADER 🔍] Starting to load {len(sharded_indices_for_this_worker)} files...\n")
+        # print(f"[DATALOADER 🔍] Starting to load {len(sharded_indices_for_this_worker)} files...\n")
 
         # Loop over all the dataset files in this worker's shard.
         for file_load_idx, ids in enumerate(sharded_indices_for_this_worker):
@@ -512,8 +514,8 @@ class EEGDataset_v2(IterableDataset):
 
             #JM debug - Track each file load
             loaded_files.append(m_path.name)
-            if file_load_idx < 5 or file_load_idx >= len(sharded_indices_for_this_worker) - 3:
-                print(f"[DATALOADER 🔍] 📂 Loading file #{file_load_idx}: {m_path.name} (index {ids} in memmap_paths)")
+            # if file_load_idx < 5 or file_load_idx >= len(sharded_indices_for_this_worker) - 3:
+            #     print(f"[DATALOADER 🔍] 📂 Loading file #{file_load_idx}: {m_path.name} (index {ids} in memmap_paths)")
 
             # mmap = torch.load(m_path) #original line that worked for ALL TRAINING AND EVAL
             mmap = torch.load(m_path, weights_only=False) #jm | this line was needed ONLY for the Moabb eval datasets (not sure why)
@@ -792,23 +794,24 @@ class EEGDataset_v2(IterableDataset):
         # that didn't fill up a complete batch, we need to yield them.
         # Without this, the last ~40 samples get lost!
         if len(packed_batch) > 0:
-            print(f"[DATALOADER 🔍] Yielding final partial batch with {len(packed_batch)} samples")
+            # print(f"[DATALOADER 🔍] Yielding final partial batch with {len(packed_batch)} samples")
             yield packed_batch
 
         #JM debug - Summary of loaded files
-        print(f"\n{'='*80}")
-        print(f"[DATALOADER 🔍] Summary of files loaded by worker {global_worker_id}")
-        print(f"{'='*80}")
-        loaded_file_counts = Counter(loaded_files)
-        duplicates_loaded = {name: count for name, count in loaded_file_counts.items() if count > 1}
-        if duplicates_loaded:
-            print(f"[DATALOADER 🔍] ⚠️  FILES LOADED MULTIPLE TIMES by this worker:")
-            for name, count in duplicates_loaded.items():
-                print(f"  📂 {name}: loaded {count} times")
-        else:
-            print(f"[DATALOADER 🔍] ✓ No files loaded multiple times")
-        print(f"[DATALOADER 🔍] Worker {global_worker_id} finished: loaded {len(loaded_files)} files total ({len(set(loaded_files))} unique)")
-        print(f"{'='*80}\n")
+        # Disabled verbose output
+        # print(f"\n{'='*80}")
+        # print(f"[DATALOADER 🔍] Summary of files loaded by worker {global_worker_id}")
+        # print(f"{'='*80}")
+        # loaded_file_counts = Counter(loaded_files)
+        # duplicates_loaded = {name: count for name, count in loaded_file_counts.items() if count > 1}
+        # if duplicates_loaded:
+        #     print(f"[DATALOADER 🔍] ⚠️  FILES LOADED MULTIPLE TIMES by this worker:")
+        #     for name, count in duplicates_loaded.items():
+        #         print(f"  📂 {name}: loaded {count} times")
+        # else:
+        #     print(f"[DATALOADER 🔍] ✓ No files loaded multiple times")
+        # print(f"[DATALOADER 🔍] Worker {global_worker_id} finished: loaded {len(loaded_files)} files total ({len(set(loaded_files))} unique)")
+        # print(f"{'='*80}\n")
 
 
 def beta_sched(t_shape, device, dtype):
