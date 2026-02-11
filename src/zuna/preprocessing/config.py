@@ -2,7 +2,7 @@
 Configuration for EEG preprocessing pipeline.
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union, List
 
 
 @dataclass
@@ -83,7 +83,7 @@ class ProcessingConfig:
     max_duration_minutes: float = 999999.0  # Effectively disable chunking (process full files)
 
     # Channel upsampling
-    upsample_to_channels: Optional[int] = None  # If set, upsample to this many channels (e.g., 128)
+    target_channel_count: Optional[int] = None  # If set, upsample to this many channels (e.g., 40, 64, 128)
 
     # Save preprocessed FIF for comparison
     save_preprocessed_fif: bool = False  # Save preprocessed raw (before epoching) for ground truth comparison

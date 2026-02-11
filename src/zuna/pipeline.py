@@ -27,7 +27,7 @@ def zuna_preprocessing(
     drop_bad_channels: bool = False,
     drop_bad_epochs: bool = False,
     zero_out_artifacts: bool = False,
-    upsample_to_channels: Optional[int] = None,
+    target_channel_count: Optional[int] = None,
 ) -> None:
     """
     Preprocess .fif files to .pt format.
@@ -45,7 +45,7 @@ def zuna_preprocessing(
         drop_bad_channels: Whether to detect and drop bad channels (default: False)
         drop_bad_epochs: Whether to drop bad epochs (default: False)
         zero_out_artifacts: Whether to zero out artifact samples (default: False)
-        upsample_to_channels: Upsample to this many channels (None for no upsampling, e.g., 40)
+        target_channel_count: Upsample to this many channels (None for no upsampling, e.g., 40, 64, 128)
     """
     from zuna import process_directory
     from pathlib import Path
@@ -71,7 +71,7 @@ def zuna_preprocessing(
         drop_bad_channels=drop_bad_channels,
         drop_bad_epochs=drop_bad_epochs,
         zero_out_artifacts=zero_out_artifacts,
-        upsample_to_channels=upsample_to_channels
+        target_channel_count=target_channel_count
     )
 
     print(f"✓ Preprocessing complete")
@@ -214,42 +214,44 @@ def zuna_pt_to_fif(
 
 def run_zuna(
     input_dir: str,
-    output_dir: str,
+    working_dir: str,
     checkpoint_path: str,
-    upsample_factor: Optional[int] = None,
-    pt_input_dir: Optional[str] = None,
-    pt_output_dir: Optional[str] = None,
-    tmp_dir: Optional[str] = None,  # Auto-creates in output_dir/tmp if None
+    target_channel_count: Optional[int] = None,
+    keep_intermediate_files: bool = True,
     gpu_device: int = 0,
-    cleanup_tmp: bool = True
+    plot_pt_comparison: bool = False,
+    plot_fif_comparison: bool = False,
 ):
     """
-    Run the complete Zuna pipeline: .fif → latents → reconstructed .fif
+    Run the complete Zuna pipeline: .fif → .pt → model → .pt → .fif
 
     Args:
         input_dir: Directory containing input .fif files
-        output_dir: Directory to save final reconstructed .fif files
+        working_dir: Working directory where subdirectories will be created:
+                    - 1_fif_input/preprocessed/ (preprocessed FIF files)
+                    - 2_pt_input/ (preprocessed PT files)
+                    - 3_pt_output/ (model output PT files)
+                    - 4_fif_output/ (reconstructed FIF files)
         checkpoint_path: Path to model checkpoint
-        upsample_factor: Target number of channels for upsampling (None for no upsampling, e.g., 40).
-                        New channels are added with zeros for the model to interpolate.
-        pt_input_dir: Custom path for preprocessed .pt files (None = auto tmp)
-        pt_output_dir: Custom path for model output .pt files (None = auto tmp)
-        tmp_dir: Temporary directory (ignored if pt_input_dir/pt_output_dir specified)
+        target_channel_count: Target number of channels for upsampling (None for no upsampling, e.g., 40, 64, 128).
+                             New channels are added with zeros for the model to interpolate.
+        keep_intermediate_files: If False, deletes .pt files after reconstruction (default: True)
         gpu_device: GPU device ID (default: 0)
-        cleanup_tmp: Whether to delete tmp directory after completion (default: True)
+        plot_pt_comparison: Whether to plot .pt file comparisons (default: False)
+        plot_fif_comparison: Whether to plot .fif file comparisons (default: False)
 
     Returns:
         None
     """
 
     print("="*80)
-    print("ZUNA COMPLETE PIPELINE")
+    print("ZUNA PIPELINE")
     print("="*80)
-    print(f"Input:  {input_dir}")
-    print(f"Output: {output_dir}")
+    print(f"Input:      {input_dir}")
+    print(f"Working:    {working_dir}")
     print(f"Checkpoint: {checkpoint_path}")
-    print(f"Upsample: {upsample_factor if upsample_factor else 'None'}")
-    print(f"GPU: {gpu_device}")
+    if target_channel_count:
+        print(f"Channels:   {target_channel_count} (upsampling)")
     print("="*80)
 
     # Set GPU device
@@ -260,55 +262,31 @@ def run_zuna(
     if not input_path.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
-    # Setup paths for intermediate files
-    output_path = Path(output_dir)
-
-    # Use custom paths if provided, otherwise create tmp directories
-    if pt_input_dir is not None or pt_output_dir is not None:
-        # Custom paths specified
-        pt_input_path = Path(pt_input_dir) if pt_input_dir else output_path / "tmp" / "pt_input"
-        pt_output_path = Path(pt_output_dir) if pt_output_dir else output_path / "tmp" / "pt_output"
-        tmp_path = None  # Don't cleanup custom directories
-    else:
-        # Auto tmp directories
-        if tmp_dir is None:
-            tmp_path = output_path / "tmp"
-        else:
-            tmp_path = Path(tmp_dir)
-        pt_input_path = tmp_path / "pt_input"
-        pt_output_path = tmp_path / "pt_output"
+    # Setup working directory structure
+    working_path = Path(working_dir)
+    preprocessed_fif_dir = working_path / "1_fif_input" / "preprocessed"
+    pt_input_path = working_path / "2_pt_input"
+    pt_output_path = working_path / "3_pt_output"
+    fif_output_path = working_path / "4_fif_output"
 
     # Create directories
-    for dir_path in [pt_input_path, pt_output_path, output_path]:
+    for dir_path in [preprocessed_fif_dir, pt_input_path, pt_output_path, fif_output_path]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Setup preprocessed FIF directory (for ground truth comparison)
-        # Create a sibling folder at the same level as input, with _processed suffix
-        # E.g., if input is "1_fif_input", create "1_fif_input_processed"
-        preprocessed_fif_dir = input_path.parent / f"{input_path.name}_processed"
-
-        # Step 1: Preprocessing (with preprocessed FIF saving)
-        print()
+        # Step 1: Preprocessing
+        print("\n[1/3] Preprocessing...")
         from zuna import process_directory
         process_directory(
             input_dir=str(input_path),
             output_dir=str(pt_input_path),
-            target_sfreq=256.0,
-            epoch_duration=5.0,
-            apply_notch_filter=False,  # Disable for short files
-            save_preprocessed_fif=True,  # Save for comparison
+            save_preprocessed_fif=True,
             preprocessed_fif_dir=str(preprocessed_fif_dir),
-            drop_bad_channels=False,  # Keep all channels (no removal)
-            drop_bad_epochs=False,    # Keep all epochs (no removal)
-            zero_out_artifacts=False, # Keep all data (no zeroing)
-            upsample_to_channels=upsample_factor,  # Upsample to target channel count
+            target_channel_count=target_channel_count,
         )
-        print(f"✓ Preprocessing complete")
-        print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
 
         # Step 2: Model Inference
-        print()
+        print("\n[2/3] Model inference...")
         zuna_inference(
             input_dir=str(pt_input_path),
             output_dir=str(pt_output_path),
@@ -316,36 +294,39 @@ def run_zuna(
             gpu_device=gpu_device
         )
 
-        # Step 3: PT to FIF conversion
-        print()
+        # Step 3: Reconstruction
+        print("\n[3/3] Reconstructing FIF files...")
         zuna_pt_to_fif(
             input_dir=str(pt_output_path),
-            output_dir=str(output_path),
-            upsample_factor=upsample_factor
+            output_dir=str(fif_output_path),
         )
 
-        # Cleanup
-        if cleanup_tmp and tmp_path is not None:
-            print("\n" + "="*80)
-            print("Cleaning up temporary files...")
-            print("="*80)
-            shutil.rmtree(tmp_path)
-            print(f"✓ Removed: {tmp_path}")
+        # Cleanup intermediate files if requested
+        if not keep_intermediate_files:
+            print("\nCleaning up intermediate files...")
+            import shutil
+            shutil.rmtree(pt_input_path)
+            shutil.rmtree(pt_output_path)
+            print(f"✓ Removed PT files")
+
+        # Visualization
+        if plot_pt_comparison or plot_fif_comparison:
+            print("\nGenerating comparison plots...")
+            from zuna.visualization import compare_pipeline_outputs
+            compare_pipeline_outputs(
+                working_dir=str(working_path),
+                plot_pt=plot_pt_comparison,
+                plot_fif=plot_fif_comparison,
+            )
 
         print("\n" + "="*80)
         print("✓ PIPELINE COMPLETE!")
         print("="*80)
-        print(f"Final output: {output_path}")
+        print(f"Output: {fif_output_path}")
         print("="*80)
 
     except Exception as e:
         print(f"\n✗ Pipeline failed: {e}")
         import traceback
         traceback.print_exc()
-
-        # Optionally cleanup on failure too
-        if cleanup_tmp and tmp_path is not None and tmp_path.exists():
-            print(f"\nCleaning up tmp directory after error...")
-            shutil.rmtree(tmp_path)
-
         raise
