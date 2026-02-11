@@ -11,7 +11,7 @@ import os
 import sys
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union, List
 
 
 def zuna_preprocessing(
@@ -27,7 +27,7 @@ def zuna_preprocessing(
     drop_bad_channels: bool = False,
     drop_bad_epochs: bool = False,
     zero_out_artifacts: bool = False,
-    target_channel_count: Optional[int] = None,
+    target_channel_count: Optional[Union[int, List[str]]] = None,
 ) -> None:
     """
     Preprocess .fif files to .pt format.
@@ -45,7 +45,9 @@ def zuna_preprocessing(
         drop_bad_channels: Whether to detect and drop bad channels (default: False)
         drop_bad_epochs: Whether to drop bad epochs (default: False)
         zero_out_artifacts: Whether to zero out artifact samples (default: False)
-        target_channel_count: Upsample to this many channels (None for no upsampling, e.g., 40, 64, 128)
+        target_channel_count: None for no upsampling,
+                             int (e.g., 40, 64) for greedy selection to N channels,
+                             list (e.g., ['Cz', 'Pz']) for specific channels from 10-05 montage
     """
     from zuna import process_directory
     from pathlib import Path
@@ -216,7 +218,8 @@ def run_zuna(
     input_dir: str,
     working_dir: str,
     checkpoint_path: str,
-    target_channel_count: Optional[int] = None,
+    target_channel_count: Optional[Union[int, List[str]]] = None,
+    bad_channels: Optional[List[str]] = None,
     keep_intermediate_files: bool = True,
     gpu_device: int = 0,
     plot_pt_comparison: bool = False,
@@ -233,8 +236,11 @@ def run_zuna(
                     - 3_pt_output/ (model output PT files)
                     - 4_fif_output/ (reconstructed FIF files)
         checkpoint_path: Path to model checkpoint
-        target_channel_count: Target number of channels for upsampling (None for no upsampling, e.g., 40, 64, 128).
-                             New channels are added with zeros for the model to interpolate.
+        target_channel_count: None for no upsampling,
+                             int (e.g., 40, 64) for greedy selection to N channels,
+                             list (e.g., ['Cz', 'Pz']) for specific channels from 10-05 montage
+        bad_channels: List of channel names to zero out (e.g., ['Cz', 'Fz'])
+                     Channels will be set to zero but not removed
         keep_intermediate_files: If False, deletes .pt files after reconstruction (default: True)
         gpu_device: GPU device ID (default: 0)
         plot_pt_comparison: Whether to plot .pt file comparisons (default: False)
@@ -283,6 +289,7 @@ def run_zuna(
             save_preprocessed_fif=True,
             preprocessed_fif_dir=str(preprocessed_fif_dir),
             target_channel_count=target_channel_count,
+            bad_channels=bad_channels,
         )
 
         # Step 2: Model Inference
@@ -330,3 +337,217 @@ def run_zuna(
         import traceback
         traceback.print_exc()
         raise
+
+
+# =============================================================================
+# Step-by-step wrapper functions for easier individual step execution
+# =============================================================================
+
+def zuna_step1_preprocess(
+    input_dir: str,
+    working_dir: str,
+    target_channel_count: Optional[Union[int, List[str]]] = None,
+    bad_channels: Optional[List[str]] = None,
+) -> None:
+    """
+    Step 1: Preprocess .fif files to .pt format.
+
+    This is a simplified wrapper that only requires input_dir and working_dir.
+    It automatically creates the subdirectory structure:
+    - working_dir/1_fif_input/preprocessed/ (preprocessed FIF files)
+    - working_dir/2_pt_input/ (preprocessed PT files)
+
+    Args:
+        input_dir: Directory containing input .fif files
+        working_dir: Working directory (subdirectories will be created automatically)
+        target_channel_count: None for no upsampling,
+                             int (e.g., 40, 64) for greedy selection to N channels,
+                             list (e.g., ['Cz', 'Pz']) for specific channels
+        bad_channels: List of channel names to zero out (e.g., ['Cz', 'Fz'])
+                     Channels will be set to zero but not removed
+
+    Example:
+        >>> zuna_step1_preprocess(
+        ...     input_dir="/data/input",
+        ...     working_dir="/data/working",
+        ...     target_channel_count=40,
+        ...     bad_channels=['Cz', 'Fz']
+        ... )
+    """
+    from zuna import process_directory
+
+    working_path = Path(working_dir)
+    preprocessed_fif_dir = working_path / "1_fif_input" / "preprocessed"
+    pt_input_path = working_path / "2_pt_input"
+
+    # Create directories
+    preprocessed_fif_dir.mkdir(parents=True, exist_ok=True)
+    pt_input_path.mkdir(parents=True, exist_ok=True)
+
+    print("="*80)
+    print("STEP 1: Preprocessing (.fif → .pt)")
+    print("="*80)
+    print(f"Input:  {input_dir}")
+    print(f"Output: {pt_input_path}")
+    if bad_channels:
+        print(f"Bad channels (will be zeroed): {bad_channels}")
+    if target_channel_count:
+        print(f"Target channels: {target_channel_count}")
+    print("="*80 + "\n")
+
+    process_directory(
+        input_dir=input_dir,
+        output_dir=str(pt_input_path),
+        save_preprocessed_fif=True,
+        preprocessed_fif_dir=str(preprocessed_fif_dir),
+        target_channel_count=target_channel_count,
+        bad_channels=bad_channels,
+    )
+
+    print(f"\n✓ Preprocessing complete")
+    print(f"  PT files: {pt_input_path}")
+    print(f"  FIF files: {preprocessed_fif_dir}")
+
+
+def zuna_step2_inference(
+    working_dir: str,
+    checkpoint_path: str,
+    gpu_device: int = 0,
+) -> None:
+    """
+    Step 2: Run model inference on preprocessed .pt files.
+
+    This is a simplified wrapper that only requires working_dir.
+    It automatically uses:
+    - working_dir/2_pt_input/ (input PT files from step 1)
+    - working_dir/3_pt_output/ (model output PT files)
+
+    Args:
+        working_dir: Working directory containing 2_pt_input/
+        checkpoint_path: Path to model checkpoint
+        gpu_device: GPU device ID (default: 0)
+
+    Example:
+        >>> zuna_step2_inference(
+        ...     working_dir="/data/working",
+        ...     checkpoint_path="/path/to/checkpoint",
+        ...     gpu_device=0
+        ... )
+    """
+    working_path = Path(working_dir)
+    pt_input_path = working_path / "2_pt_input"
+    pt_output_path = working_path / "3_pt_output"
+
+    # Create output directory
+    pt_output_path.mkdir(parents=True, exist_ok=True)
+
+    print("="*80)
+    print("STEP 2: Model Inference (.pt → .pt)")
+    print("="*80)
+    print(f"Input:      {pt_input_path}")
+    print(f"Output:     {pt_output_path}")
+    print(f"Checkpoint: {checkpoint_path}")
+    print(f"GPU:        {gpu_device}")
+    print("="*80 + "\n")
+
+    # Set GPU device
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
+
+    zuna_inference(
+        input_dir=str(pt_input_path),
+        output_dir=str(pt_output_path),
+        checkpoint_path=checkpoint_path,
+        gpu_device=gpu_device
+    )
+
+    print(f"\n✓ Model inference complete")
+    print(f"  Output: {pt_output_path}")
+
+
+def zuna_step3_reconstruct(
+    working_dir: str,
+) -> None:
+    """
+    Step 3: Reconstruct .fif files from model output .pt files.
+
+    This is a simplified wrapper that only requires working_dir.
+    It automatically uses:
+    - working_dir/3_pt_output/ (model output PT files from step 2)
+    - working_dir/4_fif_output/ (reconstructed FIF files)
+
+    Args:
+        working_dir: Working directory containing 3_pt_output/
+
+    Example:
+        >>> zuna_step3_reconstruct(
+        ...     working_dir="/data/working"
+        ... )
+    """
+    working_path = Path(working_dir)
+    pt_output_path = working_path / "3_pt_output"
+    fif_output_path = working_path / "4_fif_output"
+
+    # Create output directory
+    fif_output_path.mkdir(parents=True, exist_ok=True)
+
+    print("="*80)
+    print("STEP 3: Reconstruction (.pt → .fif)")
+    print("="*80)
+    print(f"Input:  {pt_output_path}")
+    print(f"Output: {fif_output_path}")
+    print("="*80 + "\n")
+
+    zuna_pt_to_fif(
+        input_dir=str(pt_output_path),
+        output_dir=str(fif_output_path),
+    )
+
+    print(f"\n✓ Reconstruction complete")
+    print(f"  Output: {fif_output_path}")
+
+
+def zuna_step4_visualize(
+    working_dir: str,
+    plot_pt: bool = False,
+    plot_fif: bool = True,
+) -> None:
+    """
+    Step 4: Generate comparison plots (optional).
+
+    This visualizes the pipeline input vs output for quality inspection.
+    It automatically uses:
+    - working_dir/1_fif_input/preprocessed/ (preprocessed FIF files)
+    - working_dir/2_pt_input/ (preprocessed PT files)
+    - working_dir/3_pt_output/ (model output PT files)
+    - working_dir/4_fif_output/ (reconstructed FIF files)
+    - working_dir/FIGURES/ (output plots)
+
+    Args:
+        working_dir: Working directory containing pipeline outputs
+        plot_pt: Whether to plot PT file comparisons (default: False)
+        plot_fif: Whether to plot FIF file comparisons (default: True)
+
+    Example:
+        >>> zuna_step4_visualize(
+        ...     working_dir="/data/working",
+        ...     plot_fif=True
+        ... )
+    """
+    print("="*80)
+    print("STEP 4: Generating Comparison Plots")
+    print("="*80)
+    print(f"Working dir: {working_dir}")
+    print(f"Plot PT:     {plot_pt}")
+    print(f"Plot FIF:    {plot_fif}")
+    print("="*80 + "\n")
+
+    from zuna.visualization import compare_pipeline_outputs
+
+    compare_pipeline_outputs(
+        working_dir=working_dir,
+        plot_pt=plot_pt,
+        plot_fif=plot_fif,
+    )
+
+    print(f"\n✓ Visualization complete")
+    print(f"  Plots saved to: {Path(working_dir) / 'FIGURES'}")
