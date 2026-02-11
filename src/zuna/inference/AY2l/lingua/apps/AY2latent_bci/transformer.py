@@ -104,7 +104,11 @@ def create_document_mask(lengths: torch.Tensor,
         q_max_idx = lengths.sum() - 1
         kv_max_idx = kv_lengths.sum() - 1
 
-        def doc_mask_mod(b, h, q_idx, kv_idx):        
+        def doc_mask_mod(b, h, q_idx, kv_idx):
+            # flex_attention may pass indices on a different device (e.g. cuda); index tensors are on lengths.device (e.g. cpu)
+            dev = q_document_id.device
+            q_idx = q_idx.to(dev)
+            kv_idx = kv_idx.to(dev)
             q_idx_cap = torch.minimum(q_max_idx, q_idx)
             kv_idx_cap = torch.minimum(kv_max_idx, kv_idx)
             valid_idx = (q_idx <= q_max_idx) & (kv_idx <= kv_max_idx)
@@ -1047,7 +1051,8 @@ class EncoderDecoder(nn.Module):
     def sample(self, encoder_input: torch.Tensor, seq_lens: torch.Tensor, tok_idx: torch.Tensor, sample_steps: int = 50, cfg: float = 1.0):
 
         device = encoder_input.device
-        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        dtype = torch.bfloat16 # if device.type == "cuda" else torch.float16 # torch.float32
+        # CPU Autocast only supports dtypes of torch.bfloat16, torch.float16 currently.
         with torch.autocast(device.type, dtype=dtype):
 
             do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
@@ -1077,7 +1082,7 @@ class EncoderDecoder(nn.Module):
                     import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
-            dt = dt_time.unsqueeze(-1).unsqueeze(-1) # (CW) - added dbl unsqueeze(-1)
+            dt = dt_time.unsqueeze(-1).unsqueeze(-1)
 
             outputs = []
             for i in range(sample_steps, 0, -1):
@@ -1087,26 +1092,25 @@ class EncoderDecoder(nn.Module):
                 vc, _ = self.decoder(tokens=z.unsqueeze(1),
                                      cross_attended=enc_out, 
                                      timeD=t_model, 
-                                     seq_lens=seq_lens,                   # (CW) - for document masking in self-attention
-                                     cross_seq_lens=seq_lens,             # (CW) - for document masking in cross-attention (with CR=1)
-                                     tok_idx=tok_idx,                     # (CW) - pass in coarse time index for 1D RoPE
-                                     cross_tok_idx=tok_idx,               # (CW) - pass in coarse time index for 1D RoPE (with CR=1)               
+                                     seq_lens=seq_lens,                   # for document masking in self-attention
+                                     cross_seq_lens=seq_lens,             # for document masking in cross-attention (with CR=1)
+                                     tok_idx=tok_idx,                     
+                                     cross_tok_idx=tok_idx,                        
                 )
 
                 if cfg != 1.0:
-                    # vc_uncond, _ = self.decoder(z, torch.zeros_like(enc_out), t_model) # (CW) - was this
                     vc_uncond, _ = self.decoder(tokens=z.unsqueeze(1),
                                                 cross_attended=torch.zeros_like(enc_out), 
                                                 timeD=t_model, 
-                                                seq_lens=seq_lens,                          # (CW) - for document masking in self-attention
-                                                cross_seq_lens=seq_lens,                    # (CW) - for document masking in cross-attention (with CR=1)
-                                                tok_idx=tok_idx,                            # (CW) - pass in coarse time index for 1D RoPE
-                                                cross_tok_idx=tok_idx,                      # (CW) - pass in coarse time index for 1D RoPE (with CR=1)                
+                                                seq_lens=seq_lens,                          # for document masking in self-attention
+                                                cross_seq_lens=seq_lens,                    # for document masking in cross-attention (with CR=1)
+                                                tok_idx=tok_idx,                           
+                                                cross_tok_idx=tok_idx,                                
                     )
 
                     vc = vc_uncond + cfg * (vc - vc_uncond) # starts at unconditioned, moves toward conditioned as cfg increases
                     
-                z = z - dt * vc # <-- (CW) - should this be t or t_model or dt?
+                z = z - dt * vc
 
                 # Do not noise channel {x,y,z}-position in eeg_signal
                 if self.dont_noise_chan_xyz:
