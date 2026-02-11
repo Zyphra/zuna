@@ -52,119 +52,196 @@ def compare_pt_files(input_file, output_file, output_dir, file_idx):
     di = torch.load(input_file, weights_only=False)
     do = torch.load(output_file, weights_only=False)
 
-    print(f"\nInput has {len(di['data'])} samples")
-    print(f"Output has {len(do['data'])} samples")
+    n_epochs = len(di['data'])
+    print(f"\nTotal epochs: {n_epochs}")
 
-    # Compare first valid sample
-    num_samples_to_plot = min(1, len(di['data']))
+    # Analyze ALL epochs to see which are valid, None, or zero
+    valid_epochs = []
+    none_epochs = []
+    zero_epochs = []
 
-    for i in range(num_samples_to_plot):
-        orig_input = di['data'][i]
+    for i in range(n_epochs):
         recon_output = do['data'][i]
 
         if recon_output is None:
-            print(f"WARNING: Sample {i} reconstruction is None (skipping)")
-            continue
+            none_epochs.append(i)
+        elif isinstance(recon_output, (torch.Tensor, np.ndarray)):
+            output_array = recon_output.numpy() if isinstance(recon_output, torch.Tensor) else recon_output
+            if np.all(output_array == 0):
+                zero_epochs.append(i)
+            else:
+                valid_epochs.append(i)
+
+    print(f"  Valid epochs:  {len(valid_epochs)} ({100*len(valid_epochs)/n_epochs:.1f}%)")
+    print(f"  None epochs:   {len(none_epochs)} ({100*len(none_epochs)/n_epochs:.1f}%) - filtered by model")
+    print(f"  Zero epochs:   {len(zero_epochs)} ({100*len(zero_epochs)/n_epochs:.1f}%) - all zeros")
+
+    if len(valid_epochs) == 0:
+        print("\n⚠️  No valid epochs to plot (all are None or zero)!")
+        return
+
+    # Compute statistics for ALL valid epochs
+    print(f"\nComputing metrics for all {len(valid_epochs)} valid epochs...")
+    all_stds_input = []
+    all_stds_output = []
+    all_correlations = []
+    all_mse = []
+
+    for epoch_i in valid_epochs:
+        orig = di['data'][epoch_i]
+        recon = do['data'][epoch_i]
 
         # Convert to numpy
-        if isinstance(orig_input, torch.Tensor):
-            orig_input = orig_input.numpy()
-        if isinstance(recon_output, torch.Tensor):
-            recon_output = recon_output.numpy()
+        if isinstance(orig, torch.Tensor):
+            orig = orig.numpy()
+        if isinstance(recon, torch.Tensor):
+            recon = recon.numpy()
 
-        print(f"\nSample {i} shapes:")
-        print(f"  Input:  {orig_input.shape}")
-        print(f"  Output: {recon_output.shape}")
+        # Compute std
+        all_stds_input.append(orig.std())
+        all_stds_output.append(recon.std())
 
-        # Handle channel count mismatch
-        n_input_channels = orig_input.shape[0]
-        n_output_channels = recon_output.shape[0]
-
-        if n_output_channels != n_input_channels:
-            print(f"  Channel mismatch: padding output from {n_output_channels} to {n_input_channels} channels")
-            if n_output_channels < n_input_channels:
-                # Pad with zeros
-                padding = np.zeros((n_input_channels - n_output_channels, recon_output.shape[1]))
-                recon_output = np.vstack([recon_output, padding])
-            else:
-                # Truncate
-                recon_output = recon_output[:n_input_channels, :]
+        # Handle channel mismatch for metrics
+        n_in = orig.shape[0]
+        n_out = recon.shape[0]
+        if n_out < n_in:
+            padding = np.zeros((n_in - n_out, recon.shape[1]))
+            recon = np.vstack([recon, padding])
+        elif n_out > n_in:
+            recon = recon[:n_in, :]
 
         # Compute metrics
-        mse = np.mean((orig_input - recon_output) ** 2)
-        mae = np.mean(np.abs(orig_input - recon_output))
+        all_mse.append(np.mean((orig - recon) ** 2))
 
-        correlations = []
-        for ch in range(orig_input.shape[0]):
-            if ch < n_output_channels:
-                corr = np.corrcoef(orig_input[ch], recon_output[ch])[0, 1]
-                correlations.append(corr)
-            else:
-                correlations.append(0.0)
+        # Compute correlation per channel
+        epoch_corrs = []
+        for ch in range(min(n_in, n_out)):
+            corr = np.corrcoef(orig[ch], recon[ch])[0, 1]
+            if not np.isnan(corr):
+                epoch_corrs.append(corr)
+        if epoch_corrs:
+            all_correlations.append(np.mean(epoch_corrs))
 
-        # Mean correlation only over non-padded channels
-        non_zero_corrs = [c for i, c in enumerate(correlations) if i < n_output_channels]
-        mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
+    # Print summary statistics
+    print(f"\nSummary across all {len(valid_epochs)} valid epochs:")
+    print(f"  Input std:   mean={np.mean(all_stds_input):.6e}, range=[{np.min(all_stds_input):.6e}, {np.max(all_stds_input):.6e}]")
+    print(f"  Output std:  mean={np.mean(all_stds_output):.6e}, range=[{np.min(all_stds_output):.6e}, {np.max(all_stds_output):.6e}]")
+    print(f"  Correlation: mean={np.mean(all_correlations):.4f}, range=[{np.min(all_correlations):.4f}, {np.max(all_correlations):.4f}]")
+    print(f"  MSE:         mean={np.mean(all_mse):.6e}, range=[{np.min(all_mse):.6e}, {np.max(all_mse):.6e}]")
 
-        print(f"\nSample {i} metrics:")
-        print(f"  MSE: {mse:.6f}")
-        print(f"  MAE: {mae:.6f}")
-        print(f"  Mean correlation: {mean_corr:.4f}")
+    # Check if any turned to zero
+    zero_std_count = sum(1 for s in all_stds_output if s < 1e-10)
+    if zero_std_count > 0:
+        print(f"  ⚠️  {zero_std_count} epochs have near-zero output std!")
 
-        # Create plot
-        num_channels, num_timepoints = orig_input.shape
-        fig, axes = plt.subplots(num_channels, 1, figsize=(20, 2 * num_channels))
-        if num_channels == 1:
-            axes = [axes]
+    # Plot only 1 random valid epoch
+    epoch_to_plot = random.choice(valid_epochs)
+    print(f"\nPlotting 1 random valid epoch: {epoch_to_plot}")
 
-        for ch in range(num_channels):
-            ax = axes[ch]
-            time = np.arange(num_timepoints) / 256  # 256 Hz sampling rate
+    # Plot the selected epoch
+    epoch_i = epoch_to_plot
+    orig_input = di['data'][epoch_i]
+    recon_output = do['data'][epoch_i]
 
-            ax.plot(time, orig_input[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
+    # Convert to numpy
+    if isinstance(orig_input, torch.Tensor):
+        orig_input = orig_input.numpy()
+    if isinstance(recon_output, torch.Tensor):
+        recon_output = recon_output.numpy()
 
-            # Mark zero-padded channels differently
-            if ch < n_output_channels:
-                ax.plot(time, recon_output[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
-            else:
-                ax.plot(time, recon_output[ch], 'gray', alpha=0.3, linewidth=0.8, label='Zero-padded', linestyle='--')
+    print(f"\nPlotting epoch {epoch_i}:")
+    print(f"  Input shape:  {orig_input.shape}")
+    print(f"  Output shape: {recon_output.shape}")
 
-            corr = correlations[ch]
+    # Handle channel count mismatch
+    n_input_channels = orig_input.shape[0]
+    n_output_channels = recon_output.shape[0]
 
-            ch_label = f'Ch {ch}'
-            if ch >= n_output_channels:
-                ch_label = f'Ch {ch} (dropped)'
+    if n_output_channels != n_input_channels:
+        print(f"  Channel mismatch: padding output from {n_output_channels} to {n_input_channels} channels")
+        if n_output_channels < n_input_channels:
+            # Pad with zeros
+            padding = np.zeros((n_input_channels - n_output_channels, recon_output.shape[1]))
+            recon_output = np.vstack([recon_output, padding])
+        else:
+            # Truncate
+            recon_output = recon_output[:n_input_channels, :]
 
-            ax.set_ylabel(ch_label, fontsize=8)
-            ax.tick_params(labelsize=6)
-            ax.grid(True, alpha=0.3)
+    # Compute metrics for this epoch
+    mse = np.mean((orig_input - recon_output) ** 2)
+    mae = np.mean(np.abs(orig_input - recon_output))
 
-            if ch < n_output_channels:
-                ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
-                        ha='right', va='top', fontsize=7,
-                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-            else:
-                ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
-                        ha='right', va='top', fontsize=7,
-                        bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+    correlations = []
+    for ch in range(orig_input.shape[0]):
+        if ch < n_output_channels:
+            corr = np.corrcoef(orig_input[ch], recon_output[ch])[0, 1]
+            correlations.append(corr)
+        else:
+            correlations.append(0.0)
 
-            if ch == 0:
-                ax.legend(fontsize=8, loc='upper left')
-            if ch == num_channels - 1:
-                ax.set_xlabel('Time (s)', fontsize=10)
+    # Mean correlation only over non-padded channels
+    non_zero_corrs = [c for ch_i, c in enumerate(correlations) if ch_i < n_output_channels]
+    mean_corr = np.mean(non_zero_corrs) if len(non_zero_corrs) > 0 else 0.0
 
-        n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
-        title = f'PT File {file_idx} - Sample {i}: Original vs Reconstructed\nMean Corr: {mean_corr:.4f}, MSE: {mse:.6f}'
-        if n_padded > 0:
-            title += f' ({n_padded} channels zero-padded)'
-        plt.suptitle(title, fontsize=14, fontweight='bold')
-        plt.tight_layout()
+    print(f"\nEpoch {epoch_i} individual metrics:")
+    print(f"  MSE: {mse:.6f}")
+    print(f"  MAE: {mae:.6f}")
+    print(f"  Mean correlation: {mean_corr:.4f}")
 
-        output_path = output_dir / f"pt_file{file_idx}_sample{i}_comparison.png"
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        plt.close()
+    # Create plot
+    num_channels, num_timepoints = orig_input.shape
+    fig, axes = plt.subplots(num_channels, 1, figsize=(20, 2 * num_channels))
+    if num_channels == 1:
+        axes = [axes]
 
-        print(f"Saved: {output_path}")
+    for ch in range(num_channels):
+        ax = axes[ch]
+        time = np.arange(num_timepoints) / 256  # 256 Hz sampling rate
+
+        ax.plot(time, orig_input[ch], 'b-', alpha=0.7, linewidth=0.8, label='Original')
+
+        # Mark zero-padded channels differently
+        if ch < n_output_channels:
+            ax.plot(time, recon_output[ch], 'r-', alpha=0.7, linewidth=0.8, label='Reconstructed')
+        else:
+            ax.plot(time, recon_output[ch], 'gray', alpha=0.3, linewidth=0.8, label='Zero-padded', linestyle='--')
+
+        corr = correlations[ch]
+
+        ch_label = f'Ch {ch}'
+        if ch >= n_output_channels:
+            ch_label = f'Ch {ch} (dropped)'
+
+        ax.set_ylabel(ch_label, fontsize=8)
+        ax.tick_params(labelsize=6)
+        ax.grid(True, alpha=0.3)
+
+        if ch < n_output_channels:
+            ax.text(0.98, 0.95, f'r={corr:.3f}', transform=ax.transAxes,
+                    ha='right', va='top', fontsize=7,
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+        else:
+            ax.text(0.98, 0.95, 'r=N/A', transform=ax.transAxes,
+                    ha='right', va='top', fontsize=7,
+                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+        if ch == 0:
+            ax.legend(fontsize=8, loc='upper left')
+        if ch == num_channels - 1:
+            ax.set_xlabel('Time (s)', fontsize=10)
+
+    n_padded = n_input_channels - n_output_channels if n_output_channels < n_input_channels else 0
+    title = f'PT File {file_idx} - Epoch {epoch_i}: Original vs Reconstructed\nMean Corr: {mean_corr:.4f}, MSE: {mse:.6f}'
+    if n_padded > 0:
+        title += f' ({n_padded} channels zero-padded)'
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    output_path = output_dir / f"pt_file{file_idx}_epoch{epoch_i}_comparison.png"
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved: {output_path}")
 
 
 def compare_fif_files(input_file, output_file, output_dir, file_idx):
@@ -403,30 +480,53 @@ if __name__ == "__main__":
     print(f"Found {len(pt_input_files)} .pt input files")
     print(f"Found {len(pt_output_files)} .pt output files")
 
-    # Compare .fif files
-    if len(fif_input_files) > 0 and len(fif_output_files) > 0:
-        # Randomly sample files
-        sample_indices = random.sample(range(min(len(fif_input_files), len(fif_output_files))),
-                                      min(NUM_SAMPLES, len(fif_input_files), len(fif_output_files)))
+    # Show PT file summary for ALL files
+    if len(pt_input_files) > 0 and len(pt_output_files) > 0:
+        print("\n" + "="*80)
+        print("PT FILES EPOCH SUMMARY (All Files)")
+        print("="*80)
 
-        for idx, file_idx in enumerate(sample_indices):
-            input_file = fif_input_files[file_idx]
-            # Match output file by name
-            output_file = None
-            for f in fif_output_files:
-                if f.stem == input_file.stem or input_file.stem in f.stem:
-                    output_file = f
+        for pt_input in pt_input_files:
+            # Find matching output
+            pt_output = None
+            for f in pt_output_files:
+                if f.name == pt_input.name:
+                    pt_output = f
                     break
 
-            if output_file is None:
-                print(f"\nWarning: No matching output file found for {input_file.name}")
+            if pt_output is None:
+                print(f"\n{pt_input.name}: NO OUTPUT FILE")
                 continue
 
-            compare_fif_files(input_file, output_file, output_dir, idx + 1)
-    else:
-        print("\nSkipping .fif comparison (no files found)")
+            # Load and analyze
+            di = torch.load(pt_input, weights_only=False)
+            do = torch.load(pt_output, weights_only=False)
 
-    # Compare .pt files
+            n_epochs = len(di['data'])
+            valid_count = 0
+            none_count = 0
+            zero_count = 0
+
+            for i in range(n_epochs):
+                recon = do['data'][i]
+                if recon is None:
+                    none_count += 1
+                elif isinstance(recon, (torch.Tensor, np.ndarray)):
+                    arr = recon.numpy() if isinstance(recon, torch.Tensor) else recon
+                    if np.all(arr == 0):
+                        zero_count += 1
+                    else:
+                        valid_count += 1
+
+            orig_filename = di.get('metadata', {}).get('original_filename', 'UNKNOWN')
+            print(f"\n{pt_input.name}")
+            print(f"  Original FIF: {orig_filename}")
+            print(f"  Total: {n_epochs} | Valid: {valid_count} ({100*valid_count/n_epochs:.0f}%) | None: {none_count} ({100*none_count/n_epochs:.0f}%) | Zero: {zero_count}")
+
+            if none_count > 0:
+                print(f"  ⚠️  {none_count} epochs filtered by model (channel count mismatch)")
+
+    # Compare .pt files FIRST (so we get these even if FIF crashes)
     if len(pt_input_files) > 0 and len(pt_output_files) > 0:
         # Randomly sample files
         sample_indices = random.sample(range(min(len(pt_input_files), len(pt_output_files))),
@@ -448,6 +548,29 @@ if __name__ == "__main__":
             compare_pt_files(input_file, output_file, output_dir, idx + 1)
     else:
         print("\nSkipping .pt comparison (no files found)")
+
+    # Compare .fif files (after PT files, in case this crashes)
+    if len(fif_input_files) > 0 and len(fif_output_files) > 0:
+        # Randomly sample files
+        sample_indices = random.sample(range(min(len(fif_input_files), len(fif_output_files))),
+                                      min(NUM_SAMPLES, len(fif_input_files), len(fif_output_files)))
+
+        for idx, file_idx in enumerate(sample_indices):
+            input_file = fif_input_files[file_idx]
+            # Match output file by name
+            output_file = None
+            for f in fif_output_files:
+                if f.stem == input_file.stem or input_file.stem in f.stem:
+                    output_file = f
+                    break
+
+            if output_file is None:
+                print(f"\nWarning: No matching output file found for {input_file.name}")
+                continue
+
+            compare_fif_files(input_file, output_file, output_dir, idx + 1)
+    else:
+        print("\nSkipping .fif comparison (no files found)")
 
     print("\n" + "="*80)
     print("COMPARISON COMPLETE!")

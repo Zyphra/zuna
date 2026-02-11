@@ -98,7 +98,7 @@ def _add_epochs_to_cache(
 
     saved_files = []
 
-    # Save complete PT files (64 epochs each)
+    #JM save pt - Save complete PT files (64 epochs each) when cache is full
     while len(_epoch_cache['data_list']) >= config.epochs_per_file:
         output_file = _save_pt_from_cache(output_path, config)
         if output_file:
@@ -137,7 +137,7 @@ def _save_pt_from_cache(output_path: Path, config: ProcessingConfig) -> Optional
     )
     output_file = output_path / output_filename
 
-    # Save
+    #JM save pt - Call save_pt to write this batch of epochs to disk
     from .io import save_pt
     save_pt(
         epochs_for_pt,
@@ -161,39 +161,47 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     if _epoch_cache['metadata'] is None:
         return None
 
-    # Get remaining epochs
+    # Get remaining epochs and save metadata BEFORE clearing cache
     epochs_for_pt = _epoch_cache['data_list']
     positions_for_pt = _epoch_cache['positions_list']
     n_remaining = len(epochs_for_pt)
 
+    # Save metadata and channel_names to local variables before resetting
+    saved_metadata = _epoch_cache['metadata'].copy() if _epoch_cache['metadata'] else {}
+    saved_channel_names = _epoch_cache['channel_names']
+    saved_file_counter = _epoch_cache['file_counter']
+    saved_pt_file_counter = _epoch_cache['pt_file_counter']
+
     # Clear cache
     _epoch_cache['data_list'] = []
     _epoch_cache['positions_list'] = []
+    _epoch_cache['metadata'] = None  # Reset metadata to prevent carrying over to next file
+    _epoch_cache['channel_names'] = None  # Reset channel names too
 
     # Increment PT file counter
     _epoch_cache['pt_file_counter'] += 1
 
-    # Generate filename
+    # Generate filename using saved values
     dataset_name = "ds000000"  # Always use ds000000 as base
     output_filename = _generate_output_filename(
         dataset_name=dataset_name,
-        file_counter=_epoch_cache['file_counter'],
-        pt_file_idx=_epoch_cache['pt_file_counter'],
+        file_counter=saved_file_counter,
+        pt_file_idx=saved_pt_file_counter,
         n_epochs=n_remaining,
-        metadata=_epoch_cache['metadata'],
+        metadata=saved_metadata,
         epochs_list=epochs_for_pt
     )
     output_file = output_path / output_filename
 
-    # Save
+    #JM save pt - Flush remaining epochs (< 64) to final PT file
     from .io import save_pt
     save_pt(
         epochs_for_pt,
         positions_for_pt,
-        _epoch_cache['channel_names'],
+        saved_channel_names,
         str(output_file),
-        metadata=_epoch_cache['metadata'],
-        reversibility_params=_epoch_cache['metadata'].get('reversibility')
+        metadata=saved_metadata,
+        reversibility_params=saved_metadata.get('reversibility')
     )
 
     return str(output_file)

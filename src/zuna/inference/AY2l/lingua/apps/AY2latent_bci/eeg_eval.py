@@ -373,7 +373,7 @@ def save_reconstructed_file(filename, file_data, export_dir):
     output_path = Path(export_dir) / filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save with same structure as input files
+    #JM save pt - Save reconstructed PT file with same structure as input
     output_dict = {
         'data': file_data['data_reconstructed'],        # List of reconstructed samples
         'data_original': file_data['data_original'],    # List of original samples (for comparison)
@@ -381,7 +381,14 @@ def save_reconstructed_file(filename, file_data, export_dir):
         'metadata': file_data['metadata']
     }
 
-    torch.save(output_dict, output_path)
+    torch.save(output_dict, output_path)  #JM save pt - Actual save to disk
+
+    #JM - Debug: Show how many epochs are valid vs None
+    total_epochs = len(file_data['data_reconstructed'])
+    none_epochs = sum(1 for x in file_data['data_reconstructed'] if x is None)
+    valid_epochs = total_epochs - none_epochs
+    print(f"[DEBUG] Saved {filename}: {valid_epochs}/{total_epochs} valid ({none_epochs} None, {100*none_epochs/total_epochs:.0f}% filtered)")
+
     logger.info(f"✓ Saved and freed: {filename} ({len(file_data['data_reconstructed'])} samples)")
 
 
@@ -397,7 +404,6 @@ def check_and_save_complete_files(results_accumulator, export_dir):
         List of filenames that were saved (to be removed from accumulator)
     """
     completed_files = []
-
     for filename, file_data in results_accumulator.items():
         expected = file_data['expected_samples']
         collected = file_data['collected_samples']
@@ -656,8 +662,9 @@ def compare_models_weight_by_weight(model, model2, rtol=1e-5, atol=1e-8):
 
 
 def evaluate(args: TrainArgs):
-
-    plot_eeg_signal_samples = True      # Plot raw eeg for data and model reconstruction for single samples
+    tmp_sample_idx = []
+    tmp_filenames = []
+    plot_eeg_signal_samples = False      # Plot raw eeg for data and model reconstruction for single samples
     print_batch_stats = False
     compute_mne_interpolated_signals = True
 
@@ -979,14 +986,21 @@ def evaluate(args: TrainArgs):
             #     continue
 
             eeg_signal = batch['eeg_signal']
-            # batch_ids = batch.pop('ids', None)
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
 
-            #jm saving pt files - pop metadata fields before processing
-            batch_filenames = batch.pop('filename', None)
-            batch_sample_indices = batch.pop('sample_idx', None)
-            batch_metadata_list = batch.pop('metadata', None)
+            batch_filenames = batch.pop('filename', None)           #JM
+            batch_sample_indices = batch.pop('sample_idx', None)    #JM
+            batch_metadata_list = batch.pop('metadata', None)       #JM
+            
+            # import pdb; pdb.set_trace()
+            # jm remove
+            from collections import Counter
+            count = Counter(batch_filenames)
+            print(count)
+            count = Counter(batch_sample_indices)
+            print(count)
+
 
             with torch.no_grad():
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
@@ -1071,10 +1085,18 @@ def evaluate(args: TrainArgs):
                 # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
                 eeg_sig_norm = 10.0  # Must match the value in make_batch_iterator
 
+                # #JM - Debug: Show which samples are in this batch
+                # if batch_cntr % 10 == 0:  # Print every 10th batch to avoid spam
+                #     print(f"[DEBUG] Batch {batch_cntr}: Processing {len(model_signal_output_unwrapped)} samples")
+                #     print(f"  Files: {set(batch_filenames)}")
+                #     print(f"  Sample indices: {batch_sample_indices[:10]}{'...' if len(batch_sample_indices) > 10 else ''}")
+
                 for i in range(len(model_signal_output_unwrapped)):
                     filename = batch_filenames[i]
                     sample_idx = batch_sample_indices[i]
                     metadata = batch_metadata_list[i]
+                    tmp_sample_idx.append(sample_idx)
+                    tmp_filenames.append(filename)
 
                     # Initialize file entry if first time seeing this file
                     if filename not in results_accumulator:
@@ -1094,10 +1116,17 @@ def evaluate(args: TrainArgs):
 
                     # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
                     file_entry = results_accumulator[filename]
+                    #JM - Debug: Track which sample indices are being processed
+                    if file_entry['collected_samples'] == 0:  # First sample from this file
+                        print(f"[DEBUG] Starting file {filename}: expecting {file_entry['expected_samples']} samples")
+                    if file_entry['collected_samples'] < 5 or file_entry['collected_samples'] >= file_entry['expected_samples'] - 3:
+                        print(f"  Storing sample_idx={sample_idx} (#{file_entry['collected_samples']+1}/{file_entry['expected_samples']})")
+
                     file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
                     file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
                     file_entry['channel_positions'][sample_idx] = model_position_input_unwrapped[i].reshape(-1, tc, 3)[:, 0, :]
                     file_entry['collected_samples'] += 1
+
 
                 # Check if any files are complete and save them
                 completed = check_and_save_complete_files(results_accumulator, export_dir)
@@ -1162,6 +1191,23 @@ def evaluate(args: TrainArgs):
 
         # print("After looping over dataloader")
         # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
+    import pdb; pdb.set_trace()
+    print(tmp_sample_idx)
+    print(tmp_filenames)
+
+    from collections import Counter
+    counts_idx = Counter(tmp_sample_idx)
+    counts_filenames = Counter(tmp_filenames)
+    print(counts_idx)
+    print(counts_filenames)
+
+    #jm remove
+    # count = Counter(batch_filenames)
+    # count = Counter(batch_sample_indices)
+
+
+            
+
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
