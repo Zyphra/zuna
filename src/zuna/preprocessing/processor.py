@@ -171,14 +171,27 @@ class EEGProcessor:
         # Apply upsampling if configured
         channel_names_final = list(raw.ch_names)  # Convert to list for potential modification
         if self.config.target_channel_count is not None and len(epochs_list) > 0:
-            from .interpolation import upsample_channels
             current_n_channels = len(channel_names_final)
-            if current_n_channels < self.config.target_channel_count:
-                epochs_list, positions_list, channel_names_final = upsample_channels(
+
+            # Check if target_channel_count is an int or a list
+            if isinstance(self.config.target_channel_count, int):
+                # Mode 1: Upsample to target number of channels (greedy selection)
+                from .interpolation import upsample_channels
+                if current_n_channels < self.config.target_channel_count:
+                    epochs_list, positions_list, channel_names_final = upsample_channels(
+                        epochs_list,
+                        positions_list,
+                        channel_names_final,
+                        target_n_channels=self.config.target_channel_count
+                    )
+            elif isinstance(self.config.target_channel_count, list):
+                # Mode 2: Add specific channels by name
+                from .interpolation import add_specific_channels
+                epochs_list, positions_list, channel_names_final = add_specific_channels(
                     epochs_list,
                     positions_list,
                     channel_names_final,
-                    target_n_channels=self.config.target_channel_count
+                    target_channel_names=self.config.target_channel_count
                 )
 
         # Check if we have enough epochs to save
