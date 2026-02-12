@@ -61,6 +61,13 @@ class EEGProcessor:
 
         raw = raw.copy()  # Don't modify original
 
+        # Save original filename BEFORE any modifications (RawArray creation loses filenames)
+        import os
+        if raw.filenames and raw.filenames[0] is not None:
+            original_filename = os.path.basename(str(raw.filenames[0]))
+        else:
+            original_filename = "preprocessed_raw.fif"
+
         # Track bad channels from original raw.info['bads'] (if enabled)
         channels_marked_bad_in_raw = set(raw.info['bads']) if self.config.zero_bad_channels_from_raw else set()
 
