@@ -140,23 +140,8 @@ class EEGProcessor:
             preprocessed_dir = Path(self.config.preprocessed_fif_dir)
             preprocessed_dir.mkdir(parents=True, exist_ok=True)
 
-            # Keep original filename but save in preprocessed directory
-            import os
-
-            # Debug: Check filenames state
-            print(f"DEBUG: raw.filenames = {raw.filenames}")
-            print(f"DEBUG: raw.filenames[0] = {raw.filenames[0] if raw.filenames else 'EMPTY'}")
-            print(f"DEBUG: type = {type(raw.filenames[0]) if raw.filenames else 'N/A'}")
-
-            # Convert PosixPath to string explicitly before using os.path.basename
-            if raw.filenames and raw.filenames[0] is not None:
-                filename_str = str(raw.filenames[0])
-                original_name = os.path.basename(filename_str)
-            else:
-                original_name = "preprocessed_raw.fif"
-            if not original_name.endswith('.fif'):
-                original_name = original_name.replace('.fif', '') + '_preprocessed.fif'
-            preprocessed_path = preprocessed_dir / original_name
+            # Use the saved original filename (captured at line 67 before RawArray creation)
+            preprocessed_path = preprocessed_dir / original_filename
 
             # Save filtered raw data BEFORE normalization (original scale, filtered)
             raw.save(str(preprocessed_path), overwrite=True, verbose=False)
