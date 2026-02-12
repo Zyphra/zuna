@@ -43,7 +43,7 @@ dependencies = [
     "blobfile",
     "wandb",
     "lm-eval",
-    "pynvml",
+    "nvidia-ml-py", 
     "transformers", 
     "huggingface-hub", 
     "einops", 
@@ -53,7 +53,6 @@ dependencies = [
     "python-dotenv",
     "ipython"
 ]
-
 
 # Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)
 [tool.setuptools.package-dir]

@@ -30,8 +30,10 @@ from safetensors.torch import load_file as safe_load
 
 
 from lingua.args import dataclass_from_dict, dump_config
-
 from utils_pt_mne import interpolate_signals_with_mne
+
+from collections import defaultdict
+import re
 
 from apps.AY2latent_bci.eeg_data import (
     EEGProcessor,
@@ -282,7 +284,7 @@ def save_reconstructed_file(filename, file_data, export_dir):
         'metadata': file_data['metadata']
     }
 
-    #JM - Debug: Show reversibility params in metadata
+    # Debug: Show reversibility params in metadata
     # if 'reversibility' in file_data['metadata']:
     #     rev = file_data['metadata']['reversibility']
     #     print(f"[METADATA] Saving with reversibility params: global_std={rev.get('global_std', 0)*1e6:.2f} µV, final_std={rev.get('final_std', 0)*1e6:.2f} µV")
@@ -291,7 +293,7 @@ def save_reconstructed_file(filename, file_data, export_dir):
 
     torch.save(output_dict, output_path)  #JM save pt - Actual save to disk
 
-    #JM - Debug: Show how many epochs are valid vs None
+    # Debug: Show how many epochs are valid vs None
     # total_epochs = len(file_data['data_reconstructed'])
     # none_epochs = sum(1 for x in file_data['data_reconstructed'] if x is None)
     # valid_epochs = total_epochs - none_epochs
@@ -530,8 +532,8 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
 
 def evaluate(args: TrainArgs):
 
-    plot_eeg_signal_samples = True      # Plot raw eeg for data and model reconstruction for single samples
-    compute_mne_interpolated_signals = True
+    plot_eeg_signal_samples = False      # Plot raw eeg for data and model reconstruction for single samples
+    compute_mne_interpolated_signals = False
 
     sample_steps = 50    # for diffusion process in .sample - Default is 50
     cfg = 1.0            # for diffusion process in .sample - Default is 1.0 (i.e., no cfg)
@@ -539,8 +541,8 @@ def evaluate(args: TrainArgs):
     num_batches = 5
     batch_cntr = 0
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     tmp_sample_idx = []
     tmp_filenames = []
@@ -571,8 +573,7 @@ def evaluate(args: TrainArgs):
         world_mesh = get_device_mesh(args.distributed, device=device)
         logger.info(f"Starting job: {args.name}")
 
-        # build dataloader
-        # need dp world size and rank
+        # build dataloader - need dp world size and rank
         dp_mesh = world_mesh["dp_replicate"]
         dp_degree = dp_mesh.size()
         dp_rank = dp_mesh.get_local_rank()
@@ -714,8 +715,7 @@ def evaluate(args: TrainArgs):
 
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-        #JM debug - Track (filename, sample_idx) occurrences as a matrix
-        from collections import defaultdict
+        # Debug - Track (filename, sample_idx) occurrences as a matrix
         sample_occurrence_matrix = defaultdict(lambda: defaultdict(int))  # [filename][sample_idx] = count
         file_max_samples = {}  # Track expected max samples per file
 
@@ -731,12 +731,11 @@ def evaluate(args: TrainArgs):
             eeg_signal = batch['eeg_signal']
             batch_idx = batch.pop('idx', None)
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. if left in, breaks things below and not training on these.
+            batch_filenames = batch.pop('filename', None)         
+            batch_sample_indices = batch.pop('sample_idx', None)    
+            batch_metadata_list = batch.pop('metadata', None)      
 
-            batch_filenames = batch.pop('filename', None)           #JM
-            batch_sample_indices = batch.pop('sample_idx', None)    #JM
-            batch_metadata_list = batch.pop('metadata', None)       #JM
-
-            #JM debug - Populate occurrence matrix for this batch
+            # Debug - Populate occurrence matrix for this batch
             if batch_filenames and batch_sample_indices:
                 for filename, sample_idx in zip(batch_filenames, batch_sample_indices):
                     sample_occurrence_matrix[filename][sample_idx] += 1
@@ -744,14 +743,14 @@ def evaluate(args: TrainArgs):
                     # Track max samples expected per file (from metadata if available)
                     if filename not in file_max_samples:
                         # Try to get from metadata or infer from filename
-                        import re
+                        
                         match = re.search(r'_d\d+_(\d+)_', filename)  # Extract num samples from filename like d30_00064_
                         if match:
                             file_max_samples[filename] = int(match.group(1))
                         else:
                             file_max_samples[filename] = 64  # Default assumption
 
-            #JM debug - Print matrix every 50 batches to show duplicates/missing
+            #Debug - Print matrix every 50 batches to show duplicates/missing
             if batch_cntr % 50 == 0:
                 print(f"\n{'='*80}")
                 print(f"[DEBUG MATRIX] After {batch_cntr} batches:")
@@ -851,18 +850,15 @@ def evaluate(args: TrainArgs):
                                                             batch=batch, 
                                                             args=args)    
 
-                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
                 # eeg_signal_unwrapped: original data | is list, each item has ch*timepoints
                 # model_signal_input_unwrapped: input with dropped channels
                 # model_signal_output_unwrapped, output of the model
                 # chan_pos = model_position_input_unwrapped[0].reshape(-1,tc,3)[:,0,:] #channel position requires this reshape
 
-                #jm saving pt files - accumulate results for each sample
-                # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
-                eeg_sig_norm = args.data.data_norm
+                # Save pt files - accumulate results for each sample
+                eeg_sig_norm = args.data.data_norm # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
 
-                # #JM - Debug: Show which samples are in this batch
+                # #Debug: Show which samples are in this batch
                 # if batch_cntr % 10 == 0:  # Print every 10th batch to avoid spam
                 #     print(f"[DEBUG] Batch {batch_cntr}: Processing {len(model_signal_output_unwrapped)} samples")
                 #     print(f"  Files: {set(batch_filenames)}")
@@ -893,7 +889,7 @@ def evaluate(args: TrainArgs):
 
                     # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
                     file_entry = results_accumulator[filename]
-                    #JM - Debug: Track which sample indices are being processed
+                    # Debug: Track which sample indices are being processed
                     if file_entry['collected_samples'] == 0:  # First sample from this file
                         print(f"[DEBUG] Starting file {filename}: expecting {file_entry['expected_samples']} samples")
                     if file_entry['collected_samples'] < 5 or file_entry['collected_samples'] >= file_entry['expected_samples'] - 3:
@@ -966,10 +962,7 @@ def evaluate(args: TrainArgs):
 
             logger.info(f"All files saved to: {export_dir}")
 
-        # print("After looping over dataloader")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
-
-    #JM debug - Analyze tmp_sample_idx and tmp_filenames before final check
+    # Debug - Analyze tmp_sample_idx and tmp_filenames before final check
     # Disabled verbose output - uncomment for debugging
     # print("\n" + "="*80)
     # print("DEBUG: Analyzing processed samples (tmp_sample_idx, tmp_filenames)")
@@ -1020,12 +1013,10 @@ def evaluate(args: TrainArgs):
 
     # import pdb; pdb.set_trace()
 
-    #JM debug - Final verification: Check all saved PT files for None/missing samples
+    # Debug - Final verification: Check all saved PT files for None/missing samples
     print("\n" + "="*80)
     print("FINAL VERIFICATION: Checking all saved PT files")
     print("="*80)
-
-    # Both torch and Path are already imported at module level, don't re-import
 
     export_path = Path(export_dir)
     saved_pt_files = sorted(export_path.glob("*.pt"))
@@ -1071,10 +1062,6 @@ def evaluate(args: TrainArgs):
     print(f"Valid samples: {total_valid} ({100*total_valid/total_samples if total_samples > 0 else 0:.1f}%)")
     print(f"None samples: {total_none} ({100*total_none/total_samples if total_samples > 0 else 0:.1f}%)")
     print("="*80 + "\n")
-
-
-            
-
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 

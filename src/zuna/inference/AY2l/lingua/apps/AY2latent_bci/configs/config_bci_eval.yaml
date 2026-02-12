@@ -19,15 +19,15 @@ model:
   num_fine_time_pts: 32 
   rope_dim: 4 # 0 = NoPE, 1 = 1D-RoPE in seq-dim, 4 = 4D-RoPE in {x,y,z,tc}.
   rope_theta: 10000.0
-
   tok_idx_type: "{x,y,z,tc}"  # null, "t_coarse", "chan_id", "stack_arange_seqlen", "{x,y,z,tc}" 
-
   stft_global_sigma: 0.1 # Noising process std - should match signal std.
   dropout_type: "zeros" # {"zero", "learnable"}
 
 
 data:
   data_dir: ./tutorials/data/2_pt_input/      # Input .pt files to be processed.
+  # data_dir: /data/datasets/bci/dataset_downloads_cw/pip_test/working/2_pt_input
+  # data_dir: /data/datasets/bci/pip_test_2
   export_dir: ./tutorials/data/3_pt_output/   # Where to save output .pt files after processing.
 
   glob_filter: "**/*.pt" # this filters the dataset to only contain files with this string in it.
@@ -45,8 +45,7 @@ data:
 
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
-  batch_size: 1   # Hardcoded to 1. NOT USING. PACKING SAMPLES IN DATALOADER! Effective batch size determined by target_packed_seqlen.
-  target_packed_seqlen: 3000 #50000 #4 # 32768              # Target seqlen for packed samples. This is essentially batch size.
+  target_packed_seqlen: 1            # Target seqlen for packed samples. This is essentially batch size.
 
   # For dataloader.
   num_workers: 0              
