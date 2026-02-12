@@ -750,39 +750,44 @@ class EEGDataset_v2(IterableDataset):
             dataset_id = int(m_path.name.split('_')[0].removeprefix('ds'))    # standardized dataset id 🎉
 
             for s in indx:
+                #JM CHANGE ORDER
+                
                 # try:
+                # Apply channel dropout here to get boolean mask
+                chan_id = reshaped[s][3]
+                chan_do = chan_dropout[s]
+                dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
+                for d in chan_do:
+                    dropout_bool[chan_id==d] = True
+
+                #jm saving pt files - create sample dict (moved outside if/else to fix sample loss bug)
+                sample_dict = {
+                    "eeg_signal": eeg_cat[s],
+                    "chan_pos": reshaped[s][1],
+                    "chan_pos_discrete": reshaped[s][2],
+                    "chan_id": reshaped[s][3],
+                    "t_coarse": reshaped[s][4],
+                    "seq_lens": reshaped[s][5],
+                    "chan_dropout": dropout_bool,
+                    "ids": ids,
+                    "dataset_id": dataset_id,
+                    "filename": str(m_path.name),      # Track source filename
+                    "sample_idx": s,                    # Track sample index within file
+                    "metadata": file_metadata           # Pass through file metadata
+                }
+
                 if seqlen_accum < self.target_packed_seqlen:
-                    # Collect up samples in packed_batch until seqlen_accum > self.target_seqlen
+                    # Batch not full yet, add sample to current batch
                     seqlen_accum += reshaped[s][5]
-
-                    # Apply channel dropout here to get boolean mask
-                    chan_id = reshaped[s][3]
-                    chan_do = chan_dropout[s]
-                    dropout_bool = torch.zeros_like(chan_id, dtype=torch.bool)
-                    for d in chan_do:
-                        dropout_bool[chan_id==d] = True
-
-                    #jm saving pt files - add tracking fields for metadata and file reconstruction
-                    packed_batch.append(
-                        {"eeg_signal": eeg_cat[s],
-                        "chan_pos": reshaped[s][1],
-                        "chan_pos_discrete": reshaped[s][2],
-                        "chan_id": reshaped[s][3],
-                        "t_coarse":reshaped[s][4],
-                        "seq_lens":reshaped[s][5],
-                        "chan_dropout": dropout_bool,
-                        "ids": ids,
-                        "dataset_id": dataset_id,
-                        "filename": str(m_path.name),      # Track source filename
-                        "sample_idx": s,                    # Track sample index within file
-                        "metadata": file_metadata}          # Pass through file metadata
-                    )
+                    packed_batch.append(sample_dict)
                 else:
-                    # Batch is full, yield it
+                    # Batch is full, yield it and start new batch with current sample
                     yield packed_batch
-                    # Reset for next batch
-                    packed_batch = []
-                    seqlen_accum = 0
+                    #JM CHANGE ORDER
+                    packed_batch = [sample_dict]       # Start new batch with current sample
+                    seqlen_accum = reshaped[s][5]      # Initialize seqlen with current sample
+
+                import pdb; pdb.set_trace()
 
                 # except Exception as e:
                 #     print(f"Error processing sample: {e} : {ids} : {m_path}")

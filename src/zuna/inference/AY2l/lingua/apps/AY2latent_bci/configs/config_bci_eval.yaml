@@ -45,7 +45,7 @@ data:
 
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
-  target_packed_seqlen: 1            # Target seqlen for packed samples. This is essentially batch size.
+  target_packed_seqlen: 100000            # Target seqlen for packed samples. This is essentially batch size.
 
   # For dataloader.
   num_workers: 0              
