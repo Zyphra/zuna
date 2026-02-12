@@ -104,11 +104,7 @@ def create_document_mask(lengths: torch.Tensor,
         q_max_idx = lengths.sum() - 1
         kv_max_idx = kv_lengths.sum() - 1
 
-        def doc_mask_mod(b, h, q_idx, kv_idx):
-            # flex_attention may pass indices on a different device (e.g. cuda); index tensors are on lengths.device (e.g. cpu)
-            dev = q_document_id.device
-            q_idx = q_idx.to(dev)
-            kv_idx = kv_idx.to(dev)
+        def doc_mask_mod(b, h, q_idx, kv_idx):        
             q_idx_cap = torch.minimum(q_max_idx, q_idx)
             kv_idx_cap = torch.minimum(kv_max_idx, kv_idx)
             valid_idx = (q_idx <= q_max_idx) & (kv_idx <= kv_max_idx)
@@ -700,7 +696,7 @@ class EncoderTransformer(BaseTransformer):
             self.use_compression_free_conv_stem = True
 
             self.compression_free_conv_stem_input = CausalConv2DStem(
-                input_features = args.input_dim, # (CW) *2 was for STFT amplitude & phase
+                input_features = args.input_dim,
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,

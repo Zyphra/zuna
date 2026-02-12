@@ -277,7 +277,7 @@ class BCIDatasetArgs:
     decoder_input_channels: int = 64 
     channel_dropout_prob: int | float = -1.0 # Probability of applying channel dropout (negative to turn off)
 
-    batch_size: int = 32
+    batch_size: int = 1 #32 # HARDCODE TO 1. NOT USING. Effective batch size determined by target_packed_seqlen.
     target_packed_seqlen: int =  16384
     do_N_epochs: Union[int, None] = None
     num_workers: int = 8
