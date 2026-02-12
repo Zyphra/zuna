@@ -541,8 +541,8 @@ def evaluate(args: TrainArgs):
     num_batches = 5
     batch_cntr = 0
 
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
 
     tmp_sample_idx = []
     tmp_filenames = []
