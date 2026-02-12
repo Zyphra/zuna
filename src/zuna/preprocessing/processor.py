@@ -135,7 +135,18 @@ class EEGProcessor:
 
             # Keep original filename but save in preprocessed directory
             import os
-            original_name = os.path.basename(raw.filenames[0]) if raw.filenames else "preprocessed_raw.fif"
+
+            # Debug: Check filenames state
+            print(f"DEBUG: raw.filenames = {raw.filenames}")
+            print(f"DEBUG: raw.filenames[0] = {raw.filenames[0] if raw.filenames else 'EMPTY'}")
+            print(f"DEBUG: type = {type(raw.filenames[0]) if raw.filenames else 'N/A'}")
+
+            # Convert PosixPath to string explicitly before using os.path.basename
+            if raw.filenames and raw.filenames[0] is not None:
+                filename_str = str(raw.filenames[0])
+                original_name = os.path.basename(filename_str)
+            else:
+                original_name = "preprocessed_raw.fif"
             if not original_name.endswith('.fif'):
                 original_name = original_name.replace('.fif', '') + '_preprocessed.fif'
             preprocessed_path = preprocessed_dir / original_name
