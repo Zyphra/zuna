@@ -215,6 +215,7 @@ def _process_single_file(
     processor: EEGProcessor,
     config: ProcessingConfig,
 ) -> Dict[str, Any]:
+
     """
     Process a single EEG file (internal helper for parallel processing).
 
@@ -327,6 +328,7 @@ def _process_single_file(
             'file_counter': file_counter,
             'error': str(e)
         }
+
 
 
 def process_directory(
@@ -492,7 +494,6 @@ def process_directory(
     print(f"  Total epochs processed: {total_epochs}")
     print(f"  Total PT files saved: {total_pt_files}")
     print(f"  Output directory: {output_dir}")
-
     return results
 
 

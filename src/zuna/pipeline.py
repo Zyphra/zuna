@@ -122,7 +122,7 @@ def zuna_inference(
     config = OmegaConf.load(str(config_path))
     config.data.data_dir = str(Path(input_dir).absolute())
     config.data.export_dir = str(output_path.absolute())
-    config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
+    # config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
     config.dump_dir = str(output_path.absolute())
 
     # Save modified config to temporary file
