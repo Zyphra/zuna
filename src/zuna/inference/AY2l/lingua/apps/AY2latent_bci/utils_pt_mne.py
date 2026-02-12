@@ -323,213 +323,212 @@ def interpolate_signals_with_mne(
 #
 # For subsampling the EGI montage for Localize-MI evals dataset
 #
+# def egi_montage_subsampling(montage: int, subject_coords: "torch.Tensor"):
+#     """
+#     Subsample the EGI montage for Localize-MI evals dataset.
 
-def egi_montage_subsampling(montage: int, subject_coords: "torch.Tensor"):
-    """
-    Subsample the EGI montage for Localize-MI evals dataset.
+#     Args:
+#         montage: The montage to subsample
+#         subject_coords: The subject coordinates
 
-    Args:
-        montage: The montage to subsample
-        subject_coords: The subject coordinates
+#     Returns:
+#         The dropped indices
 
-    Returns:
-        The dropped indices
+#         Developed from: https://github.com/iTCf/mikulan_et_al_2020/blob/1bfed2384b523c8ffcc98b09faad3e94b3e0b138/fx_source_loc.py#L128
+#     """
+#     if montage not in [16, 32, 64, 128, 256]:
+#         raise ValueError("Montage must be one of [16, 32, 64, 128, 256]")
 
-        Developed from: https://github.com/iTCf/mikulan_et_al_2020/blob/1bfed2384b523c8ffcc98b09faad3e94b3e0b138/fx_source_loc.py#L128
-    """
-    if montage not in [16, 32, 64, 128, 256]:
-        raise ValueError("Montage must be one of [16, 32, 64, 128, 256]")
+#     subj_pos = (
+#         subject_coords.detach().cpu().numpy()
+#         if hasattr(subject_coords, "detach")
+#         else np.asarray(subject_coords)
+#     )
+#     if subj_pos.shape != (256, 3):
+#         raise ValueError(f"subject_coords must have shape (256,3), got {subj_pos.shape}")
 
-    subj_pos = (
-        subject_coords.detach().cpu().numpy()
-        if hasattr(subject_coords, "detach")
-        else np.asarray(subject_coords)
-    )
-    if subj_pos.shape != (256, 3):
-        raise ValueError(f"subject_coords must have shape (256,3), got {subj_pos.shape}")
+#     subj_names = [f"E{i+1}" for i in range(256)]
 
-    subj_names = [f"E{i+1}" for i in range(256)]
+#     if montage != 16:
+#         montages = (
+#             "SUBJECT-256",
+#             "GSN-HydroCel-128",
+#             "GSN-HydroCel-64_1.0",
+#             "GSN-HydroCel-32",
+#         )
 
-    if montage != 16:
-        montages = (
-            "SUBJECT-256",
-            "GSN-HydroCel-128",
-            "GSN-HydroCel-64_1.0",
-            "GSN-HydroCel-32",
-        )
+#         all_monts = {}
+#         all_pos = {}
+#         all_names = {}
 
-        all_monts = {}
-        all_pos = {}
-        all_names = {}
+#         all_names["SUBJECT-256"] = subj_names
+#         all_pos["SUBJECT-256"] = subj_pos
+#         all_monts["SUBJECT-256"] = None
 
-        all_names["SUBJECT-256"] = subj_names
-        all_pos["SUBJECT-256"] = subj_pos
-        all_monts["SUBJECT-256"] = None
+#         for m in montages[1:]:
+#             mont = mne.channels.make_standard_montage(m)
+#             ch_names = mont.ch_names
 
-        for m in montages[1:]:
-            mont = mne.channels.make_standard_montage(m)
-            ch_names = mont.ch_names
+#             ch_pos = mont._get_ch_pos()
+#             pos = np.array([ch_pos[k] for k in ch_pos.keys()])
 
-            ch_pos = mont._get_ch_pos()
-            pos = np.array([ch_pos[k] for k in ch_pos.keys()])
+#             if m == "GSN-HydroCel-32":
+#                 ch_names = ch_names[:-1]
+#                 pos = pos[:-1]
 
-            if m == "GSN-HydroCel-32":
-                ch_names = ch_names[:-1]
-                pos = pos[:-1]
+#             all_names[m] = ch_names
+#             all_pos[m] = pos
+#             all_monts[m] = mont
 
-            all_names[m] = ch_names
-            all_pos[m] = pos
-            all_monts[m] = mont
+#         if montage == 256:
+#             names_256 = all_names["SUBJECT-256"]
+#             return {"names": list(names_256), "dists": [0.0] * len(names_256)}
 
-        if montage == 256:
-            names_256 = all_names["SUBJECT-256"]
-            return {"names": list(names_256), "dists": [0.0] * len(names_256)}
+#         # Only compute mapping for requested montage
+#         if montage == 32:
+#             target_mont_name = "GSN-HydroCel-32"
+#         elif montage == 64:
+#             target_mont_name = "GSN-HydroCel-64_1.0"
+#         elif montage == 128:
+#             target_mont_name = "GSN-HydroCel-128"
+#         else:
+#             raise ValueError(f"Unhandled montage={montage}")
 
-        # Only compute mapping for requested montage
-        if montage == 32:
-            target_mont_name = "GSN-HydroCel-32"
-        elif montage == 64:
-            target_mont_name = "GSN-HydroCel-64_1.0"
-        elif montage == 128:
-            target_mont_name = "GSN-HydroCel-128"
-        else:
-            raise ValueError(f"Unhandled montage={montage}")
+#         subsamp_chs = []
+#         subsamp_dists = []
+#         used = set()  # enforce uniqueness of selected subject electrodes
 
-        subsamp_chs = []
-        subsamp_dists = []
-        used = set()  # enforce uniqueness of selected subject electrodes
+#         for c, p in zip(all_names[target_mont_name], all_pos[target_mont_name]):
+#             dist_all = np.sqrt(np.sum((all_pos["SUBJECT-256"] - p) ** 2, axis=1))
 
-        for c, p in zip(all_names[target_mont_name], all_pos[target_mont_name]):
-            dist_all = np.sqrt(np.sum((all_pos["SUBJECT-256"] - p) ** 2, axis=1))
+#             # Legacy special-cases, but now uniqueness-safe
+#             if ((target_mont_name == "GSN-HydroCel-128") and (c == "E11")) or (
+#                 (target_mont_name == "GSN-HydroCel-64_1.0") and (c == "E8")
+#             ):
+#                 preferred_name = "E15"
+#                 if preferred_name not in used:
+#                     used.add(preferred_name)
+#                     subsamp_dists.append(float(dist_all[14]))  # index 14 corresponds to E15
+#                     subsamp_chs.append(preferred_name)
+#                 else:
+#                     # fall back to nearest unused
+#                     for j in np.argsort(dist_all):
+#                         j = int(j)
+#                         name_j = all_names["SUBJECT-256"][j]
+#                         if name_j not in used:
+#                             used.add(name_j)
+#                             subsamp_dists.append(float(dist_all[j]))
+#                             subsamp_chs.append(name_j)
+#                             break
+#             else:
+#                 # pick nearest unused subject electrode
+#                 for j in np.argsort(dist_all):
+#                     j = int(j)
+#                     name_j = all_names["SUBJECT-256"][j]
+#                     if name_j not in used:
+#                         used.add(name_j)
+#                         subsamp_dists.append(float(dist_all[j]))
+#                         subsamp_chs.append(name_j)
+#                         break
 
-            # Legacy special-cases, but now uniqueness-safe
-            if ((target_mont_name == "GSN-HydroCel-128") and (c == "E11")) or (
-                (target_mont_name == "GSN-HydroCel-64_1.0") and (c == "E8")
-            ):
-                preferred_name = "E15"
-                if preferred_name not in used:
-                    used.add(preferred_name)
-                    subsamp_dists.append(float(dist_all[14]))  # index 14 corresponds to E15
-                    subsamp_chs.append(preferred_name)
-                else:
-                    # fall back to nearest unused
-                    for j in np.argsort(dist_all):
-                        j = int(j)
-                        name_j = all_names["SUBJECT-256"][j]
-                        if name_j not in used:
-                            used.add(name_j)
-                            subsamp_dists.append(float(dist_all[j]))
-                            subsamp_chs.append(name_j)
-                            break
-            else:
-                # pick nearest unused subject electrode
-                for j in np.argsort(dist_all):
-                    j = int(j)
-                    name_j = all_names["SUBJECT-256"][j]
-                    if name_j not in used:
-                        used.add(name_j)
-                        subsamp_dists.append(float(dist_all[j]))
-                        subsamp_chs.append(name_j)
-                        break
+#         kept = set(subsamp_chs)
+#         all_256_names = list(all_names["SUBJECT-256"])
+#         dropped_indices = [i for i, ch in enumerate(all_256_names) if ch not in kept]
 
-        kept = set(subsamp_chs)
-        all_256_names = list(all_names["SUBJECT-256"])
-        dropped_indices = [i for i, ch in enumerate(all_256_names) if ch not in kept]
+#     if montage == 16:
+#         dropped_indices = make_16_montage(subject_coords)
 
-    if montage == 16:
-        dropped_indices = make_16_montage(subject_coords)
-
-    return dropped_indices
-
-
-def make_16_montage(subject_coords: "torch.Tensor"):
-    """
-    We don't have a standard 16-channel EGI montage, so create one by:
-    1. Selecting maximum pairwise distance points to get 16 "spread out" channels from the 32-channel montage
-    2. Mapping the size-16 subset of the 32-channel montage to the nearest per-subject 256-channel electrodes
-    """
-
-    def montage_xyz(montage_name: str):
-        mont = mne.channels.make_standard_montage(montage_name)
-        ch_pos = mont._get_ch_pos()
-        names = list(ch_pos.keys())
-        xyz = np.array([ch_pos[k] for k in names], dtype=float)
-
-        # Drop reference chans in the 32 montage: keep only "E*"
-        if montage_name == "GSN-HydroCel-32":
-            keep = [i for i, n in enumerate(names) if n.startswith("E")]
-            names = [names[i] for i in keep]
-            xyz = xyz[keep]
-
-        return names, xyz
-
-    def nearest_map(source_xyz, target_xyz):
-        diffs = source_xyz[:, None, :] - target_xyz[None, :, :]
-        dists = np.sqrt(np.sum(diffs**2, axis=2))
-        nn_idx = np.argmin(dists, axis=1)
-        nn_dist = dists[np.arange(dists.shape[0]), nn_idx]
-        return nn_idx, nn_dist
-
-    def farthest_point_sampling(xyz, k, start_idx=None):
-        n = xyz.shape[0]
-        if k > n:
-            raise ValueError(f"k={k} > n={n}")
-
-        if start_idx is None:
-            start_idx = int(np.argmax(np.sum(xyz**2, axis=1)))
-
-        selected = [start_idx]
-        d2 = np.sum((xyz - xyz[start_idx])**2, axis=1)
-
-        for _ in range(1, k):
-            j = int(np.argmax(d2))
-            selected.append(j)
-            d2 = np.minimum(d2, np.sum((xyz - xyz[j])**2, axis=1))
-
-        return selected
-
-    xyz256 = (
-        subject_coords.detach().cpu().numpy()
-        if hasattr(subject_coords, "detach")
-        else np.asarray(subject_coords)
-    )
-    if xyz256.shape != (256, 3):
-        raise ValueError(f"subject_coords must have shape (256,3), got {xyz256.shape}")
-    names256 = [f"E{i+1}" for i in range(256)]
-
-    names32, xyz32 = montage_xyz("GSN-HydroCel-32")
-
-    k = 16
-    start_idx = None
-
-    sel32 = farthest_point_sampling(xyz32, k=k, start_idx=start_idx)
-    nn_idx, nn_dist = nearest_map(xyz32[sel32], xyz256)  # selected 32 -> subject 256
-
-    kept_256 = []
-    kept_d = []
-    for idx, d in zip(nn_idx, nn_dist):
-        idx = int(idx)
-        if idx not in kept_256:
-            kept_256.append(idx)
-            kept_d.append(float(d))
-
-    kept_256 = sorted(kept_256)
-    kept_names = [names256[i] for i in kept_256]  # retained for parity / debugging
-    dropped_256 = sorted(set(range(len(names256))) - set(kept_256))
-
-    return dropped_256
+#     return dropped_indices
 
 
-def kept_indices_from_dropped(dropped_indices, n=256):
-    dropped = set(int(i) for i in dropped_indices)
-    return [i for i in range(n) if i not in dropped]
+# def make_16_montage(subject_coords: "torch.Tensor"):
+#     """
+#     We don't have a standard 16-channel EGI montage, so create one by:
+#     1. Selecting maximum pairwise distance points to get 16 "spread out" channels from the 32-channel montage
+#     2. Mapping the size-16 subset of the 32-channel montage to the nearest per-subject 256-channel electrodes
+#     """
 
-def print_xyz_stats(name, xyz):
-    mean = xyz.mean(axis=0)
-    std = xyz.std(axis=0)
-    print(
-        f"{name:>12s} | "
-        f"x: {mean[0]: .4f} ± {std[0]: .4f} | "
-        f"y: {mean[1]: .4f} ± {std[1]: .4f} | "
-        f"z: {mean[2]: .4f} ± {std[2]: .4f}"
-    )
+#     def montage_xyz(montage_name: str):
+#         mont = mne.channels.make_standard_montage(montage_name)
+#         ch_pos = mont._get_ch_pos()
+#         names = list(ch_pos.keys())
+#         xyz = np.array([ch_pos[k] for k in names], dtype=float)
+
+#         # Drop reference chans in the 32 montage: keep only "E*"
+#         if montage_name == "GSN-HydroCel-32":
+#             keep = [i for i, n in enumerate(names) if n.startswith("E")]
+#             names = [names[i] for i in keep]
+#             xyz = xyz[keep]
+
+#         return names, xyz
+
+#     def nearest_map(source_xyz, target_xyz):
+#         diffs = source_xyz[:, None, :] - target_xyz[None, :, :]
+#         dists = np.sqrt(np.sum(diffs**2, axis=2))
+#         nn_idx = np.argmin(dists, axis=1)
+#         nn_dist = dists[np.arange(dists.shape[0]), nn_idx]
+#         return nn_idx, nn_dist
+
+#     def farthest_point_sampling(xyz, k, start_idx=None):
+#         n = xyz.shape[0]
+#         if k > n:
+#             raise ValueError(f"k={k} > n={n}")
+
+#         if start_idx is None:
+#             start_idx = int(np.argmax(np.sum(xyz**2, axis=1)))
+
+#         selected = [start_idx]
+#         d2 = np.sum((xyz - xyz[start_idx])**2, axis=1)
+
+#         for _ in range(1, k):
+#             j = int(np.argmax(d2))
+#             selected.append(j)
+#             d2 = np.minimum(d2, np.sum((xyz - xyz[j])**2, axis=1))
+
+#         return selected
+
+#     xyz256 = (
+#         subject_coords.detach().cpu().numpy()
+#         if hasattr(subject_coords, "detach")
+#         else np.asarray(subject_coords)
+#     )
+#     if xyz256.shape != (256, 3):
+#         raise ValueError(f"subject_coords must have shape (256,3), got {xyz256.shape}")
+#     names256 = [f"E{i+1}" for i in range(256)]
+
+#     names32, xyz32 = montage_xyz("GSN-HydroCel-32")
+
+#     k = 16
+#     start_idx = None
+
+#     sel32 = farthest_point_sampling(xyz32, k=k, start_idx=start_idx)
+#     nn_idx, nn_dist = nearest_map(xyz32[sel32], xyz256)  # selected 32 -> subject 256
+
+#     kept_256 = []
+#     kept_d = []
+#     for idx, d in zip(nn_idx, nn_dist):
+#         idx = int(idx)
+#         if idx not in kept_256:
+#             kept_256.append(idx)
+#             kept_d.append(float(d))
+
+#     kept_256 = sorted(kept_256)
+#     kept_names = [names256[i] for i in kept_256]  # retained for parity / debugging
+#     dropped_256 = sorted(set(range(len(names256))) - set(kept_256))
+
+#     return dropped_256
+
+
+# def kept_indices_from_dropped(dropped_indices, n=256):
+#     dropped = set(int(i) for i in dropped_indices)
+#     return [i for i in range(n) if i not in dropped]
+
+# def print_xyz_stats(name, xyz):
+#     mean = xyz.mean(axis=0)
+#     std = xyz.std(axis=0)
+#     print(
+#         f"{name:>12s} | "
+#         f"x: {mean[0]: .4f} ± {std[0]: .4f} | "
+#         f"y: {mean[1]: .4f} ± {std[1]: .4f} | "
+#         f"z: {mean[2]: .4f} ± {std[2]: .4f}"
+#     )
