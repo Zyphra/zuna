@@ -61,6 +61,13 @@ class EEGProcessor:
 
         raw = raw.copy()  # Don't modify original
 
+        # Save original filename BEFORE any modifications (RawArray creation loses filenames)
+        import os
+        if raw.filenames and raw.filenames[0] is not None:
+            original_filename = os.path.basename(str(raw.filenames[0]))
+        else:
+            original_filename = "preprocessed_raw.fif"
+
         # Track bad channels from original raw.info['bads'] (if enabled)
         channels_marked_bad_in_raw = set(raw.info['bads']) if self.config.zero_bad_channels_from_raw else set()
 
@@ -133,12 +140,8 @@ class EEGProcessor:
             preprocessed_dir = Path(self.config.preprocessed_fif_dir)
             preprocessed_dir.mkdir(parents=True, exist_ok=True)
 
-            # Keep original filename but save in preprocessed directory
-            import os
-            original_name = os.path.basename(raw.filenames[0]) if raw.filenames else "preprocessed_raw.fif"
-            if not original_name.endswith('.fif'):
-                original_name = original_name.replace('.fif', '') + '_preprocessed.fif'
-            preprocessed_path = preprocessed_dir / original_name
+            # Use the saved original filename (captured at the beginning before RawArray creation)
+            preprocessed_path = preprocessed_dir / original_filename
 
             # Save filtered raw data BEFORE normalization (original scale, filtered)
             raw.save(str(preprocessed_path), overwrite=True, verbose=False)
