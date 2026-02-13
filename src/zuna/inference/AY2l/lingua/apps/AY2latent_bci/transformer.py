@@ -27,15 +27,15 @@ from .bottlenecks import mmd_imq
 from vector_quantize_pytorch import SimVQ, FSQ
 import functools
 
-def create_causal_mask(seqlen, attn_impl, sliding_window):
-    if attn_impl == "sdpa":
-        return "causal"
-    elif attn_impl == "flex_attention":
-        return create_block_mask(causal_mask, None, None, seqlen, seqlen)
-    else:
-        raise NotImplementedError(
-            f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
-        )
+# def create_causal_mask(seqlen, attn_impl, sliding_window):
+#     if attn_impl == "sdpa":
+#         return "causal"
+#     elif attn_impl == "flex_attention":
+#         return create_block_mask(causal_mask, None, None, seqlen, seqlen)
+#     else:
+#         raise NotImplementedError(
+#             f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
+#         )
 
 
 def create_document_mask(lengths: torch.Tensor,
@@ -121,7 +121,13 @@ def create_document_mask(lengths: torch.Tensor,
 
     doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
 
-    return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
+    if torch.cuda.is_available():
+        print('cuda is available, creating document mask with compilation')
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
+    else:
+        print('using cpu to create document mask')
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item(), 
+                                device='cpu', _compile=False)
 
 
 def attention_flops_per_token(n_layers, seq_len, dim, causal):
