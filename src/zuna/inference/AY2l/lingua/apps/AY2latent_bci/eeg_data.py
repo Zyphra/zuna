@@ -109,8 +109,7 @@ def chop_and_reshape_signals(eeg_signal, chan_pos=None, chan_pos_discrete=None, 
         chan_id_reshaped = torch.arange(num_chans).unsqueeze(-1)
 
     else:
-        print(f"Not implemented error: {use_coarse_time=} and it needs to be A, B, C or D.")
-        die
+        raise ValueError(f"Not implemented: {use_coarse_time=} must be A, B, C or D.")
 
     if use_coarse_time=="D":
         # Keep same channels together in reshaping then split each channel into its own sample.
@@ -243,7 +242,7 @@ def invert_reshape_signals(sig_reshaped, pos_reshaped=None, pos_discrete_reshape
         tc_unwrapt = tc_reshaped.reshape(num_chans, tc) if tc_reshaped is not None else None 
 
     else:
-        print(f"Not Implemented Error: {use_coarse_time=} and it needs to be A, B, C or D.")
+        # print(f"Not Implemented Error: {use_coarse_time=} and it needs to be A, B, C or D.")
         die
 
     return sig_unwrapt, pos_unwrapt, pos_discrete_unwrapt, id_unwrapt, tc_unwrapt   
@@ -364,7 +363,7 @@ class EEGDataset_v2(IterableDataset):
     def __init__(self, args: BCIDatasetArgs):
         # print(f"{args=}")
 
-        print(f"Inside EEGDataset_v2 with {args.glob_filter=}")
+        # print(f"Inside EEGDataset_v2 with {args.glob_filter=}")
         self.memmap_paths = list(Path(args.data_dir).glob(args.glob_filter))
         self.shuffle = args.shuffle
         self.seed = args.seed
@@ -407,15 +406,15 @@ class EEGDataset_v2(IterableDataset):
 
    
         # Get total samps from all memmap files.
-        print(f"Counting up total number of samples.")
+        # print(f"Counting up total number of samples.")
         self.total_samps = 0
         for i, m_path in enumerate(self.memmap_paths):
             filename = os.path.basename(m_path).removesuffix('.pt')
             fparts =  filename.split('_')
             self.total_samps += int(fparts[-3])
 
-        print(f"In Iterable EEGDataset.__init__, There are {len(self.memmap_paths)} memmap files")
-        print(f"Total number of samples in one epoch of entire dataset is 🥁 🥁 🥁 : {self.total_samps}")
+        # print(f"In Iterable EEGDataset.__init__, There are {len(self.memmap_paths)} memmap files")
+        # print(f"Total number of samples in one epoch of entire dataset is: {self.total_samps}")
 
     def __len__(self):
         return self.total_samps
@@ -578,7 +577,7 @@ class EEGDataset_v2(IterableDataset):
                 plt.tight_layout()
                 plt.savefig('figures/chan_pos_comparison.png', dpi=150, bbox_inches='tight')
                 plt.close()
-                print(f"Saved channel position comparison plot to figures/chan_pos_comparison.png")
+                # print(f"Saved channel position comparison plot to figures/chan_pos_comparison.png")
 
 
             # Filter out samples that do not have self.chan_num_filter channels.
@@ -596,12 +595,12 @@ class EEGDataset_v2(IterableDataset):
                         filtered_indices.append(i)
 
                 # Debug output
-                if len(filtered_indices) > 0:
-                    print(f"[DEBUG] Channel filter: expecting {self.chan_num_filter} channels")
-                    print(f"[DEBUG] Filtered {len(filtered_indices)}/{len(mmap)} epochs")
-                    if len(filtered_indices) <= 20:
-                        print(f"[DEBUG] Filtered epoch indices: {filtered_indices}")
-                        print(f"[DEBUG] Channel counts: {[mmap[i].shape[0] for i in filtered_indices[:10]]}")
+                # if len(filtered_indices) > 0:
+                #     print(f"[DEBUG] Channel filter: expecting {self.chan_num_filter} channels")
+                #     print(f"[DEBUG] Filtered {len(filtered_indices)}/{len(mmap)} epochs")
+                #     if len(filtered_indices) <= 20:
+                #         print(f"[DEBUG] Filtered epoch indices: {filtered_indices}")
+                #         print(f"[DEBUG] Channel counts: {[mmap[i].shape[0] for i in filtered_indices[:10]]}")
 
                 mmap = mmap_filt
                 chan_pos = chan_pos_filt
@@ -692,7 +691,8 @@ class EEGDataset_v2(IterableDataset):
             if self.use_coarse_time=="A" or self.use_coarse_time=="B" or self.use_coarse_time=="C" or self.use_coarse_time=="D":
                 reshaped = [chop_and_reshape_signals(m, c, cd, do, self.num_fine_time_pts, self.use_coarse_time) for m,c,cd,do in zip(mmap, chan_pos, chan_pos_discrete, chan_dropout)]
             else:
-                print(f"Dont understand {self.use_coarse_time=}")
+                # print(f"Dont understand {self.use_coarse_time=}")
+                pass
 
             # Flatten list of lists into single list if trying to process each channel as separate sample.
             if self.use_coarse_time=="D":
@@ -787,7 +787,7 @@ class EEGDataset_v2(IterableDataset):
                     packed_batch = [sample_dict]       # Start new batch with current sample
                     seqlen_accum = reshaped[s][5]      # Initialize seqlen with current sample
 
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
 
                 # except Exception as e:
                 #     print(f"Error processing sample: {e} : {ids} : {m_path}")
@@ -878,8 +878,9 @@ class EEGProcessor:
                 noise[:,:3] = eeg_signal[:,:3] # dont add noise to {x,y,z}-position channels.   
                 eeg_signal_masked[:,:3] = eeg_signal[:,:3] # dont mask {x,y,z}-position channels.
             else:
-                print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
-                import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+                pass
+                # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
+                # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         if self.masked_in_decoder:
             decoder_input = (1 - t) * eeg_signal_masked + t * noise # dropped out noised signals sent into decoder input.
@@ -949,9 +950,9 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
 
 def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
     if args.use_b2:
-        print("NOTE: EEGDataset_b2 is not implemented yet. Using EEGDataset_v2 instead.")
+        # print("NOTE: EEGDataset_b2 is not implemented yet. Using EEGDataset_v2 instead.")
         #dataset = EEGDataset_b2(args) # IterableDataset pulling from B2!
-
+        pass
     else:
         dataset = EEGDataset_v2(args) # IterableDataset pulling from local filesystem!
 
@@ -962,7 +963,7 @@ def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
     if is_distributed:
         world_size = dist.get_world_size()
         global_rank = dist.get_rank()  # Use global rank for sampler
-        print(f"Rank {global_rank}/{world_size}: Using DistributedSampler.")
+        # print(f"Rank {global_rank}/{world_size}: Using DistributedSampler.")
 
     import functools
     init_fn = functools.partial(worker_init_fn, seed=seed, rank=rank)

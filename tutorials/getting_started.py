@@ -11,6 +11,16 @@ Simply edit the paths below and run:
     python getting_started.py
 """
 
+"""
+INSTRUCTINOS (for ReadMe etc)
+
+* pip install zuna
+* prepare data: have it in .fif format, with a channel montage applied 
+* then go to tutorials/getting_started.py
+
+
+"""
+
 from pathlib import Path
 from zuna.pipeline import run_zuna
 
@@ -21,7 +31,6 @@ from zuna.pipeline import run_zuna
 # Paths
 INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"
 WORKING_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/working"
-CHECKPOINT = "/data/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000"
 
 # Processing options
 # TARGET_CHANNEL_COUNT = None   # no upsampling
@@ -30,7 +39,7 @@ TARGET_CHANNEL_COUNT = ['AF3', 'AF4', 'F1', 'F2', 'FC1', 'FC2', 'CP1', 'CP2', 'P
 BAD_CHANNELS = ['Fz', 'Cz']  # List of channels to zero out for interpolation testing, Set to None to disable: BAD_CHANNELS = None
 
 KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
-GPU_DEVICE = 5
+GPU_DEVICE = 6
 
 # Visualization options
 PLOT_PT_COMPARISON = False  # Plot .pt file comparisons (preprocessed vs model output)
@@ -48,7 +57,6 @@ if __name__ == "__main__":
         run_zuna(
             input_dir=INPUT_DIR,
             working_dir=WORKING_DIR,
-            checkpoint_path=CHECKPOINT,
             target_channel_count=TARGET_CHANNEL_COUNT,
             bad_channels=BAD_CHANNELS,
             keep_intermediate_files=KEEP_INTERMEDIATE_FILES,
@@ -80,7 +88,6 @@ if __name__ == "__main__":
         # Step 2: Model Inference (.pt → .pt)
         zuna_step2_inference(
             working_dir=WORKING_DIR,
-            checkpoint_path=CHECKPOINT,
             gpu_device=GPU_DEVICE,
         )
 

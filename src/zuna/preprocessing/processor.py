@@ -131,7 +131,7 @@ class EEGProcessor:
                 for idx in bad_indices:
                     raw_data[idx, :] = 0.0
                 raw = mne.io.RawArray(raw_data, raw.info, verbose=False)
-                print(f"✓ Zeroed out {len(bad_indices)} bad channels in raw data: {[raw.ch_names[i] for i in bad_indices]}")
+                # print(f"✓ Zeroed out {len(bad_indices)} bad channels in raw data: {[raw.ch_names[i] for i in bad_indices]}")
 
         # This ensures the preprocessed FIF has the same filtering as the model input,
         # but is in the original scale (not normalized) for comparison

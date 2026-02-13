@@ -413,13 +413,13 @@ def process_directory(
         eeg_files.extend(input_path.glob(f'**/*{ext}'))
 
     if len(eeg_files) == 0:
-        print(f"⚠️  No EEG files found in {input_dir}")
-        print(f"   Looking for: {', '.join(supported_extensions)}")
+        # print(f"⚠️  No EEG files found in {input_dir}")
+        # print(f"   Looking for: {', '.join(supported_extensions)}")
         return []
 
-    print("="*80)
-    print(f"Found {len(eeg_files)} EEG file(s) to process")
-    print("="*80)
+    # print("="*80)
+    # print(f"Found {len(eeg_files)} EEG file(s) to process")
+    # print("="*80)
 
     # Create config
     if config is None:
@@ -445,22 +445,22 @@ def process_directory(
         # Sequential processing with progress feedback
         results = []
         for file_path, idx, fc in tasks:
-            print(f"\n[{idx}/{len(eeg_files)}] Processing: {file_path.name}")
+            # print(f"\n[{idx}/{len(eeg_files)}] Processing: {file_path.name}")
             result = _process_single_file(file_path, idx, fc, output_path, processor, config)
 
             # Print summary
-            if result['success']:
-                print(f"  ✅ Success!")
-                print(f"     Total epochs: {result['total_epochs']}")
-                if result.get('pt_files_saved', 0) > 0:
-                    print(f"     PT files saved: {result['pt_files_saved']}")
-            else:
-                print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
+            # if result['success']:
+            #     print(f"  ✅ Success!")
+            #     print(f"     Total epochs: {result['total_epochs']}")
+            #     if result.get('pt_files_saved', 0) > 0:
+            #         print(f"     PT files saved: {result['pt_files_saved']}")
+            # else:
+            #     print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
 
             results.append(result)
     else:
         # Parallel processing
-        print(f"\n🚀 Processing {len(tasks)} files with {n_jobs} parallel workers...")
+        # print(f"\n🚀 Processing {len(tasks)} files with {n_jobs} parallel workers...")
 
         results = Parallel(n_jobs=n_jobs, backend='loky', verbose=10)(
             delayed(_process_single_file)(
@@ -470,15 +470,15 @@ def process_directory(
         )
 
     # Flush remaining epochs in cache
-    print("\n💾 Saving remaining epochs from cache...")
+    # print("\n💾 Saving remaining epochs from cache...")
     remaining_file = _flush_remaining_cache(output_path)
-    if remaining_file:
-        print(f"  ✅ Saved remaining epochs to: {Path(remaining_file).name}")
+    # if remaining_file:
+    #     print(f"  ✅ Saved remaining epochs to: {Path(remaining_file).name}")
 
     # Final summary
-    print("\n" + "="*80)
-    print("Processing Summary")
-    print("="*80)
+    # print("\n" + "="*80)
+    # print("Processing Summary")
+    # print("="*80)
     successful = sum(1 for r in results if r['success'])
     failed = len(results) - successful
     total_epochs = sum(r.get('total_epochs', 0) for r in results if r['success'])
@@ -488,12 +488,12 @@ def process_directory(
     if remaining_file:
         total_pt_files += 1
 
-    print(f"  Total input files: {len(results)}")
-    print(f"  Successful: {successful}")
-    print(f"  Failed: {failed}")
-    print(f"  Total epochs processed: {total_epochs}")
-    print(f"  Total PT files saved: {total_pt_files}")
-    print(f"  Output directory: {output_dir}")
+    # print(f"  Total input files: {len(results)}")
+    # print(f"  Successful: {successful}")
+    # print(f"  Failed: {failed}")
+    # print(f"  Total epochs processed: {total_epochs}")
+    # print(f"  Total PT files saved: {total_pt_files}")
+    # print(f"  Output directory: {output_dir}")
     return results
 
 
