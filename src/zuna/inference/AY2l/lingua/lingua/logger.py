@@ -91,7 +91,7 @@ def init_logger(
     log_file: str | None = None,
     *,
     name: str | None = None,
-    level: str = "NOTSET",
+    level: str = "INFO",
 ):
     """
     Setup logging.
@@ -106,7 +106,7 @@ def init_logger(
 
     # stdout: everything
     stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setLevel(logging.NOTSET)
+    stdout_handler.setLevel(logging.INFO)
     stdout_handler.setFormatter(LogFormatter())
 
     # stderr: warnings / errors and above

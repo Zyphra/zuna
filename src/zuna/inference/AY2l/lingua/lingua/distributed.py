@@ -255,14 +255,14 @@ def setup_torch_distributed(dist_args, device: torch.device):
     os.environ["MASTER_PORT"] = str(
         get_master_port(job_id=int(os.environ.get("SLURM_JOB_ID", -1)))
     )
-    os.environ["MASTER_PORT"] = str(29481) # (CW) - to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
+    os.environ["MASTER_PORT"] = str(29482) # (CW) - to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
 
     if get_is_torch_run():
         logger.info(f"Run launched with torchrun, local rank: {local_rank}")
     elif get_is_slurm_job():
         logger.info(f"Run launched with slurm, local rank: {local_rank}")
     else:
-        print("Single GPU job")
+        # print("Single GPU job")
         logger.info("Single GPU job")
 
     logger.info(f"ENV: {os.environ}")

@@ -122,10 +122,8 @@ def create_document_mask(lengths: torch.Tensor,
     doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
 
     if torch.cuda.is_available():
-        print('cuda is available, creating document mask with compilation')
         return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
     else:
-        print('using cpu to create document mask')
         return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item(), 
                                 device='cpu', _compile=False)
 
@@ -563,11 +561,11 @@ class DecoderTransformer(BaseTransformerDecoder):
 
         h_normed = self.norm(h, t) 
 
-        if print_layerwise_activation_stats and do_idx is not None: 
-            print(f"\nDecoder output norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") 
-            print(f"Decoder output norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}")
+        # if print_layerwise_activation_stats and do_idx is not None:
+        #     print(f"\nDecoder output norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ")
+        #     print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}")
+        #     print(f"Decoder output norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ")
+        #     print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}")
 
         logits = self.output(h_normed) 
 
@@ -844,9 +842,9 @@ class EncoderTransformer(BaseTransformer):
             tok_idx = tok_idx.squeeze().squeeze() # make it the right size for RoPE.
 
 
-        if print_layerwise_activation_stats and do_idx is not None: # (CW)
-            print(f"{do_idx.sum()=} and {(~do_idx).sum()=}")
-            print(f"{token_values.shape=}")
+        # if print_layerwise_activation_stats and do_idx is not None: # (CW)
+        #     print(f"{do_idx.sum()=} and {(~do_idx).sum()=}")
+        #     print(f"{token_values.shape=}")
 
 
         h, repa_loss = super().forward(h,                   # BaseTransformer.forward
@@ -863,16 +861,14 @@ class EncoderTransformer(BaseTransformer):
         h, non_regs = self._extract_registers_and_non_registers(h, num_groups, original_seqlen=orig_seqlen, return_non_registers=distill_target is not None)
 
 
-        if print_layerwise_activation_stats and do_idx is not None: # (CW)
-            h_normed = self.norm(h) # (CW)
-            print(f"\nEncoder output norm (drop-out): mean={h[:, do_idx_pre_reg, :].mean().item():.6f}, std={h[:, do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, do_idx_pre_reg, :].std().item():.6f}") # (CW)
-            
-            print(f"Encoder output norm (non-drop): mean={h[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h[:, ~do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, ~do_idx_pre_reg, :].std().item():.6f}") # (CW)
-            logits = self.output(h_normed) # (CW)
-        else:
-            logits = self.output(self.norm(h)) # (CW) - was this
+        # if print_layerwise_activation_stats and do_idx is not None: # (CW)
+        #     h_normed = self.norm(h) # (CW)
+        #     print(f"\nEncoder output norm (drop-out): mean={h[:, do_idx_pre_reg, :].mean().item():.6f}, std={h[:, do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
+        #     print(f"mean={h_normed[:, do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, do_idx_pre_reg, :].std().item():.6f}") # (CW)
+        #     print(f"Encoder output norm (non-drop): mean={h[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h[:, ~do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
+        #     print(f"mean={h_normed[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, ~do_idx_pre_reg, :].std().item():.6f}") # (CW)
+        #     logits = self.output(h_normed) # (CW)
+        logits = self.output(self.norm(h))
 
 
         logits, losses = self.bottleneck(logits)
@@ -1013,8 +1009,7 @@ class EncoderDecoder(nn.Module):
         elif self.tok_idx_type == "{x,y,z,tc}" and self.rope_dim==4: 
             tok_idx = torch.cat((chan_pos_discrete,t_coarse), dim=2)
         else:
-            print(f"Dont understand {self.tok_idx_type=} and {self.rope_dim}")
-            die
+            raise ValueError(f"Dont understand {self.tok_idx_type=} and {self.rope_dim}")
 
 
         do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
@@ -1080,8 +1075,9 @@ class EncoderDecoder(nn.Module):
                 if dim==131 or dim==35:
                     z[:,:,:3] = encoder_input[:,:,:3]
                 else:
-                    print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
-                    import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+                    pass
+                    # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
+                    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
             dt = dt_time.unsqueeze(-1).unsqueeze(-1)
@@ -1119,8 +1115,9 @@ class EncoderDecoder(nn.Module):
                     if dim==131 or dim==35:
                         z[:,:,:3] = encoder_input[:,:,:3]
                     else:
-                        print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
-                        import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+                        # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
+                        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+                        pass
 
                 outputs.append(z)
             

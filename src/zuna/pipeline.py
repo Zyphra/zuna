@@ -52,9 +52,9 @@ def zuna_preprocessing(
     from zuna import process_directory
     from pathlib import Path
 
-    print("="*80)
-    print("STEP 1: Preprocessing .fif → .pt")
-    print("="*80)
+    # print("="*80)
+    # print("STEP 1: Preprocessing .fif → .pt")
+    # print("="*80)
 
     # Setup preprocessed FIF directory if not specified
     if save_preprocessed_fif and preprocessed_fif_dir is None:
@@ -76,37 +76,28 @@ def zuna_preprocessing(
         target_channel_count=target_channel_count
     )
 
-    print(f"✓ Preprocessing complete")
-    if save_preprocessed_fif and preprocessed_fif_dir:
-        print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
+    # print(f"✓ Preprocessing complete")
+    # if save_preprocessed_fif and preprocessed_fif_dir:
+    #     print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
 
 
 def zuna_inference(
     input_dir: str,
     output_dir: str,
-    checkpoint_path: str,
     gpu_device: int = 0
 ) -> None:
     """
     Run model inference on .pt files.
 
+    Model weights are automatically downloaded from HuggingFace.
+
     Args:
         input_dir: Directory containing preprocessed .pt files
         output_dir: Directory to save model output .pt files
-        checkpoint_path: Path to model checkpoint
         gpu_device: GPU device ID (default: 0)
     """
     from omegaconf import OmegaConf
     import subprocess
-
-    print("="*80)
-    print("STEP 2: Running model inference")
-    print("="*80)
-
-    # Validate checkpoint
-    checkpoint = Path(checkpoint_path)
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     # Create output directory
     output_path = Path(output_dir)
@@ -122,7 +113,6 @@ def zuna_inference(
     config = OmegaConf.load(str(config_path))
     config.data.data_dir = str(Path(input_dir).absolute())
     config.data.export_dir = str(output_path.absolute())
-    # config.checkpoint.init_ckpt_path = str(checkpoint.absolute())
     config.dump_dir = str(output_path.absolute())
 
     # Save modified config to temporary file
@@ -142,7 +132,7 @@ def zuna_inference(
     env = os.environ.copy()
     env['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
 
-    print(f"Running: CUDA_VISIBLE_DEVICES={gpu_device} python3 {eeg_eval_script.name} config=...")
+    # print(f"Running: CUDA_VISIBLE_DEVICES={gpu_device} python3 {eeg_eval_script.name} config=...")
 
     # Run the command
     result = subprocess.run(cmd, env=env, check=True)
@@ -168,7 +158,7 @@ def zuna_inference(
         except Exception:
             pass  # Ignore cleanup errors
 
-    print(f"✓ Inference complete")
+    # print(f"✓ Inference complete")
 
 
 def zuna_pt_to_fif(
@@ -186,11 +176,11 @@ def zuna_pt_to_fif(
     """
     from zuna import pt_directory_to_fif
 
-    print("="*80)
-    print("STEP 3: Converting .pt → .fif")
-    if upsample_factor:
-        print(f"  Upsampling factor: {upsample_factor}x")
-    print("="*80)
+    # print("="*80)
+    # print("STEP 3: Converting .pt → .fif")
+    # if upsample_factor:
+    #     print(f"  Upsampling factor: {upsample_factor}x")
+    # print("="*80)
 
     # TODO: Add support for upsample_factor and data_key selection
     results = pt_directory_to_fif(
@@ -199,25 +189,24 @@ def zuna_pt_to_fif(
     )
 
     # Print results
-    print(f"\n  Successful: {results['successful']}")
-    print(f"  Failed: {results['failed']}")
-    print(f"  Total: {results['total']}")
+    # print(f"\n  Successful: {results['successful']}")
+    # print(f"  Failed: {results['failed']}")
+    # print(f"  Total: {results['total']}")
 
-    if results['errors']:
-        print(f"\n  Errors:")
-        for error in results['errors']:
-            print(f"    {error['original_filename']}: {error['error']}")
+    # if results['errors']:
+    #     print(f"\n  Errors:")
+    #     for error in results['errors']:
+    #         print(f"    {error['original_filename']}: {error['error']}")
 
-    if results['successful'] > 0:
-        print(f"\n✓ Conversion complete")
-    else:
-        print(f"\n⚠️  No files converted successfully")
+    # if results['successful'] > 0:
+    #     print(f"\n✓ Conversion complete")
+    # else:
+    #     print(f"\n⚠️  No files converted successfully")
 
 
 def run_zuna(
     input_dir: str,
     working_dir: str,
-    checkpoint_path: str,
     target_channel_count: Optional[Union[int, List[str]]] = None,
     bad_channels: Optional[List[str]] = None,
     keep_intermediate_files: bool = True,
@@ -235,7 +224,6 @@ def run_zuna(
                     - 2_pt_input/ (preprocessed PT files)
                     - 3_pt_output/ (model output PT files)
                     - 4_fif_output/ (reconstructed FIF files)
-        checkpoint_path: Path to model checkpoint
         target_channel_count: None for no upsampling,
                              int (e.g., 40, 64) for greedy selection to N channels,
                              list (e.g., ['Cz', 'Pz']) for specific channels from 10-05 montage
@@ -250,15 +238,14 @@ def run_zuna(
         None
     """
 
-    print("="*80)
-    print("ZUNA PIPELINE")
-    print("="*80)
-    print(f"Input:      {input_dir}")
-    print(f"Working:    {working_dir}")
-    print(f"Checkpoint: {checkpoint_path}")
-    if target_channel_count:
-        print(f"Channels:   {target_channel_count} (upsampling)")
-    print("="*80)
+    # print("="*80)
+    # print("ZUNA PIPELINE")
+    # print("="*80)
+    # print(f"Input:      {input_dir}")
+    # print(f"Working:    {working_dir}")
+    # if target_channel_count:
+    #     print(f"Channels:   {target_channel_count} (upsampling)")
+    # print("="*80)
 
     # Set GPU device
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
@@ -281,7 +268,7 @@ def run_zuna(
 
     try:
         # Step 1: Preprocessing
-        print("\n[1/3] Preprocessing...")
+        print("[1/3] Preprocessing...", flush=True)
         from zuna import process_directory
         process_directory(
             input_dir=str(input_path),
@@ -293,16 +280,15 @@ def run_zuna(
         )
 
         # Step 2: Model Inference
-        print("\n[2/3] Model inference...")
+        print("[2/3] Model inference...")
         zuna_inference(
             input_dir=str(pt_input_path),
             output_dir=str(pt_output_path),
-            checkpoint_path=checkpoint_path,
             gpu_device=gpu_device
         )
 
         # Step 3: Reconstruction
-        print("\n[3/3] Reconstructing FIF files...")
+        print("[3/3] Reconstructing FIF files...")
         zuna_pt_to_fif(
             input_dir=str(pt_output_path),
             output_dir=str(fif_output_path),
@@ -310,15 +296,15 @@ def run_zuna(
 
         # Cleanup intermediate files if requested
         if not keep_intermediate_files:
-            print("\nCleaning up intermediate files...")
+            # print("\nCleaning up intermediate files...")
             import shutil
             shutil.rmtree(pt_input_path)
             shutil.rmtree(pt_output_path)
-            print(f"✓ Removed PT files")
+            # print(f"✓ Removed PT files")
 
         # Visualization
         if plot_pt_comparison or plot_fif_comparison:
-            print("\nGenerating comparison plots...")
+            # print("\nGenerating comparison plots...")
             from zuna.visualization import compare_pipeline_outputs
             compare_pipeline_outputs(
                 working_dir=str(working_path),
@@ -326,14 +312,10 @@ def run_zuna(
                 plot_fif=plot_fif_comparison,
             )
 
-        print("\n" + "="*80)
-        print("✓ PIPELINE COMPLETE!")
-        print("="*80)
-        print(f"Output: {fif_output_path}")
-        print("="*80)
+        print("Pipeline complete. Output:", fif_output_path)
 
     except Exception as e:
-        print(f"\n✗ Pipeline failed: {e}")
+        # print(f"\n✗ Pipeline failed: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -384,16 +366,16 @@ def zuna_step1_preprocess(
     preprocessed_fif_dir.mkdir(parents=True, exist_ok=True)
     pt_input_path.mkdir(parents=True, exist_ok=True)
 
-    print("="*80)
-    print("STEP 1: Preprocessing (.fif → .pt)")
-    print("="*80)
-    print(f"Input:  {input_dir}")
-    print(f"Output: {pt_input_path}")
-    if bad_channels:
-        print(f"Bad channels (will be zeroed): {bad_channels}")
-    if target_channel_count:
-        print(f"Target channels: {target_channel_count}")
-    print("="*80 + "\n")
+    # print("="*80)
+    # print("STEP 1: Preprocessing (.fif → .pt)")
+    # print("="*80)
+    # print(f"Input:  {input_dir}")
+    # print(f"Output: {pt_input_path}")
+    # if bad_channels:
+    #     print(f"Bad channels (will be zeroed): {bad_channels}")
+    # if target_channel_count:
+    #     print(f"Target channels: {target_channel_count}")
+    # print("="*80 + "\n")
 
     process_directory(
         input_dir=input_dir,
@@ -404,18 +386,19 @@ def zuna_step1_preprocess(
         bad_channels=bad_channels,
     )
 
-    print(f"\n✓ Preprocessing complete")
-    print(f"  PT files: {pt_input_path}")
-    print(f"  FIF files: {preprocessed_fif_dir}")
+    # print(f"\n✓ Preprocessing complete")
+    # print(f"  PT files: {pt_input_path}")
+    # print(f"  FIF files: {preprocessed_fif_dir}")
 
 
 def zuna_step2_inference(
     working_dir: str,
-    checkpoint_path: str,
     gpu_device: int = 0,
 ) -> None:
     """
     Step 2: Run model inference on preprocessed .pt files.
+
+    Model weights are automatically downloaded from HuggingFace.
 
     This is a simplified wrapper that only requires working_dir.
     It automatically uses:
@@ -424,13 +407,11 @@ def zuna_step2_inference(
 
     Args:
         working_dir: Working directory containing 2_pt_input/
-        checkpoint_path: Path to model checkpoint
         gpu_device: GPU device ID (default: 0)
 
     Example:
         >>> zuna_step2_inference(
         ...     working_dir="/data/working",
-        ...     checkpoint_path="/path/to/checkpoint",
         ...     gpu_device=0
         ... )
     """
@@ -441,14 +422,13 @@ def zuna_step2_inference(
     # Create output directory
     pt_output_path.mkdir(parents=True, exist_ok=True)
 
-    print("="*80)
-    print("STEP 2: Model Inference (.pt → .pt)")
-    print("="*80)
-    print(f"Input:      {pt_input_path}")
-    print(f"Output:     {pt_output_path}")
-    print(f"Checkpoint: {checkpoint_path}")
-    print(f"GPU:        {gpu_device}")
-    print("="*80 + "\n")
+    # print("="*80)
+    # print("STEP 2: Model Inference (.pt → .pt)")
+    # print("="*80)
+    # print(f"Input:      {pt_input_path}")
+    # print(f"Output:     {pt_output_path}")
+    # print(f"GPU:        {gpu_device}")
+    # print("="*80 + "\n")
 
     # Set GPU device
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
@@ -456,12 +436,11 @@ def zuna_step2_inference(
     zuna_inference(
         input_dir=str(pt_input_path),
         output_dir=str(pt_output_path),
-        checkpoint_path=checkpoint_path,
         gpu_device=gpu_device
     )
 
-    print(f"\n✓ Model inference complete")
-    print(f"  Output: {pt_output_path}")
+    # print(f"\n✓ Model inference complete")
+    # print(f"  Output: {pt_output_path}")
 
 
 def zuna_step3_reconstruct(
@@ -490,20 +469,20 @@ def zuna_step3_reconstruct(
     # Create output directory
     fif_output_path.mkdir(parents=True, exist_ok=True)
 
-    print("="*80)
-    print("STEP 3: Reconstruction (.pt → .fif)")
-    print("="*80)
-    print(f"Input:  {pt_output_path}")
-    print(f"Output: {fif_output_path}")
-    print("="*80 + "\n")
+    # print("="*80)
+    # print("STEP 3: Reconstruction (.pt → .fif)")
+    # print("="*80)
+    # print(f"Input:  {pt_output_path}")
+    # print(f"Output: {fif_output_path}")
+    # print("="*80 + "\n")
 
     zuna_pt_to_fif(
         input_dir=str(pt_output_path),
         output_dir=str(fif_output_path),
     )
 
-    print(f"\n✓ Reconstruction complete")
-    print(f"  Output: {fif_output_path}")
+    # print(f"\n✓ Reconstruction complete")
+    # print(f"  Output: {fif_output_path}")
 
 
 def zuna_step4_visualize(
@@ -533,13 +512,13 @@ def zuna_step4_visualize(
         ...     plot_fif=True
         ... )
     """
-    print("="*80)
-    print("STEP 4: Generating Comparison Plots")
-    print("="*80)
-    print(f"Working dir: {working_dir}")
-    print(f"Plot PT:     {plot_pt}")
-    print(f"Plot FIF:    {plot_fif}")
-    print("="*80 + "\n")
+    # print("="*80)
+    # print("STEP 4: Generating Comparison Plots")
+    # print("="*80)
+    # print(f"Working dir: {working_dir}")
+    # print(f"Plot PT:     {plot_pt}")
+    # print(f"Plot FIF:    {plot_fif}")
+    # print("="*80 + "\n")
 
     from zuna.visualization import compare_pipeline_outputs
 
@@ -549,5 +528,5 @@ def zuna_step4_visualize(
         plot_fif=plot_fif,
     )
 
-    print(f"\n✓ Visualization complete")
-    print(f"  Plots saved to: {Path(working_dir) / 'FIGURES'}")
+    # print(f"\n✓ Visualization complete")
+    # print(f"  Plots saved to: {Path(working_dir) / 'FIGURES'}")

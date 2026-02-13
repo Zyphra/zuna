@@ -144,7 +144,7 @@ def plot_compare_eeg_signal(data,
 
     num_t, chans = data.shape
     t = np.arange(num_t) #/ fs
-    print(f"\teeg: {chans=}, {num_t=}")
+    # print(f"\teeg: {chans=}, {num_t=}")
 
     best_div = get_best_divisors(chans, max_pad=10)
     dimx, dimy = best_div
@@ -354,14 +354,14 @@ def unwrap_all_the_signals(model_output, batch, args):
     model_input = batch['encoder_input'] #.cpu().numpy()        # Includes channel dropout
     eeg_signal = batch['eeg_signal'] #.cpu().numpy()            # Original eeg signal without channel dropout
 
-    print(f"{batch['seq_lens']=}")
-    print(f"{batch['seq_lens'].sum().item()=}")
+    # print(f"{batch['seq_lens']=}")
+    # print(f"{batch['seq_lens'].sum().item()=}")
 
-    if batch['t_coarse'] is not None:
-        print(f"{batch['t_coarse'].shape=}")
+    # if batch['t_coarse'] is not None:
+    #     print(f"{batch['t_coarse'].shape=}")
 
-    print(f"{model_input.shape=}")
-    print(f"{model_output.shape=}")
+    # print(f"{model_input.shape=}")
+    # print(f"{model_output.shape=}")
 
     model_signal_input_unwrapped = []
     model_signal_output_unwrapped = []
@@ -382,7 +382,7 @@ def unwrap_all_the_signals(model_output, batch, args):
     for i,seqlen in enumerate(seq_lens):
         num_chans = seqlen//tc 
         
-        print(f"Sample {i} has seqlen {seqlen} and {num_chans} chans")
+        # print(f"Sample {i} has seqlen {seqlen} and {num_chans} chans")
 
         if args.data.cat_chan_xyz_and_eeg:
             mod_in_pos = model_input[seqlen_accum:seqlen_accum+seqlen, :3] # {x,y,z} position channels
@@ -401,7 +401,7 @@ def unwrap_all_the_signals(model_output, batch, args):
         chan_id = batch['chan_id'][seqlen_accum:seqlen_accum+seqlen, :] if batch['chan_id'] is not None else None
         mod_in_pos_disc = batch['chan_pos_discrete'][seqlen_accum:seqlen_accum+seqlen, :] # discretized {x,y,z} position channels
 
-        print(f"{seqlen_accum} : {seqlen_accum+seqlen}")
+        # print(f"{seqlen_accum} : {seqlen_accum+seqlen}")
 
         
         if args.data.use_coarse_time in {"A", "B", "C", "D"}:
@@ -430,7 +430,8 @@ def unwrap_all_the_signals(model_output, batch, args):
                                                 use_coarse_time=args.data.use_coarse_time,
             )
         else:
-            print(f"Dont understand {args.data.use_coarse_time=}")
+            # print(f"Dont understand {args.data.use_coarse_time=}")
+            pass
 
         model_signal_input_unwrapped.append(mod_in_sig_unwrapt.cpu().numpy())
         model_signal_output_unwrapped.append(mod_out_sig_unwrapt.cpu().numpy())
@@ -454,7 +455,7 @@ def unwrap_all_the_signals(model_output, batch, args):
         if check_reshape_plots:
             # 1. Plot reshaped signals (input to model)
             if i==0: # save plot only for 1st sample in batch - to match indx0 insider EEGDataset_v2.__iter__
-                print(f"Saving plots...")
+                # print(f"Saving plots...")
                 for j in range(num_chans):
                     signal = mod_in_sig_unwrapt[j,:].cpu().numpy() 
                     # signal2 = mod_out_sig_unwrapt[j,:].cpu().numpy() 
@@ -548,12 +549,12 @@ def evaluate(args: TrainArgs):
     tmp_filenames = []
 
     dir_base = f'figures/zuna/cfg{cfg}/'
-    print(f"Saving output figures to: {dir_base=}")
+    # print(f"Saving output figures to: {dir_base=}")
     os.makedirs(dir_base, exist_ok=True)
 
     # saving pt files - setup export directory and results accumulator
     export_dir = args.data.export_dir
-    print(f"Will save reconstructed pt files to: {export_dir}")
+    # print(f"Will save reconstructed pt files to: {export_dir}")
     os.makedirs(export_dir, exist_ok=True)
     results_accumulator = {} # tracks samples by filename until file is complete
 
@@ -660,9 +661,9 @@ def evaluate(args: TrainArgs):
         random.seed(rank_seed)
 
         # Create dataloader
-        print("Entering create dataloader on rank", dp_rank)
+        # print("Entering create dataloader on rank", dp_rank)
         data_loader = create_dataloader_v2(args.data, args.seed, dp_rank)
-        print("Finishing create dataloader on rank", dp_rank)
+        # print("Finishing create dataloader on rank", dp_rank)
 
 
         epoch = 0 # if using nonlocal epoch
@@ -671,7 +672,7 @@ def evaluate(args: TrainArgs):
             Moving sequence packing into Dataset/Dataloader/Collator. Too slow when done here.
             """
             nonlocal epoch
-            print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
+            # print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
 
             eeg_sig_norm = data_args.data_norm
             eeg_sig_clip = data_args.data_clip
@@ -685,7 +686,7 @@ def evaluate(args: TrainArgs):
                     eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
 
                     if eeg_sig_clip is not None:
-                        print(f"Clipping input at +/-{eeg_sig_clip}")
+                        # print(f"Clipping input at +/-{eeg_sig_clip}")
                         eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip)
 
                     yield {
@@ -703,10 +704,10 @@ def evaluate(args: TrainArgs):
                         'metadata': batch['metadata'],           # Pass through metadata
                     }
 
-                print("Finished epoch", epoch)
+                # print("Finished epoch", epoch)
 
         batch_iterator = make_batch_iterator(data_loader, args.data)
-        print("Entering create batch iterator on rank", dp_rank)
+        # print("Entering create batch iterator on rank", dp_rank)
 
         for p in model.parameters():
             p.requires_grad = False #(False for eval, True for training)
@@ -725,7 +726,7 @@ def evaluate(args: TrainArgs):
 
             # Break after epoch 1 completes to avoid duplicate processing during inference
             if epoch > 1:
-                print(f"\n[DEBUG] Stopping at batch {batch_cntr}: epoch {epoch} > 1, breaking to avoid duplicate processing")
+                # print(f"\n[DEBUG] Stopping at batch {batch_cntr}: epoch {epoch} > 1, breaking to avoid duplicate processing")
                 break
 
             eeg_signal = batch['eeg_signal']
@@ -751,35 +752,28 @@ def evaluate(args: TrainArgs):
                             file_max_samples[filename] = 64  # Default assumption
 
             #Debug - Print matrix every 50 batches to show duplicates/missing
-            if batch_cntr % 50 == 0:
-                print(f"\n{'='*80}")
-                print(f"[DEBUG MATRIX] After {batch_cntr} batches:")
-                print(f"{'='*80}")
-                for filename in sorted(sample_occurrence_matrix.keys()):
-                    max_samples = file_max_samples.get(filename, 64)
-                    counts = sample_occurrence_matrix[filename]
-
-                    # Count issues
-                    zeros = sum(1 for i in range(max_samples) if counts[i] == 0)
-                    ones = sum(1 for i in range(max_samples) if counts[i] == 1)
-                    duplicates = sum(1 for i in range(max_samples) if counts[i] > 1)
-                    total_occurrences = sum(counts.values())
-
-                    print(f"\n{filename} (expected {max_samples} samples):")
-                    print(f"  0x (missing): {zeros}, 1x (good): {ones}, 2+x (duplicates): {duplicates}")
-                    print(f"  Total occurrences: {total_occurrences}")
-
-                    if duplicates > 0:
-                        # Show which indices are duplicated
-                        dup_indices = [i for i in range(max_samples) if counts[i] > 1]
-                        print(f"  ⚠️  DUPLICATES at indices: {dup_indices[:20]}")
-                        print(f"      Counts: {[counts[i] for i in dup_indices[:20]]}")
-
-                    if zeros > 0 and zeros < max_samples:  # Don't show if ALL are zero
-                        # Show which indices are missing
-                        missing_indices = [i for i in range(max_samples) if counts[i] == 0]
-                        print(f"  ⚠️  MISSING indices: {missing_indices[:20]}")
-                print(f"{'='*80}\n")
+            # if batch_cntr % 50 == 0:
+            #     print(f"\n{'='*80}")
+            #     print(f"[DEBUG MATRIX] After {batch_cntr} batches:")
+            #     print(f"{'='*80}")
+            #     for filename in sorted(sample_occurrence_matrix.keys()):
+            #         max_samples = file_max_samples.get(filename, 64)
+            #         counts = sample_occurrence_matrix[filename]
+            #         zeros = sum(1 for i in range(max_samples) if counts[i] == 0)
+            #         ones = sum(1 for i in range(max_samples) if counts[i] == 1)
+            #         duplicates = sum(1 for i in range(max_samples) if counts[i] > 1)
+            #         total_occurrences = sum(counts.values())
+            #         print(f"\n{filename} (expected {max_samples} samples):")
+            #         print(f"  0x (missing): {zeros}, 1x (good): {ones}, 2+x (duplicates): {duplicates}")
+            #         print(f"  Total occurrences: {total_occurrences}")
+            #         if duplicates > 0:
+            #             dup_indices = [i for i in range(max_samples) if counts[i] > 1]
+            #             print(f"  DUPLICATES at indices: {dup_indices[:20]}")
+            #             print(f"      Counts: {[counts[i] for i in dup_indices[:20]]}")
+            #         if zeros > 0 and zeros < max_samples:
+            #             missing_indices = [i for i in range(max_samples) if counts[i] == 0]
+            #             print(f"  MISSING indices: {missing_indices[:20]}")
+            #     print(f"{'='*80}\n")
 
 
             with torch.no_grad():
@@ -809,8 +803,7 @@ def evaluate(args: TrainArgs):
                 t_coarse = batch['t_coarse'].cpu().unsqueeze(0)         # [1, seqlen, 1]
                 tok_idx = torch.cat((chan_pos_discrete,t_coarse), dim=2)
             else:
-                print(f"Dont understand {args.model.tok_idx_type=} and {args.model.rope_dim}")
-                die 
+                raise ValueError(f"Dont understand {args.model.tok_idx_type=} and {args.model.rope_dim}")
 
 
             with torch.no_grad():
@@ -832,7 +825,7 @@ def evaluate(args: TrainArgs):
 
             for step in range(len(signals_to_plot)):
 
-                print(f"Processing step {step} of {len(signals_to_plot)}")
+                # print(f"Processing step {step} of {len(signals_to_plot)}")
                 z = signals_to_plot[step]
                 fname_suptag="_step"+str(step)
                 if step == len(signals_to_plot) - 1:
@@ -890,10 +883,10 @@ def evaluate(args: TrainArgs):
                     # Store this sample's results (multiply by eeg_sig_norm to reverse normalization)
                     file_entry = results_accumulator[filename]
                     # Debug: Track which sample indices are being processed
-                    if file_entry['collected_samples'] == 0:  # First sample from this file
-                        print(f"[DEBUG] Starting file {filename}: expecting {file_entry['expected_samples']} samples")
-                    if file_entry['collected_samples'] < 5 or file_entry['collected_samples'] >= file_entry['expected_samples'] - 3:
-                        print(f"  Storing sample_idx={sample_idx} (#{file_entry['collected_samples']+1}/{file_entry['expected_samples']})")
+                    # if file_entry['collected_samples'] == 0:  # First sample from this file
+                    #     print(f"[DEBUG] Starting file {filename}: expecting {file_entry['expected_samples']} samples")
+                    # if file_entry['collected_samples'] < 5 or file_entry['collected_samples'] >= file_entry['expected_samples'] - 3:
+                    #     print(f"  Storing sample_idx={sample_idx} (#{file_entry['collected_samples']+1}/{file_entry['expected_samples']})")
 
                     file_entry['data_original'][sample_idx] = eeg_signal_unwrapped[i] * eeg_sig_norm
                     file_entry['data_reconstructed'][sample_idx] = model_signal_output_unwrapped[i] * eeg_sig_norm
@@ -1013,55 +1006,44 @@ def evaluate(args: TrainArgs):
 
     # import pdb; pdb.set_trace()
 
-    # Debug - Final verification: Check all saved PT files for None/missing samples
-    print("\n" + "="*80)
-    print("FINAL VERIFICATION: Checking all saved PT files")
-    print("="*80)
-
-    export_path = Path(export_dir)
-    saved_pt_files = sorted(export_path.glob("*.pt"))
-
-    print(f"\nFound {len(saved_pt_files)} saved PT files\n")
-
-    total_files = 0
-    total_samples = 0
-    total_none = 0
-    total_valid = 0
-
-    for pt_file in saved_pt_files:
-        try:
-            data = torch.load(pt_file, weights_only=False)
-            reconstructed = data.get('data', [])
-
-            n_samples = len(reconstructed)
-            n_none = sum(1 for x in reconstructed if x is None)
-            n_valid = n_samples - n_none
-
-            total_files += 1
-            total_samples += n_samples
-            total_none += n_none
-            total_valid += n_valid
-
-            status = "✓" if n_none == 0 else "⚠️"
-            print(f"{status} {pt_file.name}")
-            print(f"   Total: {n_samples} | Valid: {n_valid} | None: {n_none} ({100*n_none/n_samples if n_samples > 0 else 0:.0f}%)")
-
-            if n_none > 0:
-                # Show which indices are None
-                none_indices = [i for i, x in enumerate(reconstructed) if x is None]
-                print(f"   None at indices: {none_indices[:30]}{'...' if len(none_indices) > 30 else ''}")
-
-        except Exception as e:
-            print(f"✗ {pt_file.name}: ERROR - {e}")
-
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
-    print(f"Total files: {total_files}")
-    print(f"Total samples: {total_samples}")
-    print(f"Valid samples: {total_valid} ({100*total_valid/total_samples if total_samples > 0 else 0:.1f}%)")
-    print(f"None samples: {total_none} ({100*total_none/total_samples if total_samples > 0 else 0:.1f}%)")
-    print("="*80 + "\n")
+    # # Debug - Final verification: Check all saved PT files for None/missing samples
+    # print("\n" + "="*80)
+    # print("FINAL VERIFICATION: Checking all saved PT files")
+    # print("="*80)
+    # export_path = Path(export_dir)
+    # saved_pt_files = sorted(export_path.glob("*.pt"))
+    # print(f"\nFound {len(saved_pt_files)} saved PT files\n")
+    # total_files = 0
+    # total_samples = 0
+    # total_none = 0
+    # total_valid = 0
+    # for pt_file in saved_pt_files:
+    #     try:
+    #         data = torch.load(pt_file, weights_only=False)
+    #         reconstructed = data.get('data', [])
+    #         n_samples = len(reconstructed)
+    #         n_none = sum(1 for x in reconstructed if x is None)
+    #         n_valid = n_samples - n_none
+    #         total_files += 1
+    #         total_samples += n_samples
+    #         total_none += n_none
+    #         total_valid += n_valid
+    #         status = "ok" if n_none == 0 else "warning"
+    #         print(f"{status} {pt_file.name}")
+    #         print(f"   Total: {n_samples} | Valid: {n_valid} | None: {n_none} ({100*n_none/n_samples if n_samples > 0 else 0:.0f}%)")
+    #         if n_none > 0:
+    #             none_indices = [i for i, x in enumerate(reconstructed) if x is None]
+    #             print(f"   None at indices: {none_indices[:30]}{'...' if len(none_indices) > 30 else ''}")
+    #     except Exception as e:
+    #         print(f"ERROR {pt_file.name}: {e}")
+    # print("\n" + "="*80)
+    # print("SUMMARY")
+    # print("="*80)
+    # print(f"Total files: {total_files}")
+    # print(f"Total samples: {total_samples}")
+    # print(f"Valid samples: {total_valid} ({100*total_valid/total_samples if total_samples > 0 else 0:.1f}%)")
+    # print(f"None samples: {total_none} ({100*total_none/total_samples if total_samples > 0 else 0:.1f}%)")
+    # print("="*80 + "\n")
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
