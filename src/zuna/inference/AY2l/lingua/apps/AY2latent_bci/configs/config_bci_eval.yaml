@@ -25,8 +25,8 @@ model:
 
 
 data:
-  data_dir: ./tutorials/data/2_pt_input/      # Input .pt files to be processed.
-  # data_dir: /data/datasets/bci/dataset_downloads_cw/pip_test/working/2_pt_input
+  # data_dir: ./tutorials/data/2_pt_input/      # Input .pt files to be processed.
+  data_dir: /data/datasets/bci/dataset_downloads_cw/pip_test/working/2_pt_input
   # data_dir: /data/datasets/bci/pip_test_2
   export_dir: ./tutorials/data/3_pt_output/   # Where to save output .pt files after processing.
 

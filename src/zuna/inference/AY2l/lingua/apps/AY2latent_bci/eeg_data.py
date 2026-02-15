@@ -691,7 +691,7 @@ class EEGDataset_v2(IterableDataset):
             if self.use_coarse_time=="A" or self.use_coarse_time=="B" or self.use_coarse_time=="C" or self.use_coarse_time=="D":
                 reshaped = [chop_and_reshape_signals(m, c, cd, do, self.num_fine_time_pts, self.use_coarse_time) for m,c,cd,do in zip(mmap, chan_pos, chan_pos_discrete, chan_dropout)]
             else:
-                # print(f"Dont understand {self.use_coarse_time=}")
+                print(f"Dont understand {self.use_coarse_time=}")
                 pass
 
             # Flatten list of lists into single list if trying to process each channel as separate sample.

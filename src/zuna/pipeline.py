@@ -76,9 +76,9 @@ def zuna_preprocessing(
         target_channel_count=target_channel_count
     )
 
-    # print(f"✓ Preprocessing complete")
-    # if save_preprocessed_fif and preprocessed_fif_dir:
-    #     print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
+    print(f"✓ Preprocessing complete")
+    if save_preprocessed_fif and preprocessed_fif_dir:
+        print(f"  Preprocessed FIF files saved to: {preprocessed_fif_dir}")
 
 
 def zuna_inference(
@@ -158,7 +158,7 @@ def zuna_inference(
         except Exception:
             pass  # Ignore cleanup errors
 
-    # print(f"✓ Inference complete")
+    print(f"✓ Inference complete")
 
 
 def zuna_pt_to_fif(
@@ -176,11 +176,11 @@ def zuna_pt_to_fif(
     """
     from zuna import pt_directory_to_fif
 
-    # print("="*80)
-    # print("STEP 3: Converting .pt → .fif")
-    # if upsample_factor:
-    #     print(f"  Upsampling factor: {upsample_factor}x")
-    # print("="*80)
+    print("="*80)
+    print("STEP 3: Converting .pt → .fif")
+    if upsample_factor:
+        print(f"  Upsampling factor: {upsample_factor}x")
+    print("="*80)
 
     # TODO: Add support for upsample_factor and data_key selection
     results = pt_directory_to_fif(
@@ -189,22 +189,22 @@ def zuna_pt_to_fif(
     )
 
     # Print results
-    # print(f"\n  Successful: {results['successful']}")
-    # print(f"  Failed: {results['failed']}")
-    # print(f"  Total: {results['total']}")
+    print(f"\n  Successful: {results['successful']}")
+    print(f"  Failed: {results['failed']}")
+    print(f"  Total: {results['total']}")
 
-    # if results['errors']:
-    #     print(f"\n  Errors:")
-    #     for error in results['errors']:
-    #         print(f"    {error['original_filename']}: {error['error']}")
+    if results['errors']:
+        print(f"\n  Errors:")
+        for error in results['errors']:
+            print(f"    {error['original_filename']}: {error['error']}")
 
-    # if results['successful'] > 0:
-    #     print(f"\n✓ Conversion complete")
-    # else:
-    #     print(f"\n⚠️  No files converted successfully")
+    if results['successful'] > 0:
+        print(f"\n✓ Conversion complete")
+    else:
+        print(f"\n⚠️  No files converted successfully")
 
 
-def run_zuna(
+def run_zuna_pipeline(
     input_dir: str,
     working_dir: str,
     target_channel_count: Optional[Union[int, List[str]]] = None,
@@ -220,7 +220,7 @@ def run_zuna(
     Args:
         input_dir: Directory containing input .fif files
         working_dir: Working directory where subdirectories will be created:
-                    - 1_fif_input/preprocessed/ (preprocessed FIF files)
+                    - 1_fif_input/ (preprocessed FIF files)
                     - 2_pt_input/ (preprocessed PT files)
                     - 3_pt_output/ (model output PT files)
                     - 4_fif_output/ (reconstructed FIF files)
@@ -238,15 +238,6 @@ def run_zuna(
         None
     """
 
-    # print("="*80)
-    # print("ZUNA PIPELINE")
-    # print("="*80)
-    # print(f"Input:      {input_dir}")
-    # print(f"Working:    {working_dir}")
-    # if target_channel_count:
-    #     print(f"Channels:   {target_channel_count} (upsampling)")
-    # print("="*80)
-
     # Set GPU device
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_device)
 
@@ -257,68 +248,55 @@ def run_zuna(
 
     # Setup working directory structure
     working_path = Path(working_dir)
-    preprocessed_fif_dir = working_path / "1_fif_input" / "preprocessed"
-    pt_input_path = working_path / "2_pt_input"
-    pt_output_path = working_path / "3_pt_output"
-    fif_output_path = working_path / "4_fif_output"
 
-    # Create directories
-    for dir_path in [preprocessed_fif_dir, pt_input_path, pt_output_path, fif_output_path]:
-        dir_path.mkdir(parents=True, exist_ok=True)
+    # Step 1: Preprocessing (.fif → .pt)
+    print("[1/4] Preprocessing...", flush=True)
+    zuna_step1_preprocess(
+        input_dir=str(input_path),
+        working_dir=str(working_path),
+        target_channel_count=target_channel_count,
+        bad_channels=bad_channels,
+    )
 
-    try:
-        # Step 1: Preprocessing
-        print("[1/3] Preprocessing...", flush=True)
-        from zuna import process_directory
-        process_directory(
-            input_dir=str(input_path),
-            output_dir=str(pt_input_path),
-            save_preprocessed_fif=True,
-            preprocessed_fif_dir=str(preprocessed_fif_dir),
-            target_channel_count=target_channel_count,
-            bad_channels=bad_channels,
-        )
+    # Step 2: Model Inference (.pt → .pt)
+    print("[2/4] Model inference...")
+    zuna_step2_inference(
+        working_dir=str(working_path),
+        gpu_device=gpu_device,
+    )
 
-        # Step 2: Model Inference
-        print("[2/3] Model inference...")
-        zuna_inference(
-            input_dir=str(pt_input_path),
-            output_dir=str(pt_output_path),
-            gpu_device=gpu_device
-        )
+    # Step 3: Reconstruction (.pt → .fif)
+    print("[3/4] Reconstructing FIF files...")
+    zuna_step3_reconstruct(
+        working_dir=str(working_path),
+    )
 
-        # Step 3: Reconstruction
-        print("[3/3] Reconstructing FIF files...")
-        zuna_pt_to_fif(
-            input_dir=str(pt_output_path),
-            output_dir=str(fif_output_path),
-        )
+    # Step 4: Visualization (optional)
+    print("[4/4] Visualizing pipeline outputs...")
+    zuna_step4_visualize(
+        input_dir=str(input_path),
+        working_dir=str(working_path),
+        plot_pt=plot_pt_comparison,
+        plot_fif=plot_fif_comparison,
+    )
 
-        # Cleanup intermediate files if requested
-        if not keep_intermediate_files:
-            # print("\nCleaning up intermediate files...")
-            import shutil
-            shutil.rmtree(pt_input_path)
-            shutil.rmtree(pt_output_path)
-            # print(f"✓ Removed PT files")
+    # Cleanup intermediate files if requested
+    if not keep_intermediate_files:
+        # print("\nCleaning up intermediate files...")
+        working_path = Path(working_dir)
+        pt_input_path = working_path / "2_pt_input"
+        pt_output_path = working_path / "3_pt_output"
+        import shutil
+        shutil.rmtree(pt_input_path)
+        shutil.rmtree(pt_output_path)
+        print(f"✓ Removed intermediate PT files")
 
-        # Visualization
-        if plot_pt_comparison or plot_fif_comparison:
-            # print("\nGenerating comparison plots...")
-            from zuna.visualization import compare_pipeline_outputs
-            compare_pipeline_outputs(
-                working_dir=str(working_path),
-                plot_pt=plot_pt_comparison,
-                plot_fif=plot_fif_comparison,
-            )
 
-        print("Pipeline complete. Output:", fif_output_path)
 
-    except Exception as e:
-        # print(f"\n✗ Pipeline failed: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+
+    print("Pipeline complete. Output:", str(working_path))
+
+
 
 
 # =============================================================================
@@ -359,7 +337,7 @@ def zuna_step1_preprocess(
     from zuna import process_directory
 
     working_path = Path(working_dir)
-    preprocessed_fif_dir = working_path / "1_fif_input" / "preprocessed"
+    preprocessed_fif_dir = working_path / "1_fif_input"
     pt_input_path = working_path / "2_pt_input"
 
     # Create directories
@@ -376,6 +354,10 @@ def zuna_step1_preprocess(
     # if target_channel_count:
     #     print(f"Target channels: {target_channel_count}")
     # print("="*80 + "\n")
+
+
+    # print(f"Inside zuna_step1_preprocess")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     process_directory(
         input_dir=input_dir,
@@ -486,6 +468,7 @@ def zuna_step3_reconstruct(
 
 
 def zuna_step4_visualize(
+    input_dir: str,
     working_dir: str,
     plot_pt: bool = False,
     plot_fif: bool = True,
@@ -523,9 +506,12 @@ def zuna_step4_visualize(
     from zuna.visualization import compare_pipeline_outputs
 
     compare_pipeline_outputs(
+        input_dir=input_dir,
         working_dir=working_dir,
         plot_pt=plot_pt,
         plot_fif=plot_fif,
+        include_original_fif=True,
+        normalize_for_comparison=True,
     )
 
     # print(f"\n✓ Visualization complete")

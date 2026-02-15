@@ -19,10 +19,10 @@ import random
 # CONFIGURATION
 # =============================================================================
 
-NUM_SAMPLES = 2  # Number of files to compare (set to 1 for quick check, 2 for first+last)
-SAMPLE_FROM_ENDS = True  # Set to True to pick first and last files, False for random sampling
-NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
-INCLUDE_ORIGINAL_FIF = False  # Set to True to show 3 lines (original, preprocessed, reconstructed), False for 2 lines (preprocessed, reconstructed)
+# NUM_SAMPLES = 2  # Number of files to compare (set to 1 for quick check, 2 for first+last)
+# SAMPLE_FROM_ENDS = True  # Set to True to pick first and last files, False for random sampling
+# NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
+# INCLUDE_ORIGINAL_FIF = False  # Set to True to show 3 lines (original, preprocessed, reconstructed), False for 2 lines (preprocessed, reconstructed)
 
 # Directory paths
 # FIF_INPUT_DIR = "data/1_fif_input"
@@ -31,12 +31,12 @@ INCLUDE_ORIGINAL_FIF = False  # Set to True to show 3 lines (original, preproces
 # PT_OUTPUT_DIR = "data/3_pt_output"
 # OUTPUT_DIR = "eval_figures"
 
-FIF_ORIGINAL_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"                  # Original .fif files (before preprocessing)
-FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"    # Preprocessed .fif files (after filtering)
-PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'                  # Preprocessed .pt files
-PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'                # Model output .pt files
-FIF_OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Reconstructed .fif files
-OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/FIGURES"
+# FIF_ORIGINAL_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input"                  # Original .fif files (before preprocessing)
+# FIF_INPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/1_fif_input_processed"    # Preprocessed .fif files (after filtering)
+# PT_INPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/2_pt_input'                  # Preprocessed .pt files
+# PT_OUTPUT_DIR = '/data/datasets/bci/dataset_downloads_cw/pip_test/3_pt_output'                # Model output .pt files
+# FIF_OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/4_fif_output"              # Reconstructed .fif files
+# OUTPUT_DIR = "/data/datasets/bci/dataset_downloads_cw/pip_test/FIGURES"
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -247,7 +247,7 @@ def compare_pt_files(input_file, output_file, output_dir, file_idx):
     # print(f"Saved: {output_path}")
 
 
-def compare_fif_files(original_file, preprocessed_file, output_file, output_dir, file_idx):
+def compare_fif_files(original_file, preprocessed_file, output_file, output_dir, file_idx, include_original_fif, normalize_for_comparison):
     """Compare .fif files: preprocessed vs reconstructed (and optionally original if provided)"""
 
     # print(f"\n{'='*80}")
@@ -255,7 +255,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
     # print(f"{'='*80}")
 
     # Check if original file is provided (3-line mode vs 2-line mode)
-    include_original = original_file is not None
+    include_original = include_original_fif and original_file is not None
 
     # if include_original:
     #     print(f"Original:     {original_file}")
@@ -336,7 +336,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
         data_output_window = data_output[:, start_sample:end_sample]
 
         # Normalize for visual comparison if enabled
-        if NORMALIZE_FOR_COMPARISON:
+        if normalize_for_comparison:
             # print(f"\nNORMALIZE_FOR_COMPARISON=True: Normalizing both to same scale (ignoring zeros)")
 
             # For output, compute stats ONLY on non-zero samples (ignore None epochs)
@@ -524,6 +524,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 # =============================================================================
 
 def compare_pipeline(
+    input_dir: str,
     fif_input_dir: str,
     fif_output_dir: str,
     pt_input_dir: str,
@@ -533,11 +534,14 @@ def compare_pipeline(
     plot_fif: bool = True,
     num_samples: int = 2,
     sample_from_ends: bool = True,
+    include_original_fif: bool = False,
+    normalize_for_comparison: bool = False,
 ):
     """
     Compare pipeline inputs and outputs (both .pt and .fif files).
 
     Args:
+        input_dir: Directory with input FIF files
         fif_input_dir: Directory with preprocessed FIF files
         fif_output_dir: Directory with reconstructed FIF files
         pt_input_dir: Directory with preprocessed PT files
@@ -553,12 +557,19 @@ def compare_pipeline(
     # print("="*80)
     # print(f"Comparing {num_samples} random file(s) from input/output directories")
 
+    print(f"Inside compare_pipeline")
+    import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+
+    # NORMALIZE_FOR_COMPARISON = False  # Normalize both to same scale for visual comparison
+    # INCLUDE_ORIGINAL_FIF = True  # Set to True to show 3 lines (original, preprocessed, reconstructed), False for 2 lines (preprocessed, reconstructed)
+
     # Create output directory
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Get list of files
-    fif_original_files = sorted(Path(FIF_ORIGINAL_DIR).glob("*.fif")) if Path(FIF_ORIGINAL_DIR).exists() else []
+    fif_original_files = sorted(Path(input_dir).glob("*.fif")) if Path(input_dir).exists() else []
     fif_input_files = sorted(Path(fif_input_dir).glob("*.fif"))
     fif_output_files = sorted(Path(fif_output_dir).glob("*.fif"))
     pt_input_files = sorted(Path(pt_input_dir).glob("*.pt"))
@@ -651,7 +662,7 @@ def compare_pipeline(
         # print("\nSkipping .pt comparison (no files found)")
 
     # Compare .fif files (after PT files, in case this crashes)
-    if INCLUDE_ORIGINAL_FIF:
+    if include_original_fif:
         # 3-line mode: original, preprocessed, reconstructed
         if len(fif_original_files) > 0 and len(fif_input_files) > 0 and len(fif_output_files) > 0:
             # Sample files (from ends or randomly)
@@ -693,7 +704,14 @@ def compare_pipeline(
                     # print(f"\nWarning: No matching output file found for {original_file.name}")
                     continue
 
-                compare_fif_files(original_file, preprocessed_file, output_file, output_dir_path, idx + 1)
+                compare_fif_files(original_file, 
+                                  preprocessed_file, 
+                                  output_file, 
+                                  output_dir_path, 
+                                  idx + 1, 
+                                  include_original_fif, 
+                                  normalize_for_comparison
+                )
         else:
             pass
             # print("\nSkipping .fif comparison (need all 3: original, preprocessed, output files)")
@@ -729,7 +747,14 @@ def compare_pipeline(
                     continue
 
                 # Pass None for original_file to indicate 2-line mode
-                compare_fif_files(None, preprocessed_file, output_file, output_dir_path, idx + 1)
+                compare_fif_files(None, 
+                                  preprocessed_file, 
+                                  output_file, 
+                                  output_dir_path, 
+                                  idx + 1, 
+                                  include_original_fif, 
+                                  normalize_for_comparison
+                )
         else:
             pass
             # print("\nSkipping .fif comparison (no files found)")
