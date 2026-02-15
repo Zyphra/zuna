@@ -7,7 +7,6 @@ Checks: SD comparison, NaN values, and metadata matching.
 import torch
 import numpy as np
 from pathlib import Path
-from collections import defaultdict
 import random
 
 # Paths

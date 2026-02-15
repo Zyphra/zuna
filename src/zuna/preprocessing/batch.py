@@ -400,8 +400,13 @@ def process_directory(
     input_path = Path(input_dir)
     output_path = Path(output_dir)
 
+    print(f"Inside process_directory")
+    print(f"{input_path=}")
+    print(f"{output_path=}")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
     # Create output directory if it doesn't exist
-    output_path.mkdir(parents=True, exist_ok=True)
+    # output_path.mkdir(parents=True, exist_ok=True)
 
     # Reset epoch cache at the start
     _reset_epoch_cache()
@@ -413,8 +418,8 @@ def process_directory(
         eeg_files.extend(input_path.glob(f'**/*{ext}'))
 
     if len(eeg_files) == 0:
-        # print(f"⚠️  No EEG files found in {input_dir}")
-        # print(f"   Looking for: {', '.join(supported_extensions)}")
+        print(f"⚠️  No EEG files found in {input_dir}")
+        print(f"   Looking for: {', '.join(supported_extensions)}")
         return []
 
     # print("="*80)
@@ -433,6 +438,11 @@ def process_directory(
     # Create processor (one per job if parallel)
     processor = EEGProcessor(config)
 
+    # print(f"Inside process_directory after creating processor")
+    # print(f"{config=}") 
+    # print(f"{processor=}")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
     # Prepare file processing tasks
     file_counter = 0  # Running counter for dataset names, starts at 0
     tasks = []
@@ -449,13 +459,13 @@ def process_directory(
             result = _process_single_file(file_path, idx, fc, output_path, processor, config)
 
             # Print summary
-            # if result['success']:
-            #     print(f"  ✅ Success!")
-            #     print(f"     Total epochs: {result['total_epochs']}")
-            #     if result.get('pt_files_saved', 0) > 0:
-            #         print(f"     PT files saved: {result['pt_files_saved']}")
-            # else:
-            #     print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
+            if result['success']:
+                # print(f"  ✅ Success!")
+                # print(f"     Total epochs: {result['total_epochs']}")
+                if result.get('pt_files_saved', 0) > 0:
+                    print(f"     PT files saved: {result['pt_files_saved']}")
+            else:
+                print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
 
             results.append(result)
     else:
@@ -476,9 +486,9 @@ def process_directory(
     #     print(f"  ✅ Saved remaining epochs to: {Path(remaining_file).name}")
 
     # Final summary
-    # print("\n" + "="*80)
-    # print("Processing Summary")
-    # print("="*80)
+    print("\n" + "="*80)
+    print("Processing Summary")
+    print("="*80)
     successful = sum(1 for r in results if r['success'])
     failed = len(results) - successful
     total_epochs = sum(r.get('total_epochs', 0) for r in results if r['success'])
@@ -488,12 +498,12 @@ def process_directory(
     if remaining_file:
         total_pt_files += 1
 
-    # print(f"  Total input files: {len(results)}")
-    # print(f"  Successful: {successful}")
-    # print(f"  Failed: {failed}")
-    # print(f"  Total epochs processed: {total_epochs}")
-    # print(f"  Total PT files saved: {total_pt_files}")
-    # print(f"  Output directory: {output_dir}")
+    print(f"  Total input files: {len(results)}")
+    print(f"  Successful: {successful}")
+    print(f"  Failed: {failed}")
+    print(f"  Total epochs processed: {total_epochs}")
+    print(f"  Total PT files saved: {total_pt_files}")
+    print(f"  Output directory: {output_dir}")
     return results
 
 

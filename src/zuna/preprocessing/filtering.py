@@ -88,7 +88,11 @@ class Filter:
         fmax = min(sfreq / 2 - 1.0, 250.0)
 
         # Compute PSD
-        psd = raw.compute_psd(method='welch', fmin=fmin, fmax=fmax, picks=good_picks, n_fft=4096)
+        # Compute PSD (cap n_fft at signal length; skip if too short for useful spectral analysis)
+        n_fft = min(4096, raw.n_times)
+        if n_fft < 512:
+            return raw, []
+        psd = raw.compute_psd(method='welch', fmin=fmin, fmax=fmax, picks=good_picks, n_fft=n_fft)
         freqs = psd.freqs
         P = 10 * np.log10(np.median(psd.get_data(), axis=0))
 
