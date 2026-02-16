@@ -1,5 +1,7 @@
 # Zuna: EEG Foundation Model
 
+[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA)
+
 Zuna is a pretrained EEG foundation model that reconstructs and denoises EEG signals. It takes raw EEG recordings, processes them through a transformer-based model, and outputs cleaned reconstructions.
 
 ## Installation
