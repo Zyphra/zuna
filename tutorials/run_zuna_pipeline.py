@@ -15,12 +15,18 @@ For documentation on each function, run:
     help(zuna.zuna_preprocessing)
     help(zuna.zuna_inference)
     help(zuna.zuna_pt_to_fif)
-    help(zuna.zuna_plot)
+    help(zuna.compare_plot_pipeline)
 """
 
 import shutil
 from pathlib import Path
-from zuna import zuna_preprocessing, zuna_inference, zuna_pt_to_fif, zuna_plot
+from zuna import (
+    zuna_preprocessing, 
+    zuna_inference, 
+    zuna_pt_to_fif, 
+    compare_plot_pipeline
+)
+    # zuna_plot
 
 # =============================================================================
 # PATHS
@@ -32,10 +38,11 @@ WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")      ### replace with your 
 
 # Derived paths (pipeline directory structure)
 WORKING_PATH = Path(WORKING_DIR)
-PREPROCESSED_FIF_DIR = str(WORKING_PATH / "1_fif_input")
+PREPROCESSED_FIF_DIR = str(WORKING_PATH / "1_fif_filter")
 PT_INPUT_DIR = str(WORKING_PATH / "2_pt_input")
 PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
 FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
+FIGURES_DIR = str(WORKING_PATH / "FIGURES")
 
 # =============================================================================
 # PREPROCESSING OPTIONS
@@ -60,7 +67,16 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 # INFERENCE OPTIONS
 # =============================================================================
 
-GPU_DEVICE = 0                  # GPU ID (default: 0)
+GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
+TOKENS_PER_BATCH = 100000       # Number of tokens per batch
+DATA_NORM = 10.0                # Data normalization factor denominator 
+                                # (ZUNA expects eeg data to have std = 0.1)
+                                
+DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
+DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process
+
+PLOT_EEG_SIGNAL_SAMPLES = False # Plot raw eeg for data and model reconstruction for single samples inside inference code.
+                                # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
 
 # =============================================================================
 # OUTPUT OPTIONS
@@ -69,6 +85,11 @@ GPU_DEVICE = 0                  # GPU ID (default: 0)
 PLOT_PT_COMPARISON = True       # Plot .pt file comparisons
 PLOT_FIF_COMPARISON = True      # Plot .fif file comparisons
 KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
+
+NUM_SAMPLES = 4
+SAMPLE_FROM_ENDS = True
+NORMALIZE_FOR_COMPARISON = True
+INCLUDE_ORIGINAL_FIF = False        # Include original .fif file in comparison (ERRORS!)
 
 # =============================================================================
 # RUN PIPELINE
@@ -102,6 +123,11 @@ if __name__ == "__main__":
         input_dir=PT_INPUT_DIR,
         output_dir=PT_OUTPUT_DIR,
         gpu_device=GPU_DEVICE,
+        tokens_per_batch=TOKENS_PER_BATCH,
+        data_norm=DATA_NORM,
+        diffusion_cfg=DIFFUSION_CFG,
+        diffusion_sample_steps=DIFFUSION_SAMPLE_STEPS,
+        plot_eeg_signal_samples=PLOT_EEG_SIGNAL_SAMPLES,
     )
 
     # Step 3: Reconstruction (.pt → .fif)
@@ -114,12 +140,27 @@ if __name__ == "__main__":
     # Step 4: Visualization (optional)
     if PLOT_PT_COMPARISON or PLOT_FIF_COMPARISON:
         print("[4/4] Visualizing pipeline outputs...", flush=True)
-        zuna_plot(
+        compare_plot_pipeline(
             input_dir=INPUT_DIR,
-            working_dir=WORKING_DIR,
+            fif_input_dir=PREPROCESSED_FIF_DIR,
+            fif_output_dir=FIF_OUTPUT_DIR,
+            pt_input_dir=PT_INPUT_DIR,
+            pt_output_dir=PT_OUTPUT_DIR,
+            output_dir=FIGURES_DIR,
             plot_pt=PLOT_PT_COMPARISON,
             plot_fif=PLOT_FIF_COMPARISON,
+            num_samples=NUM_SAMPLES,
+            sample_from_ends=SAMPLE_FROM_ENDS,
+            include_original_fif=INCLUDE_ORIGINAL_FIF,
+            normalize_for_comparison=NORMALIZE_FOR_COMPARISON,   
         )
+
+        # zuna_plot(
+        #     input_dir=INPUT_DIR,
+        #     working_dir=WORKING_DIR,
+        #     plot_pt=PLOT_PT_COMPARISON,
+        #     plot_fif=PLOT_FIF_COMPARISON,
+        # )
 
     # Cleanup intermediate files if requested
     if not KEEP_INTERMEDIATE_FILES:
