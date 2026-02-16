@@ -98,7 +98,6 @@ def _add_epochs_to_cache(
 
     saved_files = []
 
-    #JM save pt - Save complete PT files (64 epochs each) when cache is full
     while len(_epoch_cache['data_list']) >= config.epochs_per_file:
         output_file = _save_pt_from_cache(output_path, config)
         if output_file:
@@ -137,7 +136,6 @@ def _save_pt_from_cache(output_path: Path, config: ProcessingConfig) -> Optional
     )
     output_file = output_path / output_filename
 
-    #JM save pt - Call save_pt to write this batch of epochs to disk
     from .io import save_pt
     save_pt(
         epochs_for_pt,
@@ -193,7 +191,6 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     )
     output_file = output_path / output_filename
 
-    #JM save pt - Flush remaining epochs (< 64) to final PT file
     from .io import save_pt
     save_pt(
         epochs_for_pt,
@@ -400,13 +397,8 @@ def process_directory(
     input_path = Path(input_dir)
     output_path = Path(output_dir)
 
-    print(f"Inside process_directory")
-    print(f"{input_path=}")
-    print(f"{output_path=}")
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-
     # Create output directory if it doesn't exist
-    # output_path.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # Reset epoch cache at the start
     _reset_epoch_cache()
@@ -422,10 +414,6 @@ def process_directory(
         print(f"   Looking for: {', '.join(supported_extensions)}")
         return []
 
-    # print("="*80)
-    # print(f"Found {len(eeg_files)} EEG file(s) to process")
-    # print("="*80)
-
     # Create config
     if config is None:
         config = ProcessingConfig(**config_kwargs)
@@ -437,11 +425,6 @@ def process_directory(
 
     # Create processor (one per job if parallel)
     processor = EEGProcessor(config)
-
-    # print(f"Inside process_directory after creating processor")
-    # print(f"{config=}") 
-    # print(f"{processor=}")
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     # Prepare file processing tasks
     file_counter = 0  # Running counter for dataset names, starts at 0
@@ -455,23 +438,14 @@ def process_directory(
         # Sequential processing with progress feedback
         results = []
         for file_path, idx, fc in tasks:
-            # print(f"\n[{idx}/{len(eeg_files)}] Processing: {file_path.name}")
             result = _process_single_file(file_path, idx, fc, output_path, processor, config)
 
-            # Print summary
-            if result['success']:
-                # print(f"  ✅ Success!")
-                # print(f"     Total epochs: {result['total_epochs']}")
-                if result.get('pt_files_saved', 0) > 0:
-                    print(f"     PT files saved: {result['pt_files_saved']}")
-            else:
-                print(f"  ⚠️  Skipped: {result.get('error', 'Unknown error')}")
+            if not result['success']:
+                print(f"  Skipped: {result.get('error', 'Unknown error')}")
 
             results.append(result)
     else:
         # Parallel processing
-        # print(f"\n🚀 Processing {len(tasks)} files with {n_jobs} parallel workers...")
-
         results = Parallel(n_jobs=n_jobs, backend='loky', verbose=10)(
             delayed(_process_single_file)(
                 file_path, idx, fc, output_path, processor, config
@@ -480,10 +454,7 @@ def process_directory(
         )
 
     # Flush remaining epochs in cache
-    # print("\n💾 Saving remaining epochs from cache...")
     remaining_file = _flush_remaining_cache(output_path)
-    # if remaining_file:
-    #     print(f"  ✅ Saved remaining epochs to: {Path(remaining_file).name}")
 
     # Final summary
     print("\n" + "="*80)
