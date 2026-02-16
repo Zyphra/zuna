@@ -42,7 +42,7 @@ working_dir/
 
 Model weights are automatically downloaded from HuggingFace on first run.
 
-See `tutorials/getting_started.py` for a complete working example.
+See `tutorials/run_zuna_pipeline.py` for a complete working example.
 
 ## Pipeline Overview
 
