@@ -236,7 +236,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 
     # Generate TWO plots: beginning and end
     windows_to_plot = [
-        ('beginning', 0, min(window_samples, min_samples)),
+        ('beg', 0, min(window_samples, min_samples)),
         ('end', max(0, min_samples - window_samples), min_samples)
     ]
 
@@ -420,7 +420,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 
     plt.tight_layout()
 
-    output_path = output_dir / f"fif_file{file_idx}_comparison_full_duration_ch{channel_idx}.png"
+    output_path = output_dir / f"fif_file{file_idx}_comparison_full_ch{channel_idx}.png"
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -428,7 +428,7 @@ def compare_fif_files(original_file, preprocessed_file, output_file, output_dir,
 # MAIN FUNCTION
 # =============================================================================
 
-def compare_pipeline(
+def compare_plot_pipeline(
     input_dir: str,
     fif_input_dir: str,
     fif_output_dir: str,

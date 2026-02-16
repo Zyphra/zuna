@@ -116,19 +116,19 @@ def zuna_preprocessing(
 def zuna_inference(
     input_dir: str,
     output_dir: str,
-    gpu_device: int = 0
+    gpu_device: int|str = 0, 
+    tokens_per_batch: int|None = None,
+    data_norm: float|None = None,
 ) -> None:
     """
     Run model inference on .pt files.
-
-    Model weights are automatically downloaded from HuggingFace.
+    Zuna model weights are automatically downloaded from HuggingFace.
 
     Args:
         input_dir: Directory containing preprocessed .pt files
         output_dir: Directory to save model output .pt files
-        gpu_device: GPU device ID (default: 0)
+        gpu_device: GPU device ID (default: 0), or "" for CPU
     """
-    from omegaconf import OmegaConf
     import subprocess
 
     # Create output directory
@@ -136,29 +136,28 @@ def zuna_inference(
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Load the base config file
-    config_path = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
+    config_path = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/configs/config_infer.yaml"
 
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at {config_path}")
 
-    # Load and modify config with our paths
-    config = OmegaConf.load(str(config_path))
-    config.data.data_dir = str(Path(input_dir).absolute())
-    config.data.export_dir = str(output_path.absolute())
-    config.dump_dir = str(output_path.absolute())
-
-    # Save modified config to temporary file
-    temp_config_path = output_path / "temp_config.yaml"
-    OmegaConf.save(config, str(temp_config_path))
-
     # Build command to run eeg_eval.py
     eeg_eval_script = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py"
 
+    # Build up command to run eeg_eval.py
     cmd = [
         "python3",
         str(eeg_eval_script),
-        f"config={temp_config_path}"
+        f"config={config_path}",
+        f"data.data_dir={str(Path(input_dir).absolute())}",
+        f"data.export_dir={str(output_path.absolute())}"
     ]
+
+    # Add optional parameters
+    if tokens_per_batch is not None:
+        cmd.append(f"data.target_packed_seqlen={tokens_per_batch}")
+    if data_norm is not None:
+        cmd.append(f"data.data_norm={data_norm}")
 
     # Set environment variable for GPU
     env = os.environ.copy()
@@ -166,27 +165,6 @@ def zuna_inference(
 
     # Run the command
     result = subprocess.run(cmd, env=env, check=True)
-
-    # Clean up temporary files created during inference
-    temp_config_path.unlink()
-
-    # Remove other temporary files/folders created by eeg_eval.py
-    cleanup_files = [
-        output_path / "checkpoints",  # folder
-        output_path / "config.yaml",
-        output_path / "metrics.jsonl",
-        output_path / "train.log"
-    ]
-
-    for path in cleanup_files:
-        try:
-            if path.exists():
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-        except Exception:
-            pass  # Ignore cleanup errors
 
     print(f"✓ Inference complete")
 
@@ -279,55 +257,72 @@ def zuna_pt_to_fif(
     print(f"Reconstruction: {successful}/{successful + failed} files converted.")
 
 
-def zuna_plot(
-    input_dir: str,
-    working_dir: str,
-    plot_pt: bool = False,
-    plot_fif: bool = True,
-) -> None:
-    """
-    Generate comparison plots between pipeline input and output.
+# def zuna_plot(
+#     input_dir: str,
+#     working_dir: str,
+#     fif_input_dir: str,
+#     fif_output_dir: str,
+#     pt_input_dir: str,
+#     pt_output_dir: str,
+#     plot_pt: bool = True,
+#     plot_fif: bool = True,
+#     sample_from_ends: bool = True,
+#     include_original_fif: bool = True,
+#     normalize_for_comparison: bool = True,
+#     num_samples: int = 2,
+#     )
 
-    Compares preprocessed vs reconstructed files to visually inspect
-    model quality. Plots are saved as images to working_dir/FIGURES/.
 
-    Expects the standard pipeline directory structure under working_dir:
-        1_fif_input/   - Preprocessed .fif files
-        2_pt_input/    - Preprocessed .pt files
-        3_pt_output/   - Model output .pt files
-        4_fif_output/  - Reconstructed .fif files
+# ) -> None:
+#     """
+#     Generate comparison plots between pipeline input and output.
 
-    Args:
-        input_dir: Directory containing the original input .fif files.
-        working_dir: Working directory containing pipeline outputs.
-        plot_pt: Compare .pt files (preprocessed vs model output).
-            Shows per-epoch signal comparisons (default: False).
-        plot_fif: Compare .fif files (preprocessed vs reconstructed).
-            Shows full-recording signal overlays (default: True).
+#     Compares preprocessed vs reconstructed files to visually inspect
+#     model quality. Plots are saved as images to working_dir/FIGURES/.
 
-    Example:
-        >>> from zuna.pipeline import zuna_plot
-        >>> zuna_plot(
-        ...     input_dir="/data/eeg/raw_fif",
-        ...     working_dir="/data/eeg/working",
-        ...     plot_fif=True,
-        ... )
-    """
-    from .visualization.compare import compare_pipeline
+#     Expects the standard pipeline directory structure under working_dir:
+#         1_fif_filter/  - Preprocessed .fif files
+#         2_pt_input/    - Preprocessed .pt files
+#         3_pt_output/   - Model output .pt files
+#         4_fif_output/  - Reconstructed .fif files
 
-    working_path = Path(working_dir)
-    figures_dir = working_path / "FIGURES"
-    figures_dir.mkdir(parents=True, exist_ok=True)
+#     Args:
+#         input_dir: Directory containing the original input .fif files.
+#         working_dir: Working directory containing pipeline outputs.
+#         plot_pt: Compare .pt files (preprocessed vs model output).
+#             Shows per-epoch signal comparisons (default: False).
+#         plot_fif: Compare .fif files (preprocessed vs reconstructed).
+#             Shows full-recording signal overlays (default: True).
 
-    compare_pipeline(
-        input_dir=input_dir,
-        fif_input_dir=str(working_path / "1_fif_input"),
-        fif_output_dir=str(working_path / "4_fif_output"),
-        pt_input_dir=str(working_path / "2_pt_input"),
-        pt_output_dir=str(working_path / "3_pt_output"),
-        output_dir=str(figures_dir),
-        plot_pt=plot_pt,
-        plot_fif=plot_fif,
-    )
+#     Example:
+#         >>> from zuna.pipeline import zuna_plot
+#         >>> zuna_plot(
+#         ...     input_dir="/data/eeg/raw_fif",
+#         ...     working_dir="/data/eeg/working",
+#         ...     plot_fif=True,
+#         ... )
+#     """
+#     from .visualization.compare import compare_pipeline
+
+#     working_path = Path(working_dir)
+#     figures_dir = working_path / "FIGURES"
+#     figures_dir.mkdir(parents=True, exist_ok=True)
+
+#     compare_plot_pipeline(
+#         input_dir=input_dir,
+#         fif_input_dir=str(working_path / "1_fif_filter"),
+#         fif_output_dir=str(working_path / "4_fif_output"),
+#         pt_input_dir=str(working_path / "2_pt_input"),
+#         pt_output_dir=str(working_path / "3_pt_output"),
+#         output_dir=str(figures_dir),
+#         plot_pt=plot_pt,
+#         plot_fif=plot_fif,
+#     )
+
+
+#     num_samples: int = 2,
+#     sample_from_ends: bool = True,
+#     include_original_fif: bool = False,
+#     normalize_for_comparison: bool = False,
 
 

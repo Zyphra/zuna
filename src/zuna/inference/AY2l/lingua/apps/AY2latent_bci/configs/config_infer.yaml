@@ -1,5 +1,6 @@
 model:
   # NOTE MODEL IS ACTUALLY LOADED FROM JSON CONFIG FILE IN HUGGINGFACE REPO.
+  # MODEL WAS TRAINED WITH THIS CONFIG. BEST NOT TO CHANGE.
   dim: 1024
   n_layers: 16
   head_dim: 64
@@ -25,10 +26,11 @@ model:
 
 
 data:
-  # data_dir: ./tutorials/data/2_pt_input/      # Input .pt files to be processed.
-  data_dir: /data/datasets/bci/dataset_downloads_cw/pip_test/working/2_pt_input
-  # data_dir: /data/datasets/bci/pip_test_2
+  data_dir: ./tutorials/data/3_pt_output/
   export_dir: ./tutorials/data/3_pt_output/   # Where to save output .pt files after processing.
+  target_packed_seqlen: 100000            # Target seqlen for packed samples. This is essentially batch size.
+  data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
+  data_clip: 1.0  # Clip data to this value after normalization.
 
   glob_filter: "**/*.pt" # this filters the dataset to only contain files with this string in it.
   chan_num_filter: null # null or integer number of channels we want in each sample (another filter on input data)
@@ -43,10 +45,6 @@ data:
   num_bins_discretize_xyz_chan_pos: 50 # Number of bins to discretize channel positions to use in 4d-RoPE. (we used 50)
   chan_pos_xyz_extremes_type: "twelves" 
 
-  data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
-  data_clip: 1.0  # Clip data to this value after normalization.
-  target_packed_seqlen: 100000            # Target seqlen for packed samples. This is essentially batch size.
-
   # For dataloader.
   num_workers: 0              
   prefetch_factor: null          
@@ -55,5 +53,3 @@ data:
 
   shuffle: true              
   seed: 316                   
-  
-dump_dir: zuna_log/ 
