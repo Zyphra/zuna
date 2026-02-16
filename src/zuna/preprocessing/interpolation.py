@@ -54,7 +54,6 @@ def zero_bad_channels(
             skipped_channels.append(bad_name)
 
     if not bad_indices:
-        # print(f"⚠️  Bad channels: No matching channels found. Skipped: {skipped_channels}")
         return epochs_list
 
     # Zero out bad channels in all epochs
@@ -64,10 +63,6 @@ def zero_bad_channels(
             if idx < epoch.shape[0]:
                 epoch[idx, :] = 0.0
                 zeroed_count += 1
-
-    # print(f"✓ Zeroed out {len(bad_indices)} bad channels in {len(epochs_list)} epochs: {[channel_names[i] for i in bad_indices]}")
-    # if skipped_channels:
-    #     print(f"  Skipped (not found): {skipped_channels}")
 
     return epochs_list
 
@@ -314,19 +309,9 @@ def add_specific_channels(
         new_channel_names.append(montage_orig_name)
         new_channel_positions.append(pos_array)
 
-    # Print summary
-    # if skipped_existing:
-    #     print(f"  Skipped {len(skipped_existing)} channels (already exist): {', '.join(skipped_existing)}")
-
-    # if skipped_not_in_montage:
-    #     print(f"  Skipped {len(skipped_not_in_montage)} channels (not in {montage_source}): {', '.join(skipped_not_in_montage)}")
-
     # If no new channels to add, return original
     if len(new_channel_names) == 0:
-        # print(f"  No new channels to add")
         return epochs_list, positions_list, channel_names
-
-    # print(f"  Adding {len(new_channel_names)} channels: {', '.join(new_channel_names)}")
 
     # Convert to numpy array
     new_channel_positions = np.array(new_channel_positions)

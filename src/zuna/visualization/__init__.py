@@ -53,6 +53,4 @@ def compare_pipeline_outputs(
         plot_fif=plot_fif,
         num_samples=num_samples,
         sample_from_ends=sample_from_ends,
-        include_original_fif=include_original_fif,
-        normalize_for_comparison=normalize_for_comparison,
     )
