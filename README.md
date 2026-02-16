@@ -1,5 +1,7 @@
 # Zuna: EEG Foundation Model
 
+[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA)
+
 Zuna is a pretrained EEG foundation model that reconstructs and denoises EEG signals. It takes raw EEG recordings, processes them through a transformer-based model, and outputs cleaned reconstructions.
 
 ## Installation
@@ -42,7 +44,7 @@ working_dir/
 
 Model weights are automatically downloaded from HuggingFace on first run.
 
-See `tutorials/getting_started.py` for a complete working example.
+See `tutorials/run_zuna_pipeline.py` for a complete working example.
 
 ## Pipeline Overview
 
