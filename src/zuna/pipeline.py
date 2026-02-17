@@ -119,6 +119,10 @@ def zuna_inference(
     gpu_device: int|str = 0, 
     tokens_per_batch: int|None = None,
     data_norm: float|None = None,
+    diffusion_cfg: float = 1.0,
+    diffusion_sample_steps: int = 50,
+    plot_eeg_signal_samples: bool = False,
+    inference_figures_dir: str = "./inference_figures",
 ) -> None:
     """
     Run model inference on .pt files.
@@ -150,7 +154,11 @@ def zuna_inference(
         str(eeg_eval_script),
         f"config={config_path}",
         f"data.data_dir={str(Path(input_dir).absolute())}",
-        f"data.export_dir={str(output_path.absolute())}"
+        f"data.export_dir={str(output_path.absolute())}",
+        f"diffusion_cfg={diffusion_cfg}",
+        f"diffusion_sample_steps={diffusion_sample_steps}",
+        f"plot_eeg_signal_samples={plot_eeg_signal_samples}",
+        f"inference_figures_dir={inference_figures_dir}",
     ]
 
     # Add optional parameters

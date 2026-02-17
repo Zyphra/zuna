@@ -101,6 +101,12 @@ class TrainArgs:
     encoder_repa_weight: float = 1.0
     encoder_distill_weight: float = 1.0
 
+    # Args added to pass in Diffusion & plotting options
+    diffusion_cfg: float = 1.0  # Default is 1.0 (i.e., no cfg)
+    diffusion_sample_steps: int = 50 # Default is 50
+    plot_eeg_signal_samples: bool = False # Default is False
+    inference_figures_dir: str = "inference_figures" # Default is "inference_figures"
+
 # @torch.compile()
 def process_batch_data(batch, data_processor, loss_weights,):
     with torch.no_grad():
@@ -499,12 +505,8 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
 
 
 def evaluate(args: TrainArgs):
-
-    plot_eeg_signal_samples = False      # Plot raw eeg for data and model reconstruction for single samples
+    plot_eeg_signal_samples = args.plot_eeg_signal_samples      # Plot raw eeg for data and model reconstruction for single samples
     compute_mne_interpolated_signals = False
-
-    sample_steps = 50    # for diffusion process in .sample - Default is 50
-    cfg = 1.0            # for diffusion process in .sample - Default is 1.0 (i.e., no cfg)
 
     num_batches = 5
     batch_cntr = 0
@@ -519,8 +521,8 @@ def evaluate(args: TrainArgs):
     tmp_sample_idx = []
     tmp_filenames = []
 
-    dir_base = f'figures/zuna/cfg{cfg}/'
-    if plot_eeg_signal_samples:
+    dir_base = args.inference_figures_dir 
+    if args.plot_eeg_signal_samples:
         os.makedirs(dir_base, exist_ok=True)
 
     # saving pt files - setup export directory and results accumulator
@@ -561,15 +563,15 @@ def evaluate(args: TrainArgs):
         # In your shell, set your HF_TOKEN environment variable:
         # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
         def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
-            cfg = OmegaConf.load(config_path)
-            cfg_obj = OmegaConf.to_container(cfg, resolve=True)
-            return dataclass_from_dict(DecoderTransformerArgs, cfg_obj.get("model", {}))
+            cfig = OmegaConf.load(config_path)
+            cfig_obj = OmegaConf.to_container(cfig, resolve=True)
+            return dataclass_from_dict(DecoderTransformerArgs, cfig_obj.get("model", {}))
 
         def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
             config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
             with open(config_path, "r") as f:
-                cfg = json.load(f)
-            return dataclass_from_dict(DecoderTransformerArgs, cfg["model"])
+                cfig = json.load(f)
+            return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
 
         REPO_ID = "Zyphra/ZUNA"
         WEIGHTS = "model-00001-of-00001.safetensors"
@@ -746,8 +748,8 @@ def evaluate(args: TrainArgs):
                     encoder_input=batch['encoder_input'].unsqueeze(0),
                     seq_lens=batch['seq_lens'],
                     tok_idx=tok_idx,
-                    cfg=cfg,
-                    sample_steps=sample_steps,
+                    cfg=args.diffusion_cfg,
+                    sample_steps=args.diffusion_sample_steps,
                 )    
 
             # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #     

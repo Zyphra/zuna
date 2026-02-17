@@ -43,6 +43,7 @@ PT_INPUT_DIR = str(WORKING_PATH / "2_pt_input")
 PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
 FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
 FIGURES_DIR = str(WORKING_PATH / "FIGURES")
+# INFERENCE_FIGURES_DIR = str(WORKING_PATH / "FIGURES" / "from_inference")
 
 # =============================================================================
 # PREPROCESSING OPTIONS
@@ -71,11 +72,11 @@ GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
 TOKENS_PER_BATCH = 100000       # Number of tokens per batch
 DATA_NORM = 10.0                # Data normalization factor denominator 
                                 # (ZUNA expects eeg data to have std = 0.1)
-                                
+
 DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
 DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process
 
-PLOT_EEG_SIGNAL_SAMPLES = False # Plot raw eeg for data and model reconstruction for single samples inside inference code.
+PLOT_EEG_SIGNAL_SAMPLES = True # Plot raw eeg for data and model reconstruction for single samples inside inference code.
                                 # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
 
 # =============================================================================
@@ -128,6 +129,7 @@ if __name__ == "__main__":
         diffusion_cfg=DIFFUSION_CFG,
         diffusion_sample_steps=DIFFUSION_SAMPLE_STEPS,
         plot_eeg_signal_samples=PLOT_EEG_SIGNAL_SAMPLES,
+        inference_figures_dir=FIGURES_DIR,
     )
 
     # Step 3: Reconstruction (.pt → .fif)
