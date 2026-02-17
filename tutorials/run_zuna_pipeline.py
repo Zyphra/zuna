@@ -63,11 +63,11 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 
 GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
 TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
-DATA_NORM = 10.0                # Data normalization factor denominator 
-                                # (NOTE: ZUNA was trained on and expects eeg data to have std = 0.1)
+DATA_NORM = 10.0                # Data normalization factor denominator to rescale eeg data to have std = 0.1
+                                # NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
 
 DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
-DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process
+DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process - Default is 50
 
 PLOT_EEG_SIGNAL_SAMPLES = True  # Plot raw eeg for data and model reconstruction for single samples inside inference code.
                                 # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
