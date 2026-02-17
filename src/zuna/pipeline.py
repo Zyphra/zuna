@@ -14,7 +14,7 @@ from collections import defaultdict
 import mne
 
 
-def zuna_inference(
+def inference(
     input_dir: str,
     output_dir: str,
     gpu_device: int|str = 0, 
@@ -78,7 +78,7 @@ def zuna_inference(
     print(f"✓ Inference complete")
 
 
-def zuna_pt_to_fif(
+def pt_to_fif(
     input_dir: str,
     output_dir: str,
 ) -> None:

@@ -14,7 +14,7 @@ Use help(zuna.preprocessing) etc. for detailed documentation.
 __version__ = "0.1.0"
 
 from .preprocessing.batch import process_directory as preprocessing
-from .pipeline import zuna_inference as inference, zuna_pt_to_fif as pt_to_fif
+from .pipeline import inference, pt_to_fif
 from .visualization.compare import compare_plot_pipeline
 
 __all__ = [
