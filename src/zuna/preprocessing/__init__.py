@@ -4,7 +4,7 @@ EEG Preprocessing module.
 from .config import ProcessingConfig
 from .processor import EEGProcessor
 from .io import save_pt, load_pt, pt_to_raw
-from .batch import process_directory
+from .batch import preprocessing
 from .interpolation import upsample_channels
 
 __all__ = [
@@ -13,6 +13,6 @@ __all__ = [
     'save_pt',
     'load_pt',
     'pt_to_raw',
-    'process_directory',
+    'preprocessing',
     'upsample_channels',
 ]

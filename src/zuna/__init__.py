@@ -13,7 +13,7 @@ Use help(zuna.preprocessing) etc. for detailed documentation.
 
 __version__ = "0.1.0"
 
-from .preprocessing.batch import process_directory as preprocessing
+from .preprocessing.batch import preprocessing
 from .pipeline import inference, pt_to_fif
 from .visualization.compare import compare_plot_pipeline
 
