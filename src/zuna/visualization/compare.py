@@ -438,25 +438,45 @@ def compare_plot_pipeline(
     plot_pt: bool = False,
     plot_fif: bool = True,
     num_samples: int = 2,
-    sample_from_ends: bool = True,
-    include_original_fif: bool = False,
-    normalize_for_comparison: bool = False,
 ):
     """
-    Compare pipeline inputs and outputs (both .pt and .fif files).
+    Generate comparison plots between pipeline input and output.
+
+    Compares preprocessed vs reconstructed files to visually inspect
+    model quality. Plots are saved as images to the output_dir.
+
+    Supports comparing both .pt files (epoch-level, before/after model)
+    and .fif files (full recording, preprocessed vs reconstructed).
 
     Args:
-        input_dir: Directory with input FIF files
-        fif_input_dir: Directory with preprocessed FIF files
-        fif_output_dir: Directory with reconstructed FIF files
-        pt_input_dir: Directory with preprocessed PT files
-        pt_output_dir: Directory with model output PT files
-        output_dir: Where to save comparison plots
-        plot_pt: Whether to plot PT comparisons
-        plot_fif: Whether to plot FIF comparisons
-        num_samples: Number of files to compare
-        sample_from_ends: If True, pick first/last; if False, random
+        input_dir: Directory containing the original input .fif files.
+        fif_input_dir: Directory with preprocessed .fif files (1_fif_filter/).
+        fif_output_dir: Directory with reconstructed .fif files (4_fif_output/).
+        pt_input_dir: Directory with preprocessed .pt files (2_pt_input/).
+        pt_output_dir: Directory with model output .pt files (3_pt_output/).
+        output_dir: Directory to save comparison plot images.
+        plot_pt: Compare .pt files — shows per-epoch signal comparisons
+            between preprocessed input and model output (default: False).
+        plot_fif: Compare .fif files — shows full-recording signal overlays
+            between preprocessed and reconstructed files (default: True).
+        num_samples: Number of files to compare (default: 2).
+
+    Example:
+        >>> from zuna import compare_plot_pipeline
+        >>> compare_plot_pipeline(
+        ...     input_dir="/data/eeg/raw_fif",
+        ...     fif_input_dir="/data/eeg/working/1_fif_filter",
+        ...     fif_output_dir="/data/eeg/working/4_fif_output",
+        ...     pt_input_dir="/data/eeg/working/2_pt_input",
+        ...     pt_output_dir="/data/eeg/working/3_pt_output",
+        ...     output_dir="/data/eeg/working/FIGURES",
+        ...     plot_fif=True,
+        ... )
     """
+    # Hardcoded defaults (not exposed as flags)
+    sample_from_ends = True
+    include_original_fif = False
+    normalize_for_comparison = False
     # Create output directory
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)

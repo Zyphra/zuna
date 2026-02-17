@@ -20,22 +20,26 @@ pip install -e .
 
 ## Quick Start
 
-The simplest way to run Zuna is with `run_zuna_pipeline`. It takes your `.fif` files and runs the full pipeline: preprocessing, model inference, and reconstruction.
+See `tutorials/run_zuna_pipeline.py` for a complete working example. Edit the paths and options, then run:
 
-```python
-from zuna import run_zuna_pipeline
-
-run_zuna_pipeline(
-    input_dir="/path/to/your/fif/files",
-    working_dir="/path/to/working/directory",
-)
+```bash
+python tutorials/run_zuna_pipeline.py
 ```
 
-Your input `.fif` files must have a channel montage set (with 3D channel positions). The pipeline creates this directory structure under `working_dir`:
+The pipeline takes your `.fif` files (with a channel montage set) and runs 4 steps:
+
+| Step | Function | Description |
+|------|----------|-------------|
+| 1 | `zuna.preprocessing` | .fif → .pt (resample, filter, epoch, normalize) |
+| 2 | `zuna.inference` | .pt → .pt (model reconstruction) |
+| 3 | `zuna.pt_to_fif` | .pt → .fif (denormalize, concatenate) |
+| 4 | `zuna.compare_plot_pipeline` | Generate comparison plots |
+
+It creates this directory structure under your working directory:
 
 ```
 working_dir/
-    1_fif_input/      - Preprocessed .fif files (for comparison)
+    1_fif_filter/     - Preprocessed .fif files (for comparison)
     2_pt_input/       - Preprocessed .pt files (model input)
     3_pt_output/      - Model output .pt files
     4_fif_output/     - Final reconstructed .fif files
@@ -44,32 +48,16 @@ working_dir/
 
 Model weights are automatically downloaded from HuggingFace on first run.
 
-See `tutorials/run_zuna_pipeline.py` for a complete working example.
-
-## Pipeline Overview
-
-The pipeline has 4 steps:
-
-| Step | Function | Description |
-|------|----------|-------------|
-| 1 | `zuna_preprocessing` | .fif → .pt (resample, filter, epoch, normalize) |
-| 2 | `zuna_inference` | .pt → .pt (model reconstruction) |
-| 3 | `zuna_pt_to_fif` | .pt → .fif (denormalize, concatenate) |
-| 4 | `zuna_plot` | Generate comparison plots |
-
-You can run these individually for more control. See `tutorials/getting_started_advanced.py`.
-
 ## API Reference
 
 For detailed documentation on any function, use Python's `help()`:
 
 ```python
 import zuna
-help(zuna.run_zuna_pipeline)
-help(zuna.zuna_preprocessing)
-help(zuna.zuna_inference)
-help(zuna.zuna_pt_to_fif)
-help(zuna.zuna_plot)
+help(zuna.preprocessing)
+help(zuna.inference)
+help(zuna.pt_to_fif)
+help(zuna.compare_plot_pipeline)
 ```
 
 ## Options
@@ -79,9 +67,9 @@ help(zuna.zuna_plot)
 Add channels from the standard 10-05 montage (the model will interpolate them):
 
 ```python
-run_zuna_pipeline(
+preprocessing(
     input_dir="...",
-    working_dir="...",
+    output_dir="...",
     # Add specific channels by name
     target_channel_count=['AF3', 'AF4', 'F1', 'F2', 'FC1', 'FC2'],
     # Or upsample to N channels (greedy spatial selection)
@@ -94,9 +82,9 @@ run_zuna_pipeline(
 Zero out known bad channels so the model interpolates them:
 
 ```python
-run_zuna_pipeline(
+preprocessing(
     input_dir="...",
-    working_dir="...",
+    output_dir="...",
     bad_channels=['Cz', 'Fz'],
 )
 ```
@@ -106,21 +94,25 @@ run_zuna_pipeline(
 Generate comparison plots between input and output:
 
 ```python
-run_zuna_pipeline(
+compare_plot_pipeline(
     input_dir="...",
-    working_dir="...",
-    plot_pt_comparison=True,   # Compare .pt files (epoch-level)
-    plot_fif_comparison=True,  # Compare .fif files (full recording)
+    fif_input_dir=".../1_fif_filter",
+    fif_output_dir=".../4_fif_output",
+    pt_input_dir=".../2_pt_input",
+    pt_output_dir=".../3_pt_output",
+    output_dir=".../FIGURES",
+    plot_pt=True,   # Compare .pt files (epoch-level)
+    plot_fif=True,  # Compare .fif files (full recording)
 )
 ```
 
 ### GPU selection
 
 ```python
-run_zuna_pipeline(
+inference(
     input_dir="...",
-    working_dir="...",
-    gpu_device=0,  # GPU ID (default: 0)
+    output_dir="...",
+    gpu_device=0,  # GPU ID (default: 0), or "" for CPU
 )
 ```
 
