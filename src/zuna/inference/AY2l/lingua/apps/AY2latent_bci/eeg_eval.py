@@ -560,13 +560,6 @@ def evaluate(args: TrainArgs):
         #
         # Load in Zuna Encoder-Decoder model from HuggingFace
         #
-        # In your shell, set your HF_TOKEN environment variable:
-        # export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxxx"
-        def load_model_args_local(config_path: str) -> DecoderTransformerArgs:
-            cfig = OmegaConf.load(config_path)
-            cfig_obj = OmegaConf.to_container(cfig, resolve=True)
-            return dataclass_from_dict(DecoderTransformerArgs, cfig_obj.get("model", {}))
-
         def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
             config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=True)
             with open(config_path, "r") as f:
@@ -575,13 +568,9 @@ def evaluate(args: TrainArgs):
 
         REPO_ID = "Zyphra/ZUNA"
         WEIGHTS = "model-00001-of-00001.safetensors"
-        # arg_path = "src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_bci_eval.yaml"
         CONFIG  = "config.json"
 
-        # EITHER FROM LOCAL OR FROM HF FOR CONFIGS
-        # model_args = load_model_args_local(arg_path)
         model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-
         weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
         sd_st_raw = safe_load(weights_path, device="cpu")
 

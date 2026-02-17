@@ -1,5 +1,5 @@
 """
-Zuna: EEG Foundation Model
+Zuna: a 380M-parameter masked diffusion autoencoder EEG Foundation Model trained to reconstruct, denoise, and upsample scalp-EEG signals.  
 
 Main functions:
     zuna.preprocessing()          - .fif → .pt (resample, filter, epoch, normalize)
@@ -11,7 +11,7 @@ See tutorials/run_zuna_pipeline.py for a complete working example.
 Use help(zuna.preprocessing) etc. for detailed documentation.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 from .preprocessing.batch import preprocessing
 from .pipeline import inference, pt_to_fif

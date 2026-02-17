@@ -26,19 +26,21 @@ def inference(
     inference_figures_dir: str = "./inference_figures",
 ) -> None:
     """
-    Run model inference on .pt files.
-    Zuna model weights are automatically downloaded from HuggingFace.
+    Run Zuna model inference on .pt files.
+    Model weights are automatically downloaded from HuggingFace.
 
     Args:
         input_dir: Directory containing preprocessed .pt files
         output_dir: Directory to save model output .pt files
         gpu_device: GPU device ID (default: 0), or "" for CPU
-        tokens_per_batch: 
-        data_norm: 
-        diffusion_cfg: 
-        diffusion_sample_steps: 
-        plot_eeg_signal_samples:
-        inference_figures_dir:    
+        tokens_per_batch: Number of tokens per batch - Increase this number for higher GPU utilization.
+        data_norm: Data normalization factor denominator to rescale eeg data to have std = 0.1
+                   NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
+        diffusion_cfg: Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
+        diffusion_sample_steps: Number of steps in the diffusion process - Default is 50
+        plot_eeg_signal_samples: Plot raw eeg for data and model reconstruction for single samples inside inference code.
+                                NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
+        inference_figures_dir: Directory to save inference figures    
     """
     import subprocess
 
