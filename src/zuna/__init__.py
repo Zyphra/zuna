@@ -11,7 +11,7 @@ See tutorials/run_zuna_pipeline.py for a complete working example.
 Use help(zuna.preprocessing) etc. for detailed documentation.
 """
 
-__version__ = "1.0.0"
+__version__ = "0.0.6"
 
 from .preprocessing.batch import preprocessing
 from .pipeline import inference, pt_to_fif
