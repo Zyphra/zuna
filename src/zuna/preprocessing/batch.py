@@ -343,6 +343,7 @@ def preprocessing(
     n_jobs: int = 1,
 ) -> List[Dict[str, Any]]:
     """
+
     Preprocess all EEG files in a directory to .pt format.
 
     Reads raw .fif files, applies filtering, resampling, epoching, and
@@ -357,6 +358,7 @@ def preprocessing(
     and should not be changed.
 
     Args:
+
         input_dir: Directory containing input .fif files.
         output_dir: Directory to save preprocessed .pt files.
         apply_notch_filter: Apply automatic notch filter to remove line noise
@@ -387,14 +389,31 @@ def preprocessing(
     Returns:
         List of dicts with processing results for each file.
 
-    Example:
+    Examples:
         >>> from zuna import preprocessing
+        # (1). Specific Channel Upsampling:
         >>> preprocessing(
         ...     input_dir="/data/eeg/raw_fif",
         ...     output_dir="/data/eeg/working/2_pt_input",
         ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
         ...     bad_channels=['Cz'],
         ... )
+
+        # (2). Greedy Channel Upsampling:
+        >>> preprocessing(
+        ...     input_dir="/data/eeg/raw_fif",
+        ...     output_dir="/data/eeg/working/2_pt_input",
+        ...     target_channel_count=40
+        ... )
+
+        # (2). Bad Channel Removal:
+        >>> preprocessing(
+        ...     input_dir="/data/eeg/raw_fif",
+        ...     output_dir="/data/eeg/working/2_pt_input",
+        ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
+        ...     bad_channels=['Cz'],
+        ... )
+
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)

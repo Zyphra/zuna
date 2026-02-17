@@ -440,6 +440,7 @@ def compare_plot_pipeline(
     num_samples: int = 2,
 ):
     """
+    
     Generate comparison plots between pipeline input and output.
 
     Compares preprocessed vs reconstructed files to visually inspect
