@@ -5,9 +5,8 @@ import mne
 import re
 import numpy as np
 import gc
-import math
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from joblib import Parallel, delayed
 from .processor import EEGProcessor
 from .config import ProcessingConfig
@@ -331,68 +330,71 @@ def _process_single_file(
 def process_directory(
     input_dir: str,
     output_dir: str,
-    config: Optional[ProcessingConfig] = None,
+    apply_notch_filter: bool = False,
+    apply_highpass_filter: bool = True,
+    apply_average_reference: bool = True,
+    drop_bad_channels: bool = False,
+    drop_bad_epochs: bool = False,
+    zero_out_artifacts: bool = False,
+    target_channel_count: Optional[Union[int, List[str]]] = None,
+    bad_channels: Optional[List[str]] = None,
+    save_preprocessed_fif: bool = True,
+    preprocessed_fif_dir: Optional[str] = None,
     n_jobs: int = 1,
-    **config_kwargs
 ) -> List[Dict[str, Any]]:
     """
-    Process all EEG files in a directory with optional parallel processing.
+    Preprocess all EEG files in a directory to .pt format.
 
-    Automatically detects file formats and processes each file,
-    saving PT files to output directory.
+    Reads raw .fif files, applies filtering, resampling, epoching, and
+    normalization, then saves the result as .pt (PyTorch) files ready for
+    model inference.
 
-    **IMPORTANT**: All input files must already have montages set with 3D channel positions.
+    Input files must have a channel montage set with 3D positions.
     Files without montages will be skipped.
 
-    Features:
-    - Parallel processing: Set n_jobs > 1 to process multiple files simultaneously
-    - Automatic chunking: Files longer than max_duration_minutes are split into segments
-    - Epoch batching: Accumulates epochs across files and saves in batches of 64
+    Note: Resampling (256 Hz), epoch duration (5 seconds), and batch size
+    (64 epochs per file) are fixed to match the pretrained model configuration
+    and should not be changed.
 
-    Output files will be named: ds{file_num:06d}_{pt_file:06d}_d{dropped:02d}_{epochs:05d}_{channels}_{samples}.pt
-    Example: ds000000_000001_d05_00064_063_1280.pt
+    Args:
+        input_dir: Directory containing input .fif files.
+        output_dir: Directory to save preprocessed .pt files.
+        apply_notch_filter: Apply automatic notch filter to remove line noise
+            at detected frequencies (default: False).
+        apply_highpass_filter: Apply 0.5 Hz highpass filter (default: True).
+        apply_average_reference: Apply average reference (default: True).
+        drop_bad_channels: Automatically detect and remove bad channels
+            (default: False). Not recommended for most use cases.
+        drop_bad_epochs: Automatically detect and remove bad epochs
+            (default: False). Not recommended for most use cases.
+        zero_out_artifacts: Zero out artifact samples instead of dropping
+            them (default: False).
+        target_channel_count: Controls channel upsampling/selection.
+            - None: keep original channels, no upsampling (default).
+            - int (e.g. 40): greedy selection to N channels from 10-05 montage.
+            - list of str (e.g. ['Cz', 'Pz']): add these specific channels
+              from the 10-05 montage via spherical spline interpolation.
+        bad_channels: List of channel names to zero out (e.g. ['Cz', 'Fz']).
+            These channels remain in the data but values are set to zero.
+            Useful for testing interpolation (default: None).
+        save_preprocessed_fif: Save a preprocessed .fif file alongside the .pt
+            output, useful for comparing input vs output (default: True).
+        preprocessed_fif_dir: Directory for preprocessed .fif files. If None,
+            defaults to output_dir/../1_fif_filter.
+        n_jobs: Number of parallel jobs (default: 1 for sequential).
+            Set to -1 to use all available CPUs.
 
-    Files are numbered sequentially starting from 0.
+    Returns:
+        List of dicts with processing results for each file.
 
-    Parameters
-    ----------
-    input_dir : str
-        Path to directory containing raw EEG files (.fif, .edf, etc.)
-        Files must have montages already set.
-    output_dir : str
-        Path to directory where PT files will be saved
-    config : ProcessingConfig, optional
-        Configuration object. If None, uses defaults.
-    n_jobs : int, optional
-        Number of parallel jobs (default: 1 for sequential processing).
-        Set to -1 to use all available CPUs.
-    **config_kwargs
-        Additional config parameters (e.g., drop_bad_channels=True, max_duration_minutes=10)
-
-    Returns
-    -------
-    results : list of dict
-        List of processing results for each file
-
-    Examples
-    --------
-    >>> import zuna
-    >>> # Sequential processing
-    >>> results = zuna.preprocessing.process_directory(
-    ...     "/data/raw_files",
-    ...     "/data/processed_pt",
-    ...     drop_bad_channels=True
-    ... )
-    >>>
-    >>> # Parallel processing with 4 workers
-    >>> results = zuna.preprocessing.process_directory(
-    ...     "/data/raw_files",
-    ...     "/data/processed_pt",
-    ...     n_jobs=4,
-    ...     max_duration_minutes=10
-    ... )
-    >>> successful = sum(1 for r in results if r['success'])
-    >>> print(f"Processed {successful}/{len(results)} files")
+    Example:
+        >>> from zuna import preprocessing
+        >>> preprocessing(
+        ...     input_dir="/data/eeg/raw_fif",
+        ...     output_dir="/data/eeg/working/2_pt_input",
+        ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
+        ...     bad_channels=['Cz'],
+        ... )
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -410,18 +412,23 @@ def process_directory(
         eeg_files.extend(input_path.glob(f'**/*{ext}'))
 
     if len(eeg_files) == 0:
-        print(f"⚠️  No EEG files found in {input_dir}")
-        print(f"   Looking for: {', '.join(supported_extensions)}")
+        print(f"No EEG files found in {input_dir}")
+        print(f"  Looking for: {', '.join(supported_extensions)}")
         return []
 
-    # Create config
-    if config is None:
-        config = ProcessingConfig(**config_kwargs)
-    elif config_kwargs:
-        # Merge kwargs into config
-        config_dict = config.__dict__.copy()
-        config_dict.update(config_kwargs)
-        config = ProcessingConfig(**config_dict)
+    # Create config from explicit parameters
+    config = ProcessingConfig(
+        apply_notch_filter=apply_notch_filter,
+        apply_highpass_filter=apply_highpass_filter,
+        apply_average_reference=apply_average_reference,
+        drop_bad_channels=drop_bad_channels,
+        drop_bad_epochs=drop_bad_epochs,
+        zero_out_artifacts=zero_out_artifacts,
+        target_channel_count=target_channel_count,
+        bad_channels=bad_channels,
+        save_preprocessed_fif=save_preprocessed_fif,
+        preprocessed_fif_dir=preprocessed_fif_dir,
+    )
 
     # Create processor (one per job if parallel)
     processor = EEGProcessor(config)

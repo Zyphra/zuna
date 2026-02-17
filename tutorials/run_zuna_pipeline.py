@@ -12,21 +12,15 @@ Edit the paths and options below, then run:
     python run_zuna_pipeline.py
 
 For documentation on each function, run:
-    help(zuna.zuna_preprocessing)
-    help(zuna.zuna_inference)
-    help(zuna.zuna_pt_to_fif)
+    help(zuna.preprocessing)
+    help(zuna.inference)
+    help(zuna.pt_to_fif)
     help(zuna.compare_plot_pipeline)
 """
 
 import shutil
 from pathlib import Path
-from zuna import (
-    zuna_preprocessing, 
-    zuna_inference, 
-    zuna_pt_to_fif, 
-    compare_plot_pipeline
-)
-    # zuna_plot
+from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 
 # =============================================================================
 # PATHS
@@ -88,9 +82,6 @@ PLOT_FIF_COMPARISON = True      # Plot .fif file comparisons
 KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
 
 NUM_SAMPLES = 4
-SAMPLE_FROM_ENDS = True
-NORMALIZE_FOR_COMPARISON = True
-INCLUDE_ORIGINAL_FIF = False        # Include original .fif file in comparison (ERRORS!)
 
 # =============================================================================
 # RUN PIPELINE
@@ -104,7 +95,7 @@ if __name__ == "__main__":
 
     # Step 1: Preprocessing (.fif → .pt)
     print("[1/4] Preprocessing...", flush=True)
-    zuna_preprocessing(
+    preprocessing(
         input_dir=INPUT_DIR,
         output_dir=PT_INPUT_DIR,
         apply_notch_filter=APPLY_NOTCH_FILTER,
@@ -120,7 +111,7 @@ if __name__ == "__main__":
 
     # Step 2: Model Inference (.pt → .pt)
     print("[2/4] Model inference...", flush=True)
-    zuna_inference(
+    inference(
         input_dir=PT_INPUT_DIR,
         output_dir=PT_OUTPUT_DIR,
         gpu_device=GPU_DEVICE,
@@ -134,7 +125,7 @@ if __name__ == "__main__":
 
     # Step 3: Reconstruction (.pt → .fif)
     print("[3/4] Reconstructing FIF files...", flush=True)
-    zuna_pt_to_fif(
+    pt_to_fif(
         input_dir=PT_OUTPUT_DIR,
         output_dir=FIF_OUTPUT_DIR,
     )
@@ -152,17 +143,7 @@ if __name__ == "__main__":
             plot_pt=PLOT_PT_COMPARISON,
             plot_fif=PLOT_FIF_COMPARISON,
             num_samples=NUM_SAMPLES,
-            sample_from_ends=SAMPLE_FROM_ENDS,
-            include_original_fif=INCLUDE_ORIGINAL_FIF,
-            normalize_for_comparison=NORMALIZE_FOR_COMPARISON,   
         )
-
-        # zuna_plot(
-        #     input_dir=INPUT_DIR,
-        #     working_dir=WORKING_DIR,
-        #     plot_pt=PLOT_PT_COMPARISON,
-        #     plot_fif=PLOT_FIF_COMPARISON,
-        # )
 
     # Cleanup intermediate files if requested
     if not KEEP_INTERMEDIATE_FILES:

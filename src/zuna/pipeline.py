@@ -8,109 +8,10 @@ Each step can be run independently or as a complete pipeline.
 """
 
 import os
-import shutil
 from pathlib import Path
 from collections import defaultdict
-from typing import Optional, Union, List
 
 import mne
-
-
-def zuna_preprocessing(
-    input_dir: str,
-    output_dir: str,
-    target_sfreq: float = 256.0,
-    epoch_duration: float = 5.0,
-    apply_notch_filter: bool = False,
-    apply_highpass_filter: bool = True,
-    apply_average_reference: bool = True,
-    save_preprocessed_fif: bool = True,
-    preprocessed_fif_dir: Optional[str] = None,
-    drop_bad_channels: bool = False,
-    drop_bad_epochs: bool = False,
-    zero_out_artifacts: bool = False,
-    target_channel_count: Optional[Union[int, List[str]]] = None,
-    bad_channels: Optional[List[str]] = None,
-) -> None:
-    """
-    Preprocess .fif files to .pt format.
-
-    Reads raw EEG .fif files, applies filtering, resampling, epoching, and
-    normalization, then saves the result as .pt (PyTorch) files ready for
-    model inference. Optionally saves a preprocessed .fif copy for later
-    comparison.
-
-    Processing steps:
-        1. Load raw .fif file
-        2. Resample to target_sfreq (default 256 Hz)
-        3. Apply highpass filter at 0.5 Hz (optional)
-        4. Apply notch filter for line noise removal (optional)
-        5. Apply average reference (optional)
-        6. Zero out bad channels if specified
-        7. Epoch into fixed-length segments (default 5 seconds)
-        8. Normalize signal per epoch
-        9. Upsample/add channels if target_channel_count is set
-        10. Save as .pt files
-
-    Args:
-        input_dir: Directory containing input .fif files.
-        output_dir: Directory to save preprocessed .pt files.
-        target_sfreq: Target sampling frequency in Hz (default: 256.0).
-        epoch_duration: Duration of each epoch in seconds (default: 5.0).
-        apply_notch_filter: Apply automatic notch filter to remove line noise
-            at detected frequencies (default: False).
-        apply_highpass_filter: Apply 0.5 Hz highpass filter (default: True).
-        apply_average_reference: Apply average reference (default: True).
-        save_preprocessed_fif: Save a preprocessed .fif file alongside the .pt
-            output, useful for comparing input vs output (default: True).
-        preprocessed_fif_dir: Directory for preprocessed .fif files. If None,
-            defaults to input_dir/preprocessed.
-        drop_bad_channels: Automatically detect and remove bad channels
-            (default: False). Not recommended for most use cases.
-        drop_bad_epochs: Automatically detect and remove bad epochs
-            (default: False). Not recommended for most use cases.
-        zero_out_artifacts: Zero out artifact samples instead of dropping
-            them (default: False).
-        target_channel_count: Controls channel upsampling/selection.
-            - None: keep original channels, no upsampling (default).
-            - int (e.g. 40): greedy selection to N channels from 10-05 montage.
-            - list of str (e.g. ['Cz', 'Pz']): add these specific channels
-              from the 10-05 montage via spherical spline interpolation.
-        bad_channels: List of channel names to zero out (e.g. ['Cz', 'Fz']).
-            These channels remain in the data but their values are set to zero.
-            Useful for testing interpolation. Set to None to disable (default: None).
-
-    Example:
-        >>> from zuna.pipeline import zuna_preprocessing
-        >>> zuna_preprocessing(
-        ...     input_dir="/data/eeg/raw_fif",
-        ...     output_dir="/data/eeg/pt_files",
-        ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
-        ...     bad_channels=['Cz'],
-        ... )
-    """
-    from .preprocessing.batch import process_directory
-
-    # Setup preprocessed FIF directory if not specified
-    if save_preprocessed_fif and preprocessed_fif_dir is None:
-        preprocessed_fif_dir = str(Path(input_dir) / "preprocessed")
-
-    process_directory(
-        input_dir=input_dir,
-        output_dir=output_dir,
-        target_sfreq=target_sfreq,
-        epoch_duration=epoch_duration,
-        apply_notch_filter=apply_notch_filter,
-        apply_highpass_filter=apply_highpass_filter,
-        apply_average_reference=apply_average_reference,
-        save_preprocessed_fif=save_preprocessed_fif,
-        preprocessed_fif_dir=preprocessed_fif_dir,
-        drop_bad_channels=drop_bad_channels,
-        drop_bad_epochs=drop_bad_epochs,
-        zero_out_artifacts=zero_out_artifacts,
-        target_channel_count=target_channel_count,
-        bad_channels=bad_channels,
-    )
 
 
 def zuna_inference(
@@ -206,8 +107,8 @@ def zuna_pt_to_fif(
         output_dir: Directory to save reconstructed .fif files.
 
     Example:
-        >>> from zuna.pipeline import zuna_pt_to_fif
-        >>> zuna_pt_to_fif(
+        >>> from zuna import pt_to_fif
+        >>> pt_to_fif(
         ...     input_dir="/data/eeg/working/3_pt_output",
         ...     output_dir="/data/eeg/working/4_fif_output",
         ... )
@@ -263,74 +164,4 @@ def zuna_pt_to_fif(
             print(f"  Error: {original_filename}: {e}")
 
     print(f"Reconstruction: {successful}/{successful + failed} files converted.")
-
-
-# def zuna_plot(
-#     input_dir: str,
-#     working_dir: str,
-#     fif_input_dir: str,
-#     fif_output_dir: str,
-#     pt_input_dir: str,
-#     pt_output_dir: str,
-#     plot_pt: bool = True,
-#     plot_fif: bool = True,
-#     sample_from_ends: bool = True,
-#     include_original_fif: bool = True,
-#     normalize_for_comparison: bool = True,
-#     num_samples: int = 2,
-#     )
-
-
-# ) -> None:
-#     """
-#     Generate comparison plots between pipeline input and output.
-
-#     Compares preprocessed vs reconstructed files to visually inspect
-#     model quality. Plots are saved as images to working_dir/FIGURES/.
-
-#     Expects the standard pipeline directory structure under working_dir:
-#         1_fif_filter/  - Preprocessed .fif files
-#         2_pt_input/    - Preprocessed .pt files
-#         3_pt_output/   - Model output .pt files
-#         4_fif_output/  - Reconstructed .fif files
-
-#     Args:
-#         input_dir: Directory containing the original input .fif files.
-#         working_dir: Working directory containing pipeline outputs.
-#         plot_pt: Compare .pt files (preprocessed vs model output).
-#             Shows per-epoch signal comparisons (default: False).
-#         plot_fif: Compare .fif files (preprocessed vs reconstructed).
-#             Shows full-recording signal overlays (default: True).
-
-#     Example:
-#         >>> from zuna.pipeline import zuna_plot
-#         >>> zuna_plot(
-#         ...     input_dir="/data/eeg/raw_fif",
-#         ...     working_dir="/data/eeg/working",
-#         ...     plot_fif=True,
-#         ... )
-#     """
-#     from .visualization.compare import compare_pipeline
-
-#     working_path = Path(working_dir)
-#     figures_dir = working_path / "FIGURES"
-#     figures_dir.mkdir(parents=True, exist_ok=True)
-
-#     compare_plot_pipeline(
-#         input_dir=input_dir,
-#         fif_input_dir=str(working_path / "1_fif_filter"),
-#         fif_output_dir=str(working_path / "4_fif_output"),
-#         pt_input_dir=str(working_path / "2_pt_input"),
-#         pt_output_dir=str(working_path / "3_pt_output"),
-#         output_dir=str(figures_dir),
-#         plot_pt=plot_pt,
-#         plot_fif=plot_fif,
-#     )
-
-
-#     num_samples: int = 2,
-#     sample_from_ends: bool = True,
-#     include_original_fif: bool = False,
-#     normalize_for_comparison: bool = False,
-
 
