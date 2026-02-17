@@ -33,6 +33,12 @@ def inference(
         input_dir: Directory containing preprocessed .pt files
         output_dir: Directory to save model output .pt files
         gpu_device: GPU device ID (default: 0), or "" for CPU
+        tokens_per_batch: 
+        data_norm: 
+        diffusion_cfg: 
+        diffusion_sample_steps: 
+        plot_eeg_signal_samples:
+        inference_figures_dir:    
     """
     import subprocess
 

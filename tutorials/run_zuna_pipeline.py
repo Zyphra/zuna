@@ -4,7 +4,7 @@ Zuna Pipeline
 
 Runs the complete EEG reconstruction pipeline:
 1. Preprocessing: .fif → .pt (filtered, epoched, normalized)
-2. Model Inference: .pt → .pt (reconstructed by model)
+2. Inference: .pt → .pt (reconstructed by model)
 3. Reconstruction: .pt → .fif (denormalized, continuous)
 4. Visualization: comparison plots (optional)
 
@@ -37,7 +37,6 @@ PT_INPUT_DIR = str(WORKING_PATH / "2_pt_input")
 PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
 FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
 FIGURES_DIR = str(WORKING_PATH / "FIGURES")
-# INFERENCE_FIGURES_DIR = str(WORKING_PATH / "FIGURES" / "from_inference")
 
 # =============================================================================
 # PREPROCESSING OPTIONS
@@ -63,14 +62,14 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 # =============================================================================
 
 GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
-TOKENS_PER_BATCH = 100000       # Number of tokens per batch
+TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
 DATA_NORM = 10.0                # Data normalization factor denominator 
-                                # (ZUNA expects eeg data to have std = 0.1)
+                                # (NOTE: ZUNA was trained on and expects eeg data to have std = 0.1)
 
 DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
 DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process
 
-PLOT_EEG_SIGNAL_SAMPLES = True # Plot raw eeg for data and model reconstruction for single samples inside inference code.
+PLOT_EEG_SIGNAL_SAMPLES = True  # Plot raw eeg for data and model reconstruction for single samples inside inference code.
                                 # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
 
 # =============================================================================
@@ -81,7 +80,7 @@ PLOT_PT_COMPARISON = True       # Plot .pt file comparisons
 PLOT_FIF_COMPARISON = True      # Plot .fif file comparisons
 KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
 
-NUM_SAMPLES = 4
+NUM_SAMPLES = 2
 
 # =============================================================================
 # RUN PIPELINE
