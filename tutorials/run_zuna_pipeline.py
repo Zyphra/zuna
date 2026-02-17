@@ -87,7 +87,6 @@ NUM_SAMPLES = 2
 # =============================================================================
 
 if __name__ == "__main__":
-
     # Create working directories
     for d in [PREPROCESSED_FIF_DIR, PT_INPUT_DIR, PT_OUTPUT_DIR, FIF_OUTPUT_DIR]:
         Path(d).mkdir(parents=True, exist_ok=True)
