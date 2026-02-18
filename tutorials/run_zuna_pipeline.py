@@ -61,7 +61,7 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 # INFERENCE OPTIONS
 # =============================================================================
 
-GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
+GPU_DEVICE = 1                  # GPU ID (default: 0) or "" for CPU
 TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
 DATA_NORM = 10.0                # Data normalization factor denominator to rescale eeg data to have std = 0.1
                                 # NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
