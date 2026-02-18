@@ -10,29 +10,28 @@ ZUNA is a 380M-parameter masked diffusion autoencoder trained to reconstruct, de
 
 ZUNA was trained on approximately 2 million channel-hours of EEG data from a wide range of publicly available sources. At 380M parameters, it is lightweight enough to run on a consumer GPU and can be used on CPU for many workloads.
 
-<p align="center">
-  <img src="assets/eeg_diffusion.gif" alt="EEG signal diffusion reconstruction" width="600">
-</p>
 
 ## Performance
 
 ZUNA significantly outperforms existing standard methods for channel denoising, reconstruction, and upsampling. We compared ZUNA to MNE's default spherical spline interpolation method. ZUNA outperforms MNE in reconstruction accuracy across a range of unseen datasets, even those with a different preprocessing pipeline. ZUNA's advantage is particularly striking for higher upsampling ratios, demonstrating that it is effectively using general priors learned through large-scale pretraining.
 
-<p align="center">
-  <img src="assets/performance.png" alt="ZUNA performance comparison" width="700">
-</p>
-
 ## Installation
 
 ```bash
+# (1). Download tutorial and sample data from GitHub	
+git clone --depth 1 --filter=blob:none --sparse https://github.com/Zyphra/zuna.git && cd zuna && git sparse-checkout set tutorials
+
+# (2). Pip Install zuna
 pip install zuna
 ```
 
 Or install in development mode:
 
 ```bash
-git clone https://github.com/Zyphra/zuna.git
-cd zuna
+# (1). Download Zuna codebase from GitHub
+git clone https://github.com/Zyphra/zuna.git && cd zuna
+
+# (2). Pip Install zuna in developer mode
 pip install -e .
 ```
 
@@ -167,7 +166,7 @@ raw.save('data_with_montage.fif', overwrite=True)
 
 ## Citation
 
-For more information please see our [technical whitepaper](https://huggingface.co/Zyphra/ZUNA) and [blog](https://huggingface.co/Zyphra/ZUNA). If you find ZUNA useful in your work, please cite accordingly.
+For more information please see our [technical whitepaper](https://www.zyphra.com/zuna-technical-paper) and [blog](https://www.zyphra.com/post/zuna). If you find ZUNA useful in your work, please cite accordingly.
 
 Organizations or researchers interested in collaborating with Zyphra to improve future versions for specific needs or use cases should contact bci@zyphra.com.
 
