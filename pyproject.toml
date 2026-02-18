@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zuna"
-version = "0.0.6"
+version = "0.1.0"
 description = "Foundation model for EEG reconstruction and interpolation"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -17,18 +17,6 @@ authors = [
 ]
 
 keywords = ["eeg", "foundation-model", "neuroscience", "preprocessing"]
-
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Topic :: Scientific/Engineering :: Medical Science Apps.",
-]
-
 
 dependencies = [
     "numpy>=1.20.0",
@@ -65,8 +53,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["src", "src/zuna/inference/AY2l/lingua"]
 include = ["zuna*", "lingua*", "apps*"]
-
-
 
 [project.urls]
 Homepage = "https://www.zyphra.com"
