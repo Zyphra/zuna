@@ -37,7 +37,11 @@ pip install -e .
 
 ## Quick Start
 
-See `tutorials/run_zuna_pipeline.py` for a complete working example. Edit the paths and options, then run:
+See `tutorials/run_zuna_pipeline.py` for a complete working example. 
+
+Note that you can also find a version of this script [here](https://colab.research.google.com/drive/1aL3Gh4FkrWnSBRUqmQmHNz7GTHvWhuf5?usp=sharing) on Google Colaboratory for free GPU access.
+
+Edit the paths and options, then run:
 
 ```bash
 python tutorials/run_zuna_pipeline.py
