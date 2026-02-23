@@ -2,6 +2,8 @@
 
 [![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA)
 
+[![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC)
+
 ZUNA is a 380M-parameter masked diffusion autoencoder trained to reconstruct, denoise, and upsample scalp-EEG signals. Given a subset of EEG channels, ZUNA can:
 
 - **Denoise** existing EEG channels
