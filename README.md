@@ -1,6 +1,6 @@
 # ZUNA: EEG Foundation Model
 
-[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA) [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![arXiv](https://img.shields.io/badge/arXiv-2602.18478-b31b1b.svg)](https://arxiv.org/pdf/2602.18478)
+[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA) [![PyPI package](https://img.shields.io/pypi/dm/zuna?color=green&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/) [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![arXiv](https://img.shields.io/badge/arXiv-2602.18478-b31b1b.svg)](https://arxiv.org/pdf/2602.18478)
 
 ZUNA is a 380M-parameter masked diffusion autoencoder trained to reconstruct, denoise, and upsample scalp-EEG signals. Given a subset of EEG channels, ZUNA can:
 
