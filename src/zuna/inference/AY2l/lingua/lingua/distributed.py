@@ -118,7 +118,9 @@ def get_device_mesh(distributed_args: DistributedArgs, device: torch.device):
     dims = tuple(dims)
     names = tuple(names)
 
-    return init_device_mesh(device.type, mesh_shape=dims, mesh_dim_names=names)
+    # MPS does not support device meshes; use CPU for distributed coordination
+    mesh_device_type = "cpu" if device.type == "mps" else device.type
+    return init_device_mesh(mesh_device_type, mesh_shape=dims, mesh_dim_names=names)
 
 
 def dist_max(x: Union[int, float], mesh: DeviceMesh = None):
