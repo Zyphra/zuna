@@ -119,12 +119,13 @@ def create_document_mask(lengths: torch.Tensor,
     if base_mask_mod is None:
         base_mask_mod = noop_mask
 
-    doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
-
     if torch.cuda.is_available():
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
         return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
     else:
-        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item(), 
+        # create_block_mask runs on CPU; ensure closure tensors are on CPU too
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths.cpu())
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item(),
                                 device='cpu', _compile=False)
 
 

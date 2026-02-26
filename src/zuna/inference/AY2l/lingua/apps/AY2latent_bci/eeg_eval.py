@@ -513,6 +513,10 @@ def evaluate(args: TrainArgs):
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        os.environ['TORCH_COMPILE_DISABLE'] = "1"
+        os.environ['TORCHDYNAMO_DISABLE'] = "1"
     else:
         device = torch.device("cpu")
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
