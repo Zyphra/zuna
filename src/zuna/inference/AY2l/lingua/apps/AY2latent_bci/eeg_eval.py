@@ -561,7 +561,7 @@ def evaluate(args: TrainArgs):
         # Load in Zuna Encoder-Decoder model from HuggingFace
         #
         def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
-            config_path = hf_hub_download(repo_id=repo_id, filename=config_filename, token=False)
+            config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
             with open(config_path, "r") as f:
                 cfig = json.load(f)
             return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
