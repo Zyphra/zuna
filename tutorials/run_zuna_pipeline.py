@@ -28,7 +28,6 @@ from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 
 TUTORIAL_DIR = Path(__file__).parent.resolve()
 INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")    ### original: raw .fif input
-# INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_epoch_input")    ### CHANGED: epoch input (*_epo.fif)
 WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")        ### replace with your path
 
 # Derived paths (pipeline directory structure)
