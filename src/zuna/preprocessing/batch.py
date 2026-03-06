@@ -381,6 +381,30 @@ def _process_single_epoch_file(
         }
 
 
+def _detect_input_type(input_path: Path) -> str:
+    """Auto-detect whether input files are raw or epoched by trying to load the first .fif file."""
+    fif_files = sorted(input_path.glob('**/*.fif'))
+    if not fif_files:
+        return "raw"  # default; will fail later with "no files found"
+
+    test_file = str(fif_files[0])
+    try:
+        raw = mne.io.read_raw_fif(test_file, preload=False, verbose=False)
+        del raw
+        return "raw"
+    except Exception:
+        pass
+
+    try:
+        epochs = mne.read_epochs(test_file, preload=False, verbose=False)
+        del epochs
+        return "epochs"
+    except Exception:
+        pass
+
+    return "raw"  # default fallback
+
+
 def preprocessing(
     input_dir: str,
     output_dir: str,
@@ -393,6 +417,7 @@ def preprocessing(
     zero_out_artifacts: bool = False,
     target_channel_count: Optional[Union[int, List[str]]] = None,
     bad_channels: Optional[List[str]] = None,
+    epoch_duration: float = 5.0,
     save_preprocessed_fif: bool = True,
     preprocessed_fif_dir: Optional[str] = None,
     n_jobs: int = 1,
@@ -414,8 +439,9 @@ def preprocessing(
         input_dir: Directory containing input EEG files.
         output_dir: Directory to save preprocessed .pt files.
         input_type: "raw" for continuous data (default), "epochs" for
-            pre-epoched data (*_epo.fif files). When "epochs", highpass
-            and notch filtering are automatically disabled.
+            pre-epoched data, or "auto" to auto-detect by trying to load
+            the first .fif file as raw, then as epochs. When "epochs",
+            highpass and notch filtering are automatically disabled.
         apply_notch_filter: Apply automatic notch filter (default: False).
             Ignored when input_type="epochs".
         apply_highpass_filter: Apply 0.5 Hz highpass filter (default: True).
@@ -426,6 +452,8 @@ def preprocessing(
         zero_out_artifacts: Zero out artifact samples (default: False).
         target_channel_count: Channel upsampling/selection (default: None).
         bad_channels: List of channel names to zero out (default: None).
+        epoch_duration: Duration of each epoch in seconds (default: 5.0).
+            Only used for raw input (epochs use their own duration).
         save_preprocessed_fif: Save preprocessed .fif (default: True).
             Ignored when input_type="epochs".
         preprocessed_fif_dir: Directory for preprocessed .fif files.
@@ -446,12 +474,17 @@ def preprocessing(
         ...     input_type="epochs",
         ... )
     """
-    if input_type not in ("raw", "epochs"):
-        raise ValueError(f"input_type must be 'raw' or 'epochs', got '{input_type}'")
+    if input_type not in ("raw", "epochs", "auto"):
+        raise ValueError(f"input_type must be 'raw', 'epochs', or 'auto', got '{input_type}'")
+
+    input_path = Path(input_dir)
+
+    if input_type == "auto":
+        input_type = _detect_input_type(input_path)
+        print(f"  Auto-detected input_type: '{input_type}'")
 
     is_epochs = input_type == "epochs"
 
-    input_path = Path(input_dir)
     output_path = Path(output_dir)
 
     # Create output directory if it doesn't exist
@@ -467,7 +500,10 @@ def preprocessing(
             list(input_path.glob('**/*-epo.fif'))
         )
         if len(eeg_files) == 0:
-            print(f"No epoch files (*_epo.fif, *-epo.fif) found in {input_dir}")
+            # Fall back to any .fif file (non-standard naming)
+            eeg_files = sorted(input_path.glob('**/*.fif'))
+        if len(eeg_files) == 0:
+            print(f"No epoch .fif files found in {input_dir}")
             return []
     else:
         supported_extensions = ['.fif', '.edf', '.bdf', '.vhdr', '.cnt', '.set', '.mff']
@@ -487,6 +523,7 @@ def preprocessing(
         drop_bad_channels=drop_bad_channels,
         drop_bad_epochs=drop_bad_epochs,
         zero_out_artifacts=zero_out_artifacts,
+        epoch_duration=epoch_duration,
         target_channel_count=target_channel_count,
         bad_channels=bad_channels,
         save_preprocessed_fif=False if is_epochs else save_preprocessed_fif,
