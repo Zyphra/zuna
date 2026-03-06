@@ -27,8 +27,7 @@ from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 # =============================================================================
 
 TUTORIAL_DIR = Path(__file__).parent.resolve()
-# INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")  ### original: raw .fif input
-INPUT_DIR = "/data/datasets/bci/zuna_test_cases/raw_3min"
+INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")  ### original: raw .fif input
 WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")    ### replace with your path
 
 # Derived paths (pipeline directory structure)
@@ -39,20 +38,22 @@ PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
 FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
 FIGURES_DIR = str(WORKING_PATH / "FIGURES")
 
-INPUT_TYPE = "raw"  # "raw" or "epochs"
+INPUT_TYPE = "auto"  # "raw", "epochs", or "auto" (auto-detect)
 # =============================================================================
 # PREPROCESSING OPTIONS
 # =============================================================================
 
+EPOCH_DURATION = 5.0               # Epoch duration in seconds (only used for raw input)
 APPLY_NOTCH_FILTER = True          # Automatic notch filter for line noise
 APPLY_HIGHPASS_FILTER = True       # 0.5 Hz highpass filter
 APPLY_AVERAGE_REFERENCE = True     # Average reference
 
 # Channel options
 # TARGET_CHANNEL_COUNT = None   # No upsampling (keep original channels)
-# TARGET_CHANNEL_COUNT = 40     # Upsample to N channels (greedy selection)
-TARGET_CHANNEL_COUNT = ['AF3', 'AF4', 'F1', 'F2', 'FC1', 'FC2', 'CP1', 'CP2', 'PO3', 'PO4']
-BAD_CHANNELS = ['Fz', 'Cz']    # Channels to zero out (set to None to disable)
+TARGET_CHANNEL_COUNT = 40     # Upsample to N channels (greedy selection)
+# TARGET_CHANNEL_COUNT = ['AF3', 'AF4', 'F1', 'F2', 'FC1', 'FC2', 'CP1', 'CP2', 'PO3', 'PO4']
+
+BAD_CHANNELS = ["Fz", "Cz", "Pz"]
 
 # Artifact removal (disabled by default)
 DROP_BAD_CHANNELS = False       # Detect and remove bad channels
@@ -63,7 +64,7 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 # INFERENCE OPTIONS
 # =============================================================================
 
-GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
+GPU_DEVICE = 7                  # GPU ID (default: 0) or "" for CPU
 TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
 DATA_NORM = 10.0                # Data normalization factor denominator to rescale eeg data to have std = 0.1
                                 # NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
@@ -81,8 +82,7 @@ PLOT_EEG_SIGNAL_SAMPLES = False  # Plot raw eeg for data and model reconstructio
 PLOT_PT_COMPARISON = True       # Plot .pt file comparisons
 PLOT_FIF_COMPARISON = True      # Plot .fif file comparisons
 KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
-
-NUM_SAMPLES = 2
+NUM_SAMPLES = 2                 # Number of samples to plot for .pt and .fif comparisons
 
 # =============================================================================
 # RUN PIPELINE
@@ -98,8 +98,8 @@ if __name__ == "__main__":
     preprocessing(
         input_dir=INPUT_DIR,
         output_dir=PT_INPUT_DIR,
-        input_type=INPUT_TYPE,                         ### 
-        # input_type="raw",                          ### original: use raw input path
+        input_type=INPUT_TYPE,
+        epoch_duration=EPOCH_DURATION,
         apply_notch_filter=APPLY_NOTCH_FILTER,
         apply_highpass_filter=APPLY_HIGHPASS_FILTER,
         apply_average_reference=APPLY_AVERAGE_REFERENCE,

@@ -180,53 +180,35 @@ class Normalizer:
         Returns
         -------
         params : dict
-            Complete normalization history for reconstruction.
-            For per-epoch normalization, contains 'global_means', 'global_stds',
-            'final_means', 'final_stds' as lists.
-            For global normalization, contains scalar 'global_mean', 'global_std',
-            'final_mean', 'final_std'.
+            For raw path: scalar 'global_mean', 'global_std'.
+            For epochs path: per-epoch-channel 'means', 'stds' as 2D lists.
         """
         if not self.normalization_history:
             return {}
 
-        params = {
-            'normalization_chain': self.normalization_history
-        }
+        step = self.normalization_history[0]
 
-        # Extract shortcuts based on normalization type
-        if len(self.normalization_history) >= 2:
-            step0 = self.normalization_history[0]
-            step1 = self.normalization_history[1]
+        if 'mean' in step and 'std' in step:
+            # Raw path: global scalar z-score
+            return {'global_mean': step['mean'], 'global_std': step['std']}
+        elif 'means' in step and 'stds' in step:
+            # Epochs path: per-epoch-channel z-score
+            return {'means': step['means'], 'stds': step['stds']}
 
-            if 'means' in step0:
-                # Per-epoch normalization
-                params['global_means'] = step0['means']
-                params['global_stds'] = step0['stds']
-                params['final_means'] = step1['means']
-                params['final_stds'] = step1['stds']
-            else:
-                # Global normalization (original raw path)
-                # step0 is scalar (from normalize_raw), step1 is per-epoch-channel (from normalize_epochs)
-                params['global_mean'] = step0['mean']
-                params['global_std'] = step0['std']
-                params['final_means'] = step1['means']
-                params['final_stds'] = step1['stds']
-
-        return params
+        return {}
 
     @staticmethod
     def denormalize(data: np.ndarray, norm_params: Dict[str, Any]) -> np.ndarray:
         """
         Reverse normalization to reconstruct original scale.
 
-        Handles both global (scalar) and per-epoch (array) normalization params.
-
         Parameters
         ----------
         data : np.ndarray
-            Normalized data. For per-epoch: (n_epochs, n_channels, n_times)
+            Raw path: any shape (scalar denorm).
+            Epochs path: (n_epochs, n_channels, n_times) for per-epoch-channel denorm.
         norm_params : dict
-            Normalization parameters from get_reversibility_params()
+            From get_reversibility_params().
 
         Returns
         -------
@@ -235,84 +217,19 @@ class Normalizer:
         """
         data_reconstructed = data.copy()
 
-        # Check if per-epoch-channel, per-epoch, or global
-        if 'final_means' in norm_params and 'final_stds' in norm_params:
-            final_means = np.array(norm_params['final_means'])
-            final_stds = np.array(norm_params['final_stds'])
-
-            if final_means.ndim == 2:
-                # Per-epoch, per-channel: shape (n_epochs, n_channels_norm)
-                # Data may have more channels (upsampled), denorm real channels
-                # and scale upsampled channels by average std
-                n_ep = min(final_means.shape[0], data_reconstructed.shape[0])
-                n_ch_norm = final_means.shape[1]
-                n_ch_data = data_reconstructed.shape[1]
-                n_ch = min(n_ch_norm, n_ch_data)
-                # Denorm real channels
-                data_reconstructed[:n_ep, :n_ch, :] = (
-                    data_reconstructed[:n_ep, :n_ch, :] * final_stds[:n_ep, :n_ch, np.newaxis]
-                    + final_means[:n_ep, :n_ch, np.newaxis]
-                )
-                # Scale upsampled channels by average std (keep mean=0)
-                if n_ch_data > n_ch_norm:
-                    avg_std = final_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)  # (n_ep, 1)
-                    data_reconstructed[:n_ep, n_ch_norm:, :] = (
-                        data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
-                    )
-            else:
-                # Per-epoch only: shape (n_epochs,)
-                for i in range(min(len(final_means), data_reconstructed.shape[0])):
-                    data_reconstructed[i] = data_reconstructed[i] * final_stds[i] + final_means[i]
-
-            if 'global_means' in norm_params and 'global_stds' in norm_params:
-                global_means = np.array(norm_params['global_means'])
-                global_stds = np.array(norm_params['global_stds'])
-
-                if global_means.ndim == 2:
-                    n_ep = min(global_means.shape[0], data_reconstructed.shape[0])
-                    n_ch_norm = global_means.shape[1]
-                    n_ch_data = data_reconstructed.shape[1]
-                    n_ch = min(n_ch_norm, n_ch_data)
-                    # Denorm real channels
-                    data_reconstructed[:n_ep, :n_ch, :] = (
-                        data_reconstructed[:n_ep, :n_ch, :] * global_stds[:n_ep, :n_ch, np.newaxis]
-                        + global_means[:n_ep, :n_ch, np.newaxis]
-                    )
-                    # Scale upsampled channels by average std
-                    if n_ch_data > n_ch_norm:
-                        avg_std = global_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)
-                        data_reconstructed[:n_ep, n_ch_norm:, :] = (
-                            data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
-                        )
-                else:
-                    for i in range(min(len(global_means), data_reconstructed.shape[0])):
-                        data_reconstructed[i] = data_reconstructed[i] * global_stds[i] + global_means[i]
-        else:
-            # Global denormalization (original raw path)
-            # final step may be per-epoch-channel (from normalize_epochs on raw path)
-            if 'final_means' in norm_params and 'final_stds' in norm_params:
-                # raw path now stores per-epoch-channel final params
-                final_means = np.array(norm_params['final_means'])
-                final_stds = np.array(norm_params['final_stds'])
-                if final_means.ndim == 2:
-                    n_ep = min(final_means.shape[0], data_reconstructed.shape[0])
-                    n_ch_norm = final_means.shape[1]
-                    n_ch_data = data_reconstructed.shape[1]
-                    n_ch = min(n_ch_norm, n_ch_data)
-                    data_reconstructed[:n_ep, :n_ch, :] = (
-                        data_reconstructed[:n_ep, :n_ch, :] * final_stds[:n_ep, :n_ch, np.newaxis]
-                        + final_means[:n_ep, :n_ch, np.newaxis]
-                    )
-                    if n_ch_data > n_ch_norm:
-                        avg_std = final_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)
-                        data_reconstructed[:n_ep, n_ch_norm:, :] = (
-                            data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
-                        )
-            elif 'final_mean' in norm_params and 'final_std' in norm_params:
-                data_reconstructed = data_reconstructed * norm_params['final_std'] + norm_params['final_mean']
-
-            if 'global_mean' in norm_params and 'global_std' in norm_params:
-                data_reconstructed = data_reconstructed * norm_params['global_std'] + norm_params['global_mean']
+        if 'means' in norm_params and 'stds' in norm_params:
+            # Epochs path: per-epoch, per-channel denormalization
+            means = np.array(norm_params['means'])
+            stds = np.array(norm_params['stds'])
+            n_ep = min(means.shape[0], data_reconstructed.shape[0])
+            n_ch = min(means.shape[1], data_reconstructed.shape[1])
+            data_reconstructed[:n_ep, :n_ch, :] = (
+                data_reconstructed[:n_ep, :n_ch, :] * stds[:n_ep, :n_ch, np.newaxis]
+                + means[:n_ep, :n_ch, np.newaxis]
+            )
+        elif 'global_mean' in norm_params and 'global_std' in norm_params:
+            # Raw path: scalar denormalization
+            data_reconstructed = data_reconstructed * norm_params['global_std'] + norm_params['global_mean']
 
         return data_reconstructed
 

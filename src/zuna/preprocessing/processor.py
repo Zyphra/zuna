@@ -177,11 +177,6 @@ class EEGProcessor:
                 epoch_data_cleaned[:, ch_idx, :] = 0.0
                 zero_mask[:, ch_idx, :] = True
 
-        # Final normalization (after all channels are zeroed)
-        epoch_data_cleaned, norm_params_2 = self.normalizer.normalize_epochs(
-            epoch_data_cleaned, zero_mask
-        )
-
         # Convert to list format (keep all channels for consistency)
         # Note: channels are already zeroed above, so we don't pass zero_channels here
         epochs_list, positions_list = epochs_to_list(
@@ -354,10 +349,7 @@ class EEGProcessor:
                 if normalized in ch_names_normalized:
                     epoch_data[:, ch_names_normalized[normalized], :] = 0.0
 
-        # Global z-score normalization
-        epoch_data, norm_params_1 = self.normalizer.normalize_epoch_array(epoch_data)
-
-        # Bad channel detection (on normalized data)
+        # Bad channel detection
         bad_channels = self.artifact_remover.detect_bad_channels_from_epochs(
             epoch_data, channel_names
         )
