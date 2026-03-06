@@ -100,6 +100,80 @@ class ArtifactRemover:
 
         return bads
 
+    def detect_bad_channels_from_epochs(self, epoch_data: np.ndarray,
+                                        channel_names: list) -> Set[str]:
+        """
+        Detect bad channels from epoch data array.
+
+        Same logic as detect_bad_channels but operates on (n_epochs, n_ch, n_times)
+        array instead of Raw object.
+
+        Parameters
+        ----------
+        epoch_data : np.ndarray
+            Epoch data (n_epochs, n_channels, n_times)
+        channel_names : list
+            Channel names
+
+        Returns
+        -------
+        bad_channels : set
+            Set of bad channel names
+        """
+        if not self.config.drop_bad_channels:
+            return set()
+
+        bads = set()
+        n_epochs, n_channels, n_times = epoch_data.shape
+
+        # Flatten epochs for per-channel stats: (n_ch, n_epochs * n_times)
+        data = epoch_data.transpose(1, 0, 2).reshape(n_channels, -1)
+
+        all_stds = np.array([data[i].std() for i in range(n_channels)])
+        median_std = np.median(all_stds)
+        mad_std = np.median(np.abs(all_stds - median_std))
+
+        flat_threshold = median_std - 3.0 * mad_std if mad_std > 0 else median_std * 0.01
+
+        flat_channels = []
+        clipped_channels = []
+        noisy_channels = []
+
+        for i in range(n_channels):
+            x = data[i]
+            ch_sd = x.std()
+            ch_name = channel_names[i]
+
+            if ch_sd < max(flat_threshold, median_std * 1e-6):
+                bads.add(ch_name)
+                flat_channels.append(ch_name)
+                continue
+
+            eps = 1e-3 * ch_sd
+            near_max = np.isclose(x, x.max(), atol=eps)
+            near_min = np.isclose(x, x.min(), atol=eps)
+            frac = (near_max | near_min).mean()
+            if frac > 0.005:
+                bads.add(ch_name)
+                clipped_channels.append(ch_name)
+
+        good_indices = [i for i in range(n_channels) if channel_names[i] not in bads]
+        if len(good_indices) > 0:
+            good_stds = np.array([data[i].std() for i in good_indices])
+            mean_std = np.mean(good_stds)
+            noisy_threshold = self.config.noisy_channel_threshold * mean_std
+
+            for idx, ch_std in zip(good_indices, good_stds):
+                if ch_std > noisy_threshold:
+                    noisy_channels.append(channel_names[idx])
+                    bads.add(channel_names[idx])
+
+        self.stats['channels_dropped_flat'] = len(flat_channels)
+        self.stats['channels_dropped_clipped'] = len(clipped_channels)
+        self.stats['channels_dropped_noisy'] = len(noisy_channels)
+
+        return bads
+
     def zero_out_artifacts(self, epoch_data: np.ndarray, bad_channels: Set[str],
                           channel_names: list) -> tuple[np.ndarray, np.ndarray]:
         """

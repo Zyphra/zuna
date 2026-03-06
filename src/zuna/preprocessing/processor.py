@@ -261,6 +261,201 @@ class EEGProcessor:
 
         return epochs_list, positions_list, metadata
 
+    def process_epochs(self, epochs: mne.Epochs) -> Tuple[List[np.ndarray], List[np.ndarray], Dict[str, Any]]:
+        """
+        Process pre-epoched EEG data through the pipeline.
+
+        Skips highpass and notch filtering by default (unreliable on short epochs).
+        If these are enabled in config, a warning is printed but they are still applied.
+        Uses the actual epoch duration instead of config.epoch_duration.
+
+        Parameters
+        ----------
+        epochs : mne.Epochs
+            Epoched EEG data with montage already set
+
+        Returns
+        -------
+        epochs_list : list of np.ndarray
+            List of processed epochs
+        positions_list : list of np.ndarray
+            List of 3D channel positions for each epoch
+        metadata : dict
+            Processing metadata including statistics and reversibility params
+        """
+        if epochs.get_montage() is None:
+            raise ValueError("Epochs must have a montage set. Use epochs.set_montage() first.")
+
+        epochs = epochs.copy()
+
+        # Warn about filters that are unreliable on short epochs
+        if self.config.apply_highpass_filter:
+            import logging
+            logging.warning(
+                "Highpass filtering on epoched data may introduce edge artifacts. "
+                "Consider setting apply_highpass_filter=False for pre-epoched data."
+            )
+        if self.config.apply_notch_filter:
+            import logging
+            logging.warning(
+                "Notch filter auto-detection is unreliable on short epochs. "
+                "Consider setting apply_notch_filter=False for pre-epoched data."
+            )
+
+        # Track bad channels from epochs.info['bads'] (if enabled)
+        channels_marked_bad = set(epochs.info['bads']) if self.config.zero_bad_channels_from_raw else set()
+
+        # Get original info for metadata
+        orig_sfreq = float(epochs.info['sfreq'])
+        orig_n_channels = len(epochs.ch_names)
+        orig_n_epochs = len(epochs)
+
+        # Extract 3D channel positions from montage
+        montage = epochs.get_montage()
+        ch_pos = montage.get_positions()['ch_pos']
+
+        # Drop channels without 3D coordinates
+        channels_with_coords = []
+        channel_positions_dict = {}
+        for ch_name in epochs.ch_names:
+            if ch_name in ch_pos:
+                pos = ch_pos[ch_name]
+                if not np.allclose(pos, [0.0, 0.0, 0.0]):
+                    channels_with_coords.append(ch_name)
+                    channel_positions_dict[ch_name] = np.array(pos)
+
+        channels_dropped_no_coords = [ch for ch in epochs.ch_names if ch not in channels_with_coords]
+
+        if len(channels_with_coords) == 0:
+            raise ValueError("No channels with valid 3D coordinates found")
+
+        epochs.pick(channels_with_coords)
+        channel_positions = np.array([channel_positions_dict[ch] for ch in epochs.ch_names])
+
+        # Resample
+        epochs = self.filter.resample_epochs(epochs)
+
+        # Average reference (safe on epochs)
+        epochs = self.filter.apply_reference_epochs(epochs)
+
+        # Get epoch data array
+        epochs.load_data()
+        epoch_data = epochs.get_data()  # (n_epochs, n_channels, n_times)
+        channel_names = list(epochs.ch_names)
+
+        # Zero out bad channels from config (if specified)
+        if self.config.bad_channels is not None:
+            def normalize_name(name):
+                return name.replace(' ', '').lower()
+
+            ch_names_normalized = {normalize_name(name): idx for idx, name in enumerate(channel_names)}
+            for bad_name in self.config.bad_channels:
+                normalized = normalize_name(bad_name)
+                if normalized in ch_names_normalized:
+                    epoch_data[:, ch_names_normalized[normalized], :] = 0.0
+
+        # Global z-score normalization
+        epoch_data, norm_params_1 = self.normalizer.normalize_epoch_array(epoch_data)
+
+        # Bad channel detection (on normalized data)
+        bad_channels = self.artifact_remover.detect_bad_channels_from_epochs(
+            epoch_data, channel_names
+        )
+
+        # Artifact removal
+        epoch_data_cleaned, zero_mask = self.artifact_remover.zero_out_artifacts(
+            epoch_data, bad_channels, channel_names
+        )
+
+        # Remove bad epochs
+        epoch_data_cleaned = self.artifact_remover.remove_bad_epochs(epoch_data_cleaned, zero_mask)
+
+        # Zero out channels marked bad in original epochs
+        for ch_idx, ch_name in enumerate(channel_names):
+            if ch_name in channels_marked_bad:
+                epoch_data_cleaned[:, ch_idx, :] = 0.0
+                zero_mask[:, ch_idx, :] = True
+
+        # Final normalization
+        epoch_data_cleaned, norm_params_2 = self.normalizer.normalize_epochs(
+            epoch_data_cleaned, zero_mask
+        )
+
+        # Convert to list format
+        epochs_list, positions_list = epochs_to_list(
+            epoch_data_cleaned,
+            channel_positions,
+            remove_all_zero=False,
+            zero_channels=None,
+            channel_names=channel_names
+        )
+
+        # Zero out bad channels if specified
+        channel_names_final = list(channel_names)
+        if self.config.bad_channels is not None and len(epochs_list) > 0:
+            from .interpolation import zero_bad_channels
+            epochs_list = zero_bad_channels(
+                epochs_list,
+                channel_names_final,
+                bad_channel_names=self.config.bad_channels
+            )
+
+        # Apply upsampling if configured
+        if self.config.target_channel_count is not None and len(epochs_list) > 0:
+            current_n_channels = len(channel_names_final)
+
+            if isinstance(self.config.target_channel_count, int):
+                from .interpolation import upsample_channels
+                if current_n_channels < self.config.target_channel_count:
+                    epochs_list, positions_list, channel_names_final = upsample_channels(
+                        epochs_list,
+                        positions_list,
+                        channel_names_final,
+                        target_n_channels=self.config.target_channel_count
+                    )
+            elif isinstance(self.config.target_channel_count, list):
+                from .interpolation import add_specific_channels
+                epochs_list, positions_list, channel_names_final = add_specific_channels(
+                    epochs_list,
+                    positions_list,
+                    channel_names_final,
+                    target_channel_names=self.config.target_channel_count
+                )
+
+        # Check if we have enough epochs to save
+        if not self.config.save_incomplete_batches:
+            if len(epochs_list) < self.config.epochs_per_file:
+                epochs_list = []
+                positions_list = []
+        elif len(epochs_list) < self.config.min_epochs_to_save:
+            epochs_list = []
+            positions_list = []
+
+        # Build metadata
+        epoch_duration = float(epoch_data.shape[2] / self.config.target_sfreq)
+        metadata = {
+            'input_type': 'epochs',
+            'original_sfreq': orig_sfreq,
+            'resampled_sfreq': self.config.target_sfreq,
+            'original_n_channels': orig_n_channels,
+            'final_n_channels': len(channel_names_final),
+            'epoch_duration_sec': epoch_duration,
+            'channel_names': channel_names_final,
+            'channels_dropped_no_coords': channels_dropped_no_coords,
+            'bad_channels': sorted(list(bad_channels)),
+            'channels_zeroed_from_input': sorted(list(channels_marked_bad)),
+            'n_epochs_original': orig_n_epochs,
+            'n_epochs_saved': len(epochs_list),
+            'artifact_stats': self.artifact_remover.get_stats(),
+        }
+
+        if self.config.save_normalization_params:
+            metadata['reversibility'] = self.normalizer.get_reversibility_params()
+
+        self.stats = metadata.copy()
+
+        return epochs_list, positions_list, metadata
+
     def process_and_save(self, raw: mne.io.Raw, output_path: str) -> Dict[str, Any]:
         """
         Process raw data and save to PT file.
@@ -278,6 +473,39 @@ class EEGProcessor:
             Processing metadata
         """
         epochs_list, positions_list, metadata = self.process(raw)
+
+        if len(epochs_list) == 0:
+            raise ValueError(f"No epochs to save (had {metadata['n_epochs_original']} epochs, "
+                           f"but all were removed or batch size requirements not met)")
+
+        save_pt(
+            epochs_list,
+            positions_list,
+            metadata['channel_names'],
+            output_path,
+            metadata=metadata,
+            reversibility_params=metadata.get('reversibility')
+        )
+
+        return metadata
+
+    def process_epochs_and_save(self, epochs: mne.Epochs, output_path: str) -> Dict[str, Any]:
+        """
+        Process epoched data and save to PT file.
+
+        Parameters
+        ----------
+        epochs : mne.Epochs
+            Epoched EEG data with montage set
+        output_path : str
+            Path to save PT file
+
+        Returns
+        -------
+        metadata : dict
+            Processing metadata
+        """
+        epochs_list, positions_list, metadata = self.process_epochs(epochs)
 
         if len(epochs_list) == 0:
             raise ValueError(f"No epochs to save (had {metadata['n_epochs_original']} epochs, "
