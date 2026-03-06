@@ -27,8 +27,9 @@ from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 # =============================================================================
 
 TUTORIAL_DIR = Path(__file__).parent.resolve()
-INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")    ### replace with your path
-WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")      ### replace with your path
+INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")    ### original: raw .fif input
+# INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_epoch_input")    ### CHANGED: epoch input (*_epo.fif)
+WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")        ### replace with your path
 
 # Derived paths (pipeline directory structure)
 WORKING_PATH = Path(WORKING_DIR)
@@ -38,6 +39,7 @@ PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
 FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
 FIGURES_DIR = str(WORKING_PATH / "FIGURES")
 
+INPUT_TYPE = "raw"  # "raw" or "epochs"
 # =============================================================================
 # PREPROCESSING OPTIONS
 # =============================================================================
@@ -61,7 +63,7 @@ ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
 # INFERENCE OPTIONS
 # =============================================================================
 
-GPU_DEVICE = 1                  # GPU ID (default: 0) or "" for CPU
+GPU_DEVICE = 0                  # GPU ID (default: 0) or "" for CPU
 TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
 DATA_NORM = 10.0                # Data normalization factor denominator to rescale eeg data to have std = 0.1
                                 # NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
@@ -96,6 +98,8 @@ if __name__ == "__main__":
     preprocessing(
         input_dir=INPUT_DIR,
         output_dir=PT_INPUT_DIR,
+        input_type=INPUT_TYPE,                         ### 
+        # input_type="raw",                          ### original: use raw input path
         apply_notch_filter=APPLY_NOTCH_FILTER,
         apply_highpass_filter=APPLY_HIGHPASS_FILTER,
         apply_average_reference=APPLY_AVERAGE_REFERENCE,
