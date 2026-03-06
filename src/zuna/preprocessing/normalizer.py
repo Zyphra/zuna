@@ -240,12 +240,24 @@ class Normalizer:
             final_stds = np.array(norm_params['final_stds'])
 
             if final_means.ndim == 2:
-                # Per-epoch, per-channel: shape (n_epochs, n_channels)
-                n = min(final_means.shape[0], data_reconstructed.shape[0])
-                data_reconstructed[:n] = (
-                    data_reconstructed[:n] * final_stds[:n, :, np.newaxis]
-                    + final_means[:n, :, np.newaxis]
+                # Per-epoch, per-channel: shape (n_epochs, n_channels_norm)
+                # Data may have more channels (upsampled), denorm real channels
+                # and scale upsampled channels by average std
+                n_ep = min(final_means.shape[0], data_reconstructed.shape[0])
+                n_ch_norm = final_means.shape[1]
+                n_ch_data = data_reconstructed.shape[1]
+                n_ch = min(n_ch_norm, n_ch_data)
+                # Denorm real channels
+                data_reconstructed[:n_ep, :n_ch, :] = (
+                    data_reconstructed[:n_ep, :n_ch, :] * final_stds[:n_ep, :n_ch, np.newaxis]
+                    + final_means[:n_ep, :n_ch, np.newaxis]
                 )
+                # Scale upsampled channels by average std (keep mean=0)
+                if n_ch_data > n_ch_norm:
+                    avg_std = final_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)  # (n_ep, 1)
+                    data_reconstructed[:n_ep, n_ch_norm:, :] = (
+                        data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
+                    )
             else:
                 # Per-epoch only: shape (n_epochs,)
                 for i in range(min(len(final_means), data_reconstructed.shape[0])):
@@ -256,11 +268,21 @@ class Normalizer:
                 global_stds = np.array(norm_params['global_stds'])
 
                 if global_means.ndim == 2:
-                    n = min(global_means.shape[0], data_reconstructed.shape[0])
-                    data_reconstructed[:n] = (
-                        data_reconstructed[:n] * global_stds[:n, :, np.newaxis]
-                        + global_means[:n, :, np.newaxis]
+                    n_ep = min(global_means.shape[0], data_reconstructed.shape[0])
+                    n_ch_norm = global_means.shape[1]
+                    n_ch_data = data_reconstructed.shape[1]
+                    n_ch = min(n_ch_norm, n_ch_data)
+                    # Denorm real channels
+                    data_reconstructed[:n_ep, :n_ch, :] = (
+                        data_reconstructed[:n_ep, :n_ch, :] * global_stds[:n_ep, :n_ch, np.newaxis]
+                        + global_means[:n_ep, :n_ch, np.newaxis]
                     )
+                    # Scale upsampled channels by average std
+                    if n_ch_data > n_ch_norm:
+                        avg_std = global_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)
+                        data_reconstructed[:n_ep, n_ch_norm:, :] = (
+                            data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
+                        )
                 else:
                     for i in range(min(len(global_means), data_reconstructed.shape[0])):
                         data_reconstructed[i] = data_reconstructed[i] * global_stds[i] + global_means[i]
