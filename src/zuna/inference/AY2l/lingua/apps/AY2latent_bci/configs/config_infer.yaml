@@ -26,8 +26,8 @@ model:
 
 
 data:
-  data_dir: ./tutorials/data/3_pt_output/
-  export_dir: ./tutorials/data/3_pt_output/   # Where to save output .pt files after processing.
+  data_dir: ./tutorials/data/working/2_pt_input/
+  export_dir: ./tutorials/data/working/3_pt_output/   # Where to save output .pt files after processing.
   target_packed_seqlen: 100000            # Target seqlen for packed samples. This is essentially batch size.
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
@@ -35,7 +35,7 @@ data:
   glob_filter: "**/*.pt" # this filters the dataset to only contain files with this string in it.
   chan_num_filter: null # null or integer number of channels we want in each sample (another filter on input data)
   sample_rate: 256
-  seq_len: 1280 # number of timepoints in each sample (fixed 5 sec samples at 256 Hz)
+  seq_len: 1280 # NOT REALLY USED ANYMORE. number of timepoints in each sample (fixed 5 sec samples at 256 Hz)
   num_fine_time_pts: 32 
   use_coarse_time: "B" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals.
   randomly_permute_sequence: false

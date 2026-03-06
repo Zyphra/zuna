@@ -81,6 +81,9 @@ def chop_and_reshape_signals(eeg_signal, chan_pos=None, chan_pos_discrete=None, 
         assert num_tpts%tf==0
         tc = num_tpts//tf
 
+    # print(f"Inside chop_and_reshape_signals with {use_coarse_time=}, {tc=}, {num_chans=}, {num_tpts=}, {tf=}")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
     if use_coarse_time=="A":
         # Keep same coarse-time values together in reshaping.
         seqlen = num_chans*tc
@@ -91,7 +94,7 @@ def chop_and_reshape_signals(eeg_signal, chan_pos=None, chan_pos_discrete=None, 
         tc_reshaped = torch.arange(tc).repeat((num_chans,1)).T.reshape(seqlen,1)
 
     elif use_coarse_time=="B" or use_coarse_time=="D":
-        # Keep same channels together in reshaping
+        # THIS IS DEFAULT: Keep same channels together in reshaping
         seqlen = num_chans*tc
         eeg_reshaped = eeg_signal.reshape(num_chans, tc, tf).reshape(seqlen,tf)
         chan_pos_reshaped = chan_pos.repeat_interleave(repeats=tc,dim=0) if chan_pos is not None else None
@@ -145,12 +148,12 @@ def chop_and_reshape_signals(eeg_signal, chan_pos=None, chan_pos_discrete=None, 
     # chan_pos_reshaped.shape = [num_chans*tc, 3]
     # tc_reshaped.shape = [num_chans*tc, 3] 
     # num_chans*tc = int
-    return eeg_reshaped, chan_pos_reshaped, chan_pos_discrete_reshaped, chan_id_reshaped, tc_reshaped, seqlen
+    return eeg_reshaped, chan_pos_reshaped, chan_pos_discrete_reshaped, chan_id_reshaped, tc_reshaped, seqlen, num_chans
 
 
 
 
-def invert_reshape_signals(sig_reshaped, pos_reshaped=None, pos_discrete_reshaped=None, id_reshaped=None, tc_reshaped=None, num_chans=62, tf=128, use_coarse_time="B"):
+def invert_reshape_signals(sig_reshaped, pos_reshaped=None, pos_discrete_reshaped=None, id_reshaped=None, tc_reshaped=None, num_chans=62, tf=128, tc=40, use_coarse_time="B"):
     """
     Invert the chop_and_reshape_signals operation.
     use_coarse_time must match what was used there.
@@ -204,6 +207,9 @@ def invert_reshape_signals(sig_reshaped, pos_reshaped=None, pos_discrete_reshape
                 assert (tc0 == tc_unwrapt[j]).all().item(), f"coarse time unwrapping {j} not right."
 
     """
+
+    # print(f"Inside invert_reshape_signals")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     tc = sig_reshaped.shape[0]//num_chans
     num_tpts = tc*tf
@@ -381,14 +387,7 @@ class EEGDataset_v2(IterableDataset):
         self.channel_dropout_prob = args.channel_dropout_prob
         self.num_bins = args.num_bins_discretize_xyz_chan_pos
 
-        if args.chan_pos_xyz_extremes_type == "old":
-            ## OLD TEST VALUES
-            self.xyz_extremes = 1.10*torch.tensor([ 
-                [-0.0861, -0.1124, -0.0680], 
-                [0.0858, 0.0849, 0.1002]
-            ])
-
-        elif args.chan_pos_xyz_extremes_type == "thirteens":
+        if args.chan_pos_xyz_extremes_type == "thirteens":
             self.xyz_extremes = torch.tensor([ 
                 [-0.13, -0.13, -0.13], 
                 [ 0.13,  0.13,  0.13]
@@ -401,10 +400,8 @@ class EEGDataset_v2(IterableDataset):
             ])
 
         else:
-            raise ValueError(f"Invalid value for args.chan_pos_xyz_extremes_type: {args.chan_pos_xyz_extremes_type} - must be one of 'old', 'thirteens'.")
+            raise ValueError(f"Invalid value for args.chan_pos_xyz_extremes_type: {args.chan_pos_xyz_extremes_type} - must be one of 'twelves' or 'thirteens'.")
 
-
-   
         # Get total samps from all memmap files.
         # print(f"Counting up total number of samples.")
         self.total_samps = 0
@@ -437,23 +434,6 @@ class EEGDataset_v2(IterableDataset):
         global_worker_id = rank * num_workers_per_rank + worker_id
         total_global_workers = world_size * num_workers_per_rank
 
-        #JM debug - Check for duplicate files in memmap_paths
-        # Disabled verbose output - uncomment for debugging
-        # from collections import Counter
-        # print(f"\n{'='*80}")
-        # print(f"[DATALOADER 🔍] Checking memmap_paths for duplicate files")
-        # print(f"{'='*80}")
-        # file_basenames = [p.name for p in self.memmap_paths]
-        # file_counts = Counter(file_basenames)
-        # duplicates = {name: count for name, count in file_counts.items() if count > 1}
-        # if duplicates:
-        #     print(f"[DATALOADER 🔍] ⚠️  DUPLICATE FILES DETECTED in memmap_paths:")
-        #     for name, count in duplicates.items():
-        #         print(f"  📂 {name}: appears {count} times")
-        # else:
-        #     print(f"[DATALOADER 🔍] ✓ No duplicate files in memmap_paths ({len(self.memmap_paths)} unique files)")
-        # print(f"{'='*80}\n")
-        
         if self.shuffle:
             # print("SHUFFLING DATASET!", end=" ")
             # 1st. Set different deterministic random seeds for each rank and worker.    
@@ -461,7 +441,6 @@ class EEGDataset_v2(IterableDataset):
                 # print("SEED NOT NONE!")
                 base_seed = int(self.seed + (1e15 * self._current_epoch))
                 rng_base = random.Random(base_seed)
-                #print(f"{base_seed=}, {rng_base=}")
                 #
                 worker_seed = int(self.seed + (1e3 * rank) \
                                             + (1e6 * worker_id) \
@@ -487,37 +466,26 @@ class EEGDataset_v2(IterableDataset):
             range(global_worker_id, len(self.memmap_paths), total_global_workers)
         )
 
-        #JM debug - Show sharding logic
-        # Disabled verbose output
-        # print(f"[DATALOADER 🔍] Worker {global_worker_id}/{total_global_workers} assigned {len(sharded_indices_for_this_worker)} files")
-        # print(f"  Indices range: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
 
         if self.shuffle:
             # 4th. Shuffle the indices assigned to this worker.\
             rng_worker.shuffle(sharded_indices_for_this_worker)
-            #JM debug - Show shuffling effect
-            # print(f"[DATALOADER 🔍] After shuffle: {sharded_indices_for_this_worker[:5]}...{sharded_indices_for_this_worker[-5:] if len(sharded_indices_for_this_worker) > 5 else ''}")
-
 
         # Init for sequence packing
         seqlen_accum = 0
         packed_batch = []
-
-        #JM debug - Track file loads to detect duplicates
         loaded_files = []
-        # print(f"[DATALOADER 🔍] Starting to load {len(sharded_indices_for_this_worker)} files...\n")
 
         # Loop over all the dataset files in this worker's shard.
         for file_load_idx, ids in enumerate(sharded_indices_for_this_worker):
             m_path = self.memmap_paths[int(ids)]
 
-            #JM debug - Track each file load
             loaded_files.append(m_path.name)
             # if file_load_idx < 5 or file_load_idx >= len(sharded_indices_for_this_worker) - 3:
             #     print(f"[DATALOADER 🔍] 📂 Loading file #{file_load_idx}: {m_path.name} (index {ids} in memmap_paths)")
 
             # mmap = torch.load(m_path) #original line that worked for ALL TRAINING AND EVAL
-            mmap = torch.load(m_path, weights_only=False) #jm | this line was needed ONLY for the Moabb eval datasets (not sure why)
+            mmap = torch.load(m_path, weights_only=False) #jm | this line was needed ONLY for the Moabb eval datasets 
 
             # Handle different dataset structures
             if isinstance(mmap,dict):
@@ -594,18 +562,9 @@ class EEGDataset_v2(IterableDataset):
                     else:
                         filtered_indices.append(i)
 
-                # Debug output
-                # if len(filtered_indices) > 0:
-                #     print(f"[DEBUG] Channel filter: expecting {self.chan_num_filter} channels")
-                #     print(f"[DEBUG] Filtered {len(filtered_indices)}/{len(mmap)} epochs")
-                #     if len(filtered_indices) <= 20:
-                #         print(f"[DEBUG] Filtered epoch indices: {filtered_indices}")
-                #         print(f"[DEBUG] Channel counts: {[mmap[i].shape[0] for i in filtered_indices[:10]]}")
-
                 mmap = mmap_filt
                 chan_pos = chan_pos_filt
                 chan_pos_discrete = chan_pos_discrete_filt
-
 
             # Shuffle the channels randomly to see if the model can still learn from concat'd {x,y,z}-position or RoPE on discretized xyz positions
             # Note: This is before things are reshaped into coarse-time and fine-time inside chop_and_reshape_signals()
@@ -667,10 +626,8 @@ class EEGDataset_v2(IterableDataset):
             if self.shuffle:
                 random.shuffle(indx)
 
-
-
             check_reshape_plots = False # Plot signals before and after reshaping to verify its working.
-                                         # THIS IS NOT EXPECTED TO WORK WITH self.use_coarse_time=="D
+                                        # THIS IS NOT EXPECTED TO WORK WITH self.use_coarse_time=="D
             if check_reshape_plots:
                 # Create a sample signal to demonstrate reshape and unreshape is working.
                 tf = self.num_fine_time_pts
@@ -687,6 +644,27 @@ class EEGDataset_v2(IterableDataset):
                         ax.scatter(tf*np.arange(tc), signal[::tf], color='red')
                     plt.savefig(f"figures/inspect_reshape_and_invert/test0_ch{i}_before.png", dpi=300, bbox_inches='tight')
                     plt.close()
+
+
+
+
+            # # DEBUG: TO HANDLE DIFFERENT SEQ LENGTHS IN EACH SAMPLE.
+            # # Change length of each sample in mmap by randomly grabbing some number between 1 and tc tf chunks
+            # # print(f"Inside EEGDataset_v2 before chop_and_reshape_signals")
+            # # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+            # if False:
+            #     for i in range(len(mmap)):
+            #         tf = self.num_fine_time_pts
+            #         num_tpts = mmap[i].shape[1]
+            #         tc = num_tpts//tf
+            #         num_tf_chunks = random.randint(int(0.8*tc), tc)
+            #         mmap[i] = mmap[i][:,:tf*num_tf_chunks]
+            #     for i in range(len(mmap)):
+            #         print(f"{mmap[i].shape=}")
+
+
+
+
 
             if self.use_coarse_time=="A" or self.use_coarse_time=="B" or self.use_coarse_time=="C" or self.use_coarse_time=="D":
                 reshaped = [chop_and_reshape_signals(m, c, cd, do, self.num_fine_time_pts, self.use_coarse_time) for m,c,cd,do in zip(mmap, chan_pos, chan_pos_discrete, chan_dropout)]
@@ -725,17 +703,19 @@ class EEGDataset_v2(IterableDataset):
                 num_chans = eeg_cat[indx0].shape[0]//tc
                 if self.cat_chan_xyz_and_eeg:
                     xxx, _, _, _, _ = invert_reshape_signals(sig_reshaped=eeg_cat[indx0][:,3:],
-                                                          pos_reshaped=reshaped[indx0][1],
-                                                          num_chans=num_chans, 
-                                                          tf=tf,
-                                                          use_coarse_time=self.use_coarse_time,
+                                                             pos_reshaped=reshaped[indx0][1],
+                                                             num_chans=num_chans, 
+                                                             tf=tf,
+                                                             tc=reshaped[i][4].max().item()+1,
+                                                             use_coarse_time=self.use_coarse_time,
                     )
                 else:
                     xxx, _, _, _, _ = invert_reshape_signals(sig_reshaped=eeg_cat[indx0], 
-                                                          pos_reshaped=reshaped[indx0][1],
-                                                          num_chans=num_chans, 
-                                                          tf=tf,
-                                                          use_coarse_time=self.use_coarse_time,
+                                                             pos_reshaped=reshaped[indx0][1],
+                                                             num_chans=num_chans, 
+                                                             tf=tf,
+                                                             tc=reshaped[i][4].max().item()+1,
+                                                             use_coarse_time=self.use_coarse_time,
                     )
 
                 # Create a sample signal to demonstrate reshape and unreshape is working.
@@ -750,9 +730,6 @@ class EEGDataset_v2(IterableDataset):
             dataset_id = int(m_path.name.split('_')[0].removeprefix('ds'))    # standardized dataset id 🎉
 
             for s in indx:
-                #JM CHANGE ORDER
-                
-                # try:
                 # Apply channel dropout here to get boolean mask
                 chan_id = reshaped[s][3]
                 chan_do = chan_dropout[s]
@@ -760,7 +737,6 @@ class EEGDataset_v2(IterableDataset):
                 for d in chan_do:
                     dropout_bool[chan_id==d] = True
 
-                #jm saving pt files - create sample dict (moved outside if/else to fix sample loss bug)
                 sample_dict = {
                     "eeg_signal": eeg_cat[s],
                     "chan_pos": reshaped[s][1],
@@ -768,10 +744,11 @@ class EEGDataset_v2(IterableDataset):
                     "chan_id": reshaped[s][3],
                     "t_coarse": reshaped[s][4],
                     "seq_lens": reshaped[s][5],
+                    "max_tc": reshaped[s][4].max().item()+1,
                     "chan_dropout": dropout_bool,
                     "ids": ids,
                     "dataset_id": dataset_id,
-                    "filename": str(m_path.name),      # Track source filename
+                    "filename": str(m_path.name),       # Track source filename
                     "sample_idx": s,                    # Track sample index within file
                     "metadata": file_metadata           # Pass through file metadata
                 }
@@ -783,40 +760,14 @@ class EEGDataset_v2(IterableDataset):
                 else:
                     # Batch is full, yield it and start new batch with current sample
                     yield packed_batch
-                    #JM CHANGE ORDER
+                    
                     packed_batch = [sample_dict]       # Start new batch with current sample
                     seqlen_accum = reshaped[s][5]      # Initialize seqlen with current sample
 
-                # import pdb; pdb.set_trace()
 
-                # except Exception as e:
-                #     print(f"Error processing sample: {e} : {ids} : {m_path}")
-                #     import pdb; pdb.set_trace()
-                #     continue
-
-        #JM FIX FIX FIX - Yield any remaining samples in the last partial batch
-        # After processing all files, if there are leftover samples in packed_batch
-        # that didn't fill up a complete batch, we need to yield them.
-        # Without this, the last ~40 samples get lost!
         if len(packed_batch) > 0:
-            # print(f"[DATALOADER 🔍] Yielding final partial batch with {len(packed_batch)} samples")
             yield packed_batch
 
-        #JM debug - Summary of loaded files
-        # Disabled verbose output
-        # print(f"\n{'='*80}")
-        # print(f"[DATALOADER 🔍] Summary of files loaded by worker {global_worker_id}")
-        # print(f"{'='*80}")
-        # loaded_file_counts = Counter(loaded_files)
-        # duplicates_loaded = {name: count for name, count in loaded_file_counts.items() if count > 1}
-        # if duplicates_loaded:
-        #     print(f"[DATALOADER 🔍] ⚠️  FILES LOADED MULTIPLE TIMES by this worker:")
-        #     for name, count in duplicates_loaded.items():
-        #         print(f"  📂 {name}: loaded {count} times")
-        # else:
-        #     print(f"[DATALOADER 🔍] ✓ No files loaded multiple times")
-        # print(f"[DATALOADER 🔍] Worker {global_worker_id} finished: loaded {len(loaded_files)} files total ({len(set(loaded_files))} unique)")
-        # print(f"{'='*80}\n")
 
 
 def beta_sched(t_shape, device, dtype):
@@ -846,7 +797,7 @@ class EEGProcessor:
 
 
     @torch.compile()
-    def process(self, eeg_signal, chan_pos, chan_pos_discrete, chan_id, t_coarse, seq_lens, chan_dropout):
+    def process(self, eeg_signal, chan_pos, chan_pos_discrete, chan_id, t_coarse, seq_lens, max_tc, chan_dropout):
 
         seq_len, channel = eeg_signal.shape
         batch=1
@@ -878,8 +829,8 @@ class EEGProcessor:
                 noise[:,:3] = eeg_signal[:,:3] # dont add noise to {x,y,z}-position channels.   
                 eeg_signal_masked[:,:3] = eeg_signal[:,:3] # dont mask {x,y,z}-position channels.
             else:
+                print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
                 pass
-                # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
                 # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         if self.masked_in_decoder:
@@ -894,12 +845,13 @@ class EEGProcessor:
             "decoder_input": decoder_input,     # send noised version of signal or masked signal to decoder input.
             "target": decoder_targets,
             "t": t,
-            "eeg_signal": eeg_signal,   # just passing eeg_signal through.
-            "chan_pos": chan_pos,         # just passing chan_pos through.
-            "chan_pos_discrete": chan_pos_discrete,         # just passing chan_pos_discrete through.
-            "chan_id": chan_id,           # just passing chan_id through.
-            "seq_lens": seq_lens,         # just passing seq_lens through.
-            "t_coarse": t_coarse,         # just passing t_coarse through.
+            "eeg_signal": eeg_signal,                   # just passing eeg_signal through.
+            "chan_pos": chan_pos,                       # just passing chan_pos through.
+            "chan_pos_discrete": chan_pos_discrete,     # just passing chan_pos_discrete through.
+            "chan_id": chan_id,                         # just passing chan_id through.
+            "seq_lens": seq_lens,                       # just passing seq_lens through.
+            "max_tc": max_tc,                           # just passing max_tc through.
+            "t_coarse": t_coarse,                       # just passing t_coarse through.
         }
 
         return out_dict
@@ -936,6 +888,7 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
             't_coarse':                 torch.vstack([item['t_coarse'] for item in batch[0]]),
             'chan_dropout':             torch.vstack([item['chan_dropout'] for item in batch[0]]),
             #
+            'max_tc':                   torch.tensor([item['max_tc'] for item in batch[0]]),
             'seq_lens':                 torch.tensor([item['seq_lens'] for item in batch[0]]),
             'ids':                      torch.tensor([item['ids'] for item in batch[0]]),
             'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),
@@ -950,7 +903,7 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
 
 def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
     if args.use_b2:
-        # print("NOTE: EEGDataset_b2 is not implemented yet. Using EEGDataset_v2 instead.")
+        print("NOTE: EEGDataset_b2 is not implemented yet. Using EEGDataset_v2 instead.")
         #dataset = EEGDataset_b2(args) # IterableDataset pulling from B2!
         pass
     else:
