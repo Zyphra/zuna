@@ -205,12 +205,12 @@ class Normalizer:
                 params['final_means'] = step1['means']
                 params['final_stds'] = step1['stds']
             else:
-                # Global normalization (original raw path) # JM
+                # Global normalization (original raw path)
                 # step0 is scalar (from normalize_raw), step1 is per-epoch-channel (from normalize_epochs)
                 params['global_mean'] = step0['mean']
                 params['global_std'] = step0['std']
-                params['final_means'] = step1['means']  # JM: was step1['mean'] — normalize_epochs returns 'means' not 'mean'
-                params['final_stds'] = step1['stds']    # JM: was step1['std'] — normalize_epochs returns 'stds' not 'std'
+                params['final_means'] = step1['means']
+                params['final_stds'] = step1['stds']
 
         return params
 
@@ -288,10 +288,10 @@ class Normalizer:
                     for i in range(min(len(global_means), data_reconstructed.shape[0])):
                         data_reconstructed[i] = data_reconstructed[i] * global_stds[i] + global_means[i]
         else:
-            # Global denormalization (original raw path) # JM
+            # Global denormalization (original raw path)
             # final step may be per-epoch-channel (from normalize_epochs on raw path)
             if 'final_means' in norm_params and 'final_stds' in norm_params:
-                # JM: raw path now stores per-epoch-channel final params
+                # raw path now stores per-epoch-channel final params
                 final_means = np.array(norm_params['final_means'])
                 final_stds = np.array(norm_params['final_stds'])
                 if final_means.ndim == 2:
