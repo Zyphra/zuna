@@ -3,7 +3,7 @@
 #   >> pip install zuna
 
 # 2nd, run something like:
-#   >> CUDA_VISIBLE_DEVICES=3 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_infer.yaml
+#   >> CUDA_VISIBLE_DEVICES=1 python3 src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/eeg_eval.py config=src/zuna/inference/AY2l/lingua/apps/AY2latent_bci/configs/config_infer.yaml
 
 
 import gc
@@ -324,7 +324,7 @@ def unwrap_all_the_signals(model_output, batch, args):
     - model_output: [B, seqlen, latent_dim]
     - batch: dict -> batch.keys() = ['encoder_input', 'decoder_input', 'target', 't', \
                                     'eeg_signal', 'chan_pos', 'chan_pos_discrete', \
-                                    'chan_id', 'seq_lens', 't_coarse']
+                                    'chan_id', 'seq_lens', 'max_tc', 't_coarse']
     - args: argparse.Namespace - args passed in from config file.
 
     Outputs:
@@ -350,14 +350,22 @@ def unwrap_all_the_signals(model_output, batch, args):
     channel_id_unwrapped = []
     t_coarse_unwrapped = []
 
+
+    # HOW TO PROPERLY HANDLE SEQLEN, TC, AND NUM_CHANS FOR EACH SAMPLE IN THE BATCH ??
+    # print(f"Inside unwrap_all_the_signals,")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
     seq_lens = batch['seq_lens'].cpu().numpy() 
+    max_tc = batch['max_tc'].cpu().numpy()
     seqlen_accum=0
 
     tf = args.data.num_fine_time_pts
-    tc = args.data.seq_len // tf
+    # tc = args.data.seq_len // tf ## THIS ASSUMES TC IS SAME FOR ALL SAMPLES !!
 
     # Loop through each sample in batch and unwrap the variable-length sequences
     for i,seqlen in enumerate(seq_lens):
+
+        tc = max_tc[i] ## This allows tc different for each sample
         num_chans = seqlen//tc 
 
         if args.data.cat_chan_xyz_and_eeg:
@@ -378,6 +386,10 @@ def unwrap_all_the_signals(model_output, batch, args):
         mod_in_pos_disc = batch['chan_pos_discrete'][seqlen_accum:seqlen_accum+seqlen, :] # discretized {x,y,z} position channels
 
 
+        # print(f"Inside unwrap_all_the_signals, about to jump into invert_reshape_signals")
+        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
+
         if args.data.use_coarse_time in {"A", "B", "C", "D"}:
             # unwrap (original and reconstructed) signals and positions - inverting chop_and_reshape_signals
             mod_in_sig_unwrapt, mod_in_pos_unwrapt, mod_in_pos_disc_unwrapt, chan_id_unwrapt, tc_unwrapt = invert_reshape_signals(
@@ -388,6 +400,7 @@ def unwrap_all_the_signals(model_output, batch, args):
                                                                                             tc_reshaped=t_coarse,
                                                                                             num_chans=num_chans, 
                                                                                             tf=tf,
+                                                                                            tc=tc,
                                                                                             use_coarse_time=args.data.use_coarse_time,
             )
             mod_out_sig_unwrapt, mod_out_pos_unwrapt, _, _, _ = invert_reshape_signals(
@@ -395,12 +408,14 @@ def unwrap_all_the_signals(model_output, batch, args):
                                                             pos_reshaped=mod_out_pos, 
                                                             num_chans=num_chans, 
                                                             tf=tf,
+                                                            tc=tc,
                                                             use_coarse_time=args.data.use_coarse_time,
             )
             eeg_sig_unwrapt, _, _, _, _ = invert_reshape_signals(
                                                 sig_reshaped=eeg_sig,
                                                 num_chans=num_chans, 
                                                 tf=tf,
+                                                tc=tc,
                                                 use_coarse_time=args.data.use_coarse_time,
             )
         else:
@@ -420,8 +435,6 @@ def unwrap_all_the_signals(model_output, batch, args):
         
         seqlen_accum += seqlen
 
-
-        
         # Some Sanity Check plots to verify that the unwrapping and reshaping are working correctly.
         # These plots should match plots generated in EEGDataset_v2.__iter__, made with same flag.
         check_reshape_plots = False # Plot signals before and after reshaping to verify its working.
@@ -456,48 +469,48 @@ def unwrap_all_the_signals(model_output, batch, args):
 
 
     return model_signal_input_unwrapped, \
-            model_signal_output_unwrapped, \
-            model_position_input_unwrapped, \
-            model_position_discrete_input_unwrapped, \
-            model_position_output_unwrapped, \
-            eeg_signal_unwrapped, \
-            channel_id_unwrapped, \
-            t_coarse_unwrapped
+           model_signal_output_unwrapped, \
+           model_position_input_unwrapped, \
+           model_position_discrete_input_unwrapped, \
+           model_position_output_unwrapped, \
+           eeg_signal_unwrapped, \
+           channel_id_unwrapped, \
+           t_coarse_unwrapped
 
 
 
 def plot_unwrapped_signals(model_signal_input_unwrapped, 
-                            model_signal_output_unwrapped, 
-                            eeg_signal_unwrapped,
-                            fs,
-                            batch_cntr,
-                            batch_idx,
-                            dir_base,  
-                            fname_suptag,
-                            plot_eeg_signal_samples,
-                            mne_interpolated_signals=None):
+                           model_signal_output_unwrapped, 
+                           eeg_signal_unwrapped,
+                           fs,
+                           batch_cntr,
+                           batch_idx,
+                           dir_base,  
+                           fname_suptag,
+                           plot_eeg_signal_samples,
+                           mne_interpolated_signals=None):
 
-        """
-        Plot original and EEG reconstructed signals.
-        """
+    """
+    Plot original and EEG reconstructed signals.
+    """
 
-        for samp in range(len(model_signal_input_unwrapped)):
-            # print(f"sample {samp}")  # Disabled verbose output
+    for samp in range(len(model_signal_input_unwrapped)):
+        # print(f"sample {samp}")  # Disabled verbose output
 
-            # (1). Plot EEG time course for data and reconstruction on same axis (one ax per channel). One figure per sample.
-            if plot_eeg_signal_samples:
-                # 1a. Plot with non-dropout signal too.
-                plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
-                                        reconst=model_signal_output_unwrapped[samp],
-                                        eeg_signal=eeg_signal_unwrapped[samp],
-                                        # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
-                                        fs=fs,
-                                        batch=batch_cntr,
-                                        sample=samp,
-                                        idx=batch_idx[samp].item(),
-                                        fname_tag=""+fname_suptag,
-                                        dir_base=dir_base,
-                )
+        # (1). Plot EEG time course for data and reconstruction on same axis (one ax per channel). One figure per sample.
+        if plot_eeg_signal_samples:
+            # 1a. Plot with non-dropout signal too.
+            plot_compare_eeg_signal(data=model_signal_input_unwrapped[samp],
+                                    reconst=model_signal_output_unwrapped[samp],
+                                    eeg_signal=eeg_signal_unwrapped[samp],
+                                    # mne_reconstruction = mne_interpolated_signals[samp] if mne_interpolated_signals else None, # UNCOMMENT TO PLOT MNE INTERPOLATED SIGNALS
+                                    fs=fs,
+                                    batch=batch_cntr,
+                                    sample=samp,
+                                    idx=batch_idx[samp].item(),
+                                    fname_tag=""+fname_suptag,
+                                    dir_base=dir_base,
+            )
 
 #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -657,6 +670,7 @@ def evaluate(args: TrainArgs):
                         't_coarse': batch['t_coarse'],
                         'chan_dropout': batch['chan_dropout'],
                         'seq_lens': batch['seq_lens'],
+                        'max_tc': batch['max_tc'],
                         'idx': batch['ids'],
                         'dataset_id': batch['dataset_id'],
                         'filename': batch['filename'],           
@@ -712,7 +726,7 @@ def evaluate(args: TrainArgs):
             batch = {k: v.to(device, non_blocking=(device.type=="cuda")) for  k, v in batch.items()}
 
             tf = args.data.num_fine_time_pts
-            tc = args.data.seq_len // tf
+            tc = args.data.seq_len // tf # This would assume tc is same for all samples, but is overwritten below by max_tc for each sample.
 
             if args.data.use_coarse_time=="C":
                 tc = 1 # HARDCODE: USE THIS when chop_signals_only, using first tf seconds in signal.
@@ -777,6 +791,7 @@ def evaluate(args: TrainArgs):
                 eeg_sig_norm = args.data.data_norm # IMPORTANT: Reverse normalization (was divided by 10.0 in make_batch_iterator)
 
                 for i in range(len(model_signal_output_unwrapped)):
+                    tc = batch['max_tc'][i] # This take tc value for each sample from sample itself.
                     filename = batch_filenames[i]
                     sample_idx = batch_sample_indices[i]
                     metadata = batch_metadata_list[i]
@@ -827,15 +842,15 @@ def evaluate(args: TrainArgs):
 
                 # Plot signals
                 plot_unwrapped_signals(model_signal_input_unwrapped, 
-                                        model_signal_output_unwrapped, 
-                                        eeg_signal_unwrapped, 
-                                        fs,
-                                        batch_cntr,
-                                        batch_idx,
-                                        dir_base,
-                                        fname_suptag,  
-                                        plot_eeg_signal_samples,
-                                        mne_interpolated_signals=mne_interpolated_signals)
+                                       model_signal_output_unwrapped, 
+                                       eeg_signal_unwrapped, 
+                                       fs,
+                                       batch_cntr,
+                                       batch_idx,
+                                       dir_base,
+                                       fname_suptag,  
+                                       plot_eeg_signal_samples,
+                                       mne_interpolated_signals=mne_interpolated_signals)
 
 
             # # Here if you want to only do a certain number of batches (like for making a couple plots))
@@ -884,7 +899,6 @@ def main():
     cfig = OmegaConf.to_object(cfig)
 
     evaluate(cfig)
-
 
 if __name__ == "__main__":
     main()
