@@ -160,3 +160,17 @@ class Filter:
         if self.config.apply_average_reference:
             raw.set_eeg_reference('average', projection=False, verbose=False)
         return raw
+
+    # ── Epoch-compatible methods ────────────────────────────────────────
+
+    def resample_epochs(self, epochs: mne.Epochs) -> mne.Epochs:
+        """Resample epochs to target sampling rate."""
+        if epochs.info['sfreq'] != self.config.target_sfreq:
+            epochs.resample(self.config.target_sfreq, verbose=False)
+        return epochs
+
+    def apply_reference_epochs(self, epochs: mne.Epochs) -> mne.Epochs:
+        """Apply average reference to epochs."""
+        if self.config.apply_average_reference:
+            epochs.set_eeg_reference('average', projection=False, verbose=False)
+        return epochs

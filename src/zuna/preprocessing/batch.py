@@ -327,9 +327,64 @@ def _process_single_file(
 
 
 
+def _process_single_epoch_file(
+    file_path: Path,
+    idx: int,
+    file_counter: int,
+    output_path: Path,
+    processor: EEGProcessor,
+    config: ProcessingConfig,
+) -> Dict[str, Any]:
+    """Process a single epoch file (internal helper)."""
+    try:
+        epochs = mne.read_epochs(str(file_path), preload=True, verbose=False)
+
+        if epochs.get_montage() is None:
+            return {
+                'file': file_path.name, 'success': False,
+                'error': 'No montage in file', 'file_counter': file_counter
+            }
+
+        epochs_list, positions_list, metadata = processor.process_epochs(epochs)
+        metadata['original_filename'] = file_path.name
+
+        if len(epochs_list) == 0:
+            return {
+                'file': file_path.name, 'success': False,
+                'file_counter': file_counter, 'error': 'No epochs after processing'
+            }
+
+        pt_files = _add_epochs_to_cache(
+            epochs_list, positions_list, metadata,
+            file_counter, output_path, config
+        )
+
+        remaining = _flush_remaining_cache(output_path)
+        if remaining:
+            pt_files.append(remaining)
+
+        del epochs, epochs_list, positions_list
+        gc.collect()
+
+        return {
+            'file': file_path.name, 'success': True,
+            'file_counter': file_counter,
+            'total_epochs': metadata['n_epochs_saved'],
+            'pt_files_saved': len(pt_files),
+            'outputs': pt_files
+        }
+
+    except Exception as e:
+        return {
+            'file': file_path.name, 'success': False,
+            'file_counter': file_counter, 'error': str(e)
+        }
+
+
 def preprocessing(
     input_dir: str,
     output_dir: str,
+    input_type: str = "raw",
     apply_notch_filter: bool = False,
     apply_highpass_filter: bool = True,
     apply_average_reference: bool = True,
@@ -343,78 +398,59 @@ def preprocessing(
     n_jobs: int = 1,
 ) -> List[Dict[str, Any]]:
     """
-
     Preprocess all EEG files in a directory to .pt format.
 
-    Reads raw .fif files, applies filtering, resampling, epoching, and
-    normalization, then saves the result as .pt (PyTorch) files ready for
-    model inference.
+    Supports two input types:
+      - "raw" (default): Reads continuous raw files (.fif, .edf, etc.),
+        applies filtering, resampling, epoching, and normalization.
+      - "epochs": Reads pre-epoched files (*_epo.fif, *-epo.fif).
+        Highpass and notch filtering are disabled (unreliable on short epochs).
+        Uses actual epoch duration from files instead of config.epoch_duration.
 
     Input files must have a channel montage set with 3D positions.
     Files without montages will be skipped.
 
-    Note: Resampling (256 Hz), epoch duration (5 seconds), and batch size
-    (64 epochs per file) are fixed to match the pretrained model configuration
-    and should not be changed.
-
     Args:
-
-        input_dir: Directory containing input .fif files.
+        input_dir: Directory containing input EEG files.
         output_dir: Directory to save preprocessed .pt files.
-        apply_notch_filter: Apply automatic notch filter to remove line noise
-            at detected frequencies (default: False).
+        input_type: "raw" for continuous data (default), "epochs" for
+            pre-epoched data (*_epo.fif files). When "epochs", highpass
+            and notch filtering are automatically disabled.
+        apply_notch_filter: Apply automatic notch filter (default: False).
+            Ignored when input_type="epochs".
         apply_highpass_filter: Apply 0.5 Hz highpass filter (default: True).
+            Ignored when input_type="epochs".
         apply_average_reference: Apply average reference (default: True).
-        drop_bad_channels: Automatically detect and remove bad channels
-            (default: False). Not recommended for most use cases.
-        drop_bad_epochs: Automatically detect and remove bad epochs
-            (default: False). Not recommended for most use cases.
-        zero_out_artifacts: Zero out artifact samples instead of dropping
-            them (default: False).
-        target_channel_count: Controls channel upsampling/selection.
-            - None: keep original channels, no upsampling (default).
-            - int (e.g. 40): greedy selection to N channels from 10-05 montage.
-            - list of str (e.g. ['Cz', 'Pz']): add these specific channels
-              from the 10-05 montage via spherical spline interpolation.
-        bad_channels: List of channel names to zero out (e.g. ['Cz', 'Fz']).
-            These channels remain in the data but values are set to zero.
-            Useful for testing interpolation (default: None).
-        save_preprocessed_fif: Save a preprocessed .fif file alongside the .pt
-            output, useful for comparing input vs output (default: True).
-        preprocessed_fif_dir: Directory for preprocessed .fif files. If None,
-            defaults to output_dir/../1_fif_filter.
-        n_jobs: Number of parallel jobs (default: 1 for sequential).
-            Set to -1 to use all available CPUs.
+        drop_bad_channels: Detect and remove bad channels (default: False).
+        drop_bad_epochs: Detect and remove bad epochs (default: False).
+        zero_out_artifacts: Zero out artifact samples (default: False).
+        target_channel_count: Channel upsampling/selection (default: None).
+        bad_channels: List of channel names to zero out (default: None).
+        save_preprocessed_fif: Save preprocessed .fif (default: True).
+            Ignored when input_type="epochs".
+        preprocessed_fif_dir: Directory for preprocessed .fif files.
+        n_jobs: Number of parallel jobs (default: 1).
 
     Returns:
         List of dicts with processing results for each file.
 
     Examples:
         >>> from zuna import preprocessing
-        # (1). Specific Channel Upsampling:
-        >>> preprocessing(
-        ...     input_dir="/data/eeg/raw_fif",
-        ...     output_dir="/data/eeg/working/2_pt_input",
-        ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
-        ...     bad_channels=['Cz'],
-        ... )
+        # Raw input (default):
+        >>> preprocessing(input_dir="/data/eeg/raw_fif", output_dir="/data/eeg/pt")
 
-        # (2). Greedy Channel Upsampling:
+        # Epoch input:
         >>> preprocessing(
-        ...     input_dir="/data/eeg/raw_fif",
-        ...     output_dir="/data/eeg/working/2_pt_input",
-        ...     target_channel_count=40
+        ...     input_dir="/data/eeg/epoch_input",
+        ...     output_dir="/data/eeg/pt",
+        ...     input_type="epochs",
         ... )
-
-        # (2). Bad Channel Removal:
-        >>> preprocessing(
-        ...     input_dir="/data/eeg/raw_fif",
-        ...     output_dir="/data/eeg/working/2_pt_input",
-        ...     target_channel_count=['AF3', 'AF4', 'F1', 'F2'],
-        ...     bad_channels=['Cz'],
-        ... )
-
     """
+    if input_type not in ("raw", "epochs"):
+        raise ValueError(f"input_type must be 'raw' or 'epochs', got '{input_type}'")
+
+    is_epochs = input_type == "epochs"
+
     input_path = Path(input_dir)
     output_path = Path(output_dir)
 
@@ -424,36 +460,47 @@ def preprocessing(
     # Reset epoch cache at the start
     _reset_epoch_cache()
 
-    # Find all supported EEG files
-    supported_extensions = ['.fif', '.edf', '.bdf', '.vhdr', '.cnt', '.set', '.mff']
-    eeg_files = []
-    for ext in supported_extensions:
-        eeg_files.extend(input_path.glob(f'**/*{ext}'))
+    # Find input files
+    if is_epochs:
+        eeg_files = sorted(
+            list(input_path.glob('**/*_epo.fif')) +
+            list(input_path.glob('**/*-epo.fif'))
+        )
+        if len(eeg_files) == 0:
+            print(f"No epoch files (*_epo.fif, *-epo.fif) found in {input_dir}")
+            return []
+    else:
+        supported_extensions = ['.fif', '.edf', '.bdf', '.vhdr', '.cnt', '.set', '.mff']
+        eeg_files = []
+        for ext in supported_extensions:
+            eeg_files.extend(input_path.glob(f'**/*{ext}'))
+        if len(eeg_files) == 0:
+            print(f"No EEG files found in {input_dir}")
+            print(f"  Looking for: {', '.join(supported_extensions)}")
+            return []
 
-    if len(eeg_files) == 0:
-        print(f"No EEG files found in {input_dir}")
-        print(f"  Looking for: {', '.join(supported_extensions)}")
-        return []
-
-    # Create config from explicit parameters
+    # Create config — disable filters for epoch input
     config = ProcessingConfig(
-        apply_notch_filter=apply_notch_filter,
-        apply_highpass_filter=apply_highpass_filter,
+        apply_notch_filter=False if is_epochs else apply_notch_filter,
+        apply_highpass_filter=False if is_epochs else apply_highpass_filter,
         apply_average_reference=apply_average_reference,
         drop_bad_channels=drop_bad_channels,
         drop_bad_epochs=drop_bad_epochs,
         zero_out_artifacts=zero_out_artifacts,
         target_channel_count=target_channel_count,
         bad_channels=bad_channels,
-        save_preprocessed_fif=save_preprocessed_fif,
+        save_preprocessed_fif=False if is_epochs else save_preprocessed_fif,
         preprocessed_fif_dir=preprocessed_fif_dir,
     )
 
-    # Create processor (one per job if parallel)
+    # Create processor
     processor = EEGProcessor(config)
 
+    # Pick the right file processor
+    process_fn = _process_single_epoch_file if is_epochs else _process_single_file
+
     # Prepare file processing tasks
-    file_counter = 0  # Running counter for dataset names, starts at 0
+    file_counter = 0
     tasks = []
     for idx, file_path in enumerate(eeg_files, 1):
         tasks.append((file_path, idx, file_counter))
@@ -461,19 +508,17 @@ def preprocessing(
 
     # Process files (parallel or sequential)
     if n_jobs == 1:
-        # Sequential processing with progress feedback
         results = []
         for file_path, idx, fc in tasks:
-            result = _process_single_file(file_path, idx, fc, output_path, processor, config)
+            result = process_fn(file_path, idx, fc, output_path, processor, config)
 
             if not result['success']:
                 print(f"  Skipped: {result.get('error', 'Unknown error')}")
 
             results.append(result)
     else:
-        # Parallel processing
         results = Parallel(n_jobs=n_jobs, backend='loky', verbose=10)(
-            delayed(_process_single_file)(
+            delayed(process_fn)(
                 file_path, idx, fc, output_path, processor, config
             )
             for file_path, idx, fc in tasks

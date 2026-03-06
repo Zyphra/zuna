@@ -68,6 +68,57 @@ class Normalizer:
 
         return raw, norm_params
 
+    def normalize_epoch_array(self, epoch_data: np.ndarray,
+                              bad_channels: set = None,
+                              channel_names: list = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Apply global z-score normalization to an epoch data array.
+
+        This replaces normalize_raw() for the epochs input path, computing
+        global stats from good channels across all epochs.
+
+        Parameters
+        ----------
+        epoch_data : np.ndarray
+            Epoch data (n_epochs, n_channels, n_times)
+        bad_channels : set, optional
+            Channel names to exclude from stats computation
+        channel_names : list, optional
+            Channel names (required if bad_channels is provided)
+
+        Returns
+        -------
+        epoch_data_normalized : np.ndarray
+            Normalized epoch data
+        norm_params : dict
+            Normalization parameters for reversibility
+        """
+        if bad_channels and channel_names:
+            good_mask = np.array([ch not in bad_channels for ch in channel_names])
+            good_data = epoch_data[:, good_mask, :]
+        else:
+            good_data = epoch_data
+
+        global_mean = float(good_data.mean())
+        global_std = float(good_data.std())
+
+        if global_std == 0:
+            raise ValueError("Global std is zero; data appears constant")
+
+        epoch_data_normalized = (epoch_data - global_mean) / global_std
+
+        norm_params = {
+            'type': 'global_zscore',
+            'mean': global_mean,
+            'std': global_std,
+            'n_channels_used': good_data.shape[1],
+        }
+
+        if self.save_params:
+            self.normalization_history.append(norm_params)
+
+        return epoch_data_normalized, norm_params
+
     def normalize_epochs(self, epoch_data: np.ndarray, zero_mask: np.ndarray = None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         Apply final z-score normalization to cleaned epoch data.

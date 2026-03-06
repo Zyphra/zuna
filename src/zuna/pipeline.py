@@ -122,6 +122,9 @@ def pt_to_fif(
         ... )
     """
     from .preprocessing.io import load_pt, pt_to_raw
+    from .preprocessing.normalizer import Normalizer
+    import torch
+    import numpy as np
 
     # Create output directory
     output_path = Path(output_dir)
@@ -154,18 +157,81 @@ def pt_to_fif(
         try:
             pt_file_group = sorted(pt_file_group)
 
-            # Convert all PT files to Raw objects and concatenate
-            raw_objects = [pt_to_raw(str(f)) for f in pt_file_group]
-            if len(raw_objects) > 1:
-                combined_raw = mne.concatenate_raws(raw_objects, preload=True)
-            else:
-                combined_raw = raw_objects[0]
+            # Check input_type from first file's metadata
+            first_pt = load_pt(str(pt_file_group[0]))
+            first_metadata = first_pt.get('metadata', {})
+            is_epochs_input = first_metadata.get('input_type') == 'epochs'
 
-            # Save as FIF
-            base_name = original_filename.replace('.fif', '').replace('.FIF', '')
-            fif_path = output_path / (base_name + ".fif")
-            combined_raw.save(str(fif_path), overwrite=True)
-            successful += 1
+            if is_epochs_input:
+                # Epoch path: reconstruct as mne.Epochs, save as *_epo.fif
+                all_epoch_data = []
+                channel_names = first_metadata.get('channel_names', [])
+                sfreq = first_metadata.get('resampled_sfreq', 256.0)
+                positions = None
+
+                for pt_file in pt_file_group:
+                    pt_data = load_pt(str(pt_file))
+                    metadata = pt_data.get('metadata', {})
+
+                    for tensor in pt_data['data']:
+                        if tensor is None:
+                            continue
+                        epoch = tensor.numpy() if isinstance(tensor, torch.Tensor) else tensor
+                        all_epoch_data.append(epoch)
+
+                    if positions is None and len(pt_data['channel_positions']) > 0:
+                        pos = pt_data['channel_positions'][0]
+                        positions = pos.numpy() if isinstance(pos, torch.Tensor) else pos
+
+                if len(all_epoch_data) == 0:
+                    raise ValueError("No valid epochs found")
+
+                # Denormalize
+                epoch_array = np.stack(all_epoch_data)
+                if 'reversibility' in first_metadata:
+                    epoch_array = Normalizer.denormalize(epoch_array, first_metadata['reversibility'])
+
+                # Create MNE Epochs
+                n_channels = epoch_array.shape[1]
+                if len(channel_names) > n_channels:
+                    channel_names = channel_names[:n_channels]
+                elif len(channel_names) < n_channels:
+                    channel_names = channel_names + [f'Ch{i+1}' for i in range(len(channel_names), n_channels)]
+
+                info = mne.create_info(ch_names=channel_names, sfreq=sfreq, ch_types='eeg')
+                n_epochs = epoch_array.shape[0]
+                n_samples = epoch_array.shape[2]
+                events = np.column_stack([
+                    np.arange(n_epochs) * n_samples,  # sample onset
+                    np.zeros(n_epochs, dtype=int),     # previous event
+                    np.ones(n_epochs, dtype=int),       # event id
+                ])
+                epochs_obj = mne.EpochsArray(epoch_array, info, events=events, verbose=False)
+
+                # Set montage from positions
+                if positions is not None and positions.shape[0] == len(channel_names):
+                    ch_pos = {ch: pos for ch, pos in zip(channel_names, positions)}
+                    montage = mne.channels.make_dig_montage(ch_pos=ch_pos, coord_frame='head')
+                    epochs_obj.set_montage(montage, verbose=False)
+
+                # Save as epoch FIF
+                base_name = original_filename.replace('_epo.fif', '').replace('-epo.fif', '').replace('.fif', '')
+                epo_path = output_path / (base_name + "_epo.fif")
+                epochs_obj.save(str(epo_path), overwrite=True, verbose=False)
+                successful += 1
+
+            else:
+                # Raw path: original behavior — concatenate into continuous Raw
+                raw_objects = [pt_to_raw(str(f)) for f in pt_file_group]
+                if len(raw_objects) > 1:
+                    combined_raw = mne.concatenate_raws(raw_objects, preload=True)
+                else:
+                    combined_raw = raw_objects[0]
+
+                base_name = original_filename.replace('.fif', '').replace('.FIF', '')
+                fif_path = output_path / (base_name + ".fif")
+                combined_raw.save(str(fif_path), overwrite=True)
+                successful += 1
 
         except Exception as e:
             failed += 1
