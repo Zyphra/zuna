@@ -28,7 +28,7 @@ from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 
 TUTORIAL_DIR = Path(__file__).parent.resolve()
 # INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")    ### original: raw .fif input
-INPUT_DIR = "/data/datasets/bci/zuna_test_cases/epo_3s"
+INPUT_DIR = "/data/datasets/bci/zuna_test_cases/epo_9s"
 WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")        ### replace with your path
 
 # Derived paths (pipeline directory structure)
@@ -71,7 +71,7 @@ DATA_NORM = 10.0                # Data normalization factor denominator to resca
 DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
 DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process - Default is 50
 
-PLOT_EEG_SIGNAL_SAMPLES = False  # Plot raw eeg for data and model reconstruction for single samples inside inference code.
+PLOT_EEG_SIGNAL_SAMPLES = True  # Plot raw eeg for data and model reconstruction for single samples inside inference code.
                                 # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
 
 # =============================================================================
