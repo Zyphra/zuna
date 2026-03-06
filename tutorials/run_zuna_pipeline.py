@@ -27,9 +27,8 @@ from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 # =============================================================================
 
 TUTORIAL_DIR = Path(__file__).parent.resolve()
-# INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")    ### original: raw .fif input
-INPUT_DIR = "/data/datasets/bci/zuna_test_cases/epo_9s"
-WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")        ### replace with your path
+INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")  ### original: raw .fif input
+WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")    ### replace with your path
 
 # Derived paths (pipeline directory structure)
 WORKING_PATH = Path(WORKING_DIR)
@@ -44,9 +43,9 @@ INPUT_TYPE = "epochs"  # "raw" or "epochs"
 # PREPROCESSING OPTIONS
 # =============================================================================
 
-APPLY_NOTCH_FILTER = False      # Automatic notch filter for line noise
-APPLY_HIGHPASS_FILTER = True    # 0.5 Hz highpass filter
-APPLY_AVERAGE_REFERENCE = True  # Average reference
+APPLY_NOTCH_FILTER = True          # Automatic notch filter for line noise
+APPLY_HIGHPASS_FILTER = True       # 0.5 Hz highpass filter
+APPLY_AVERAGE_REFERENCE = True     # Average reference
 
 # Channel options
 # TARGET_CHANNEL_COUNT = None   # No upsampling (keep original channels)
