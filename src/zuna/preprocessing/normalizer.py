@@ -206,10 +206,11 @@ class Normalizer:
                 params['final_stds'] = step1['stds']
             else:
                 # Global normalization (original raw path)
+                # step0 is scalar (from normalize_raw), step1 is per-epoch-channel (from normalize_epochs)
                 params['global_mean'] = step0['mean']
                 params['global_std'] = step0['std']
-                params['final_mean'] = step1['mean']
-                params['final_std'] = step1['std']
+                params['final_means'] = step1['means']
+                params['final_stds'] = step1['stds']
 
         return params
 
@@ -288,7 +289,26 @@ class Normalizer:
                         data_reconstructed[i] = data_reconstructed[i] * global_stds[i] + global_means[i]
         else:
             # Global denormalization (original raw path)
-            if 'final_mean' in norm_params and 'final_std' in norm_params:
+            # final step may be per-epoch-channel (from normalize_epochs on raw path)
+            if 'final_means' in norm_params and 'final_stds' in norm_params:
+                # raw path now stores per-epoch-channel final params
+                final_means = np.array(norm_params['final_means'])
+                final_stds = np.array(norm_params['final_stds'])
+                if final_means.ndim == 2:
+                    n_ep = min(final_means.shape[0], data_reconstructed.shape[0])
+                    n_ch_norm = final_means.shape[1]
+                    n_ch_data = data_reconstructed.shape[1]
+                    n_ch = min(n_ch_norm, n_ch_data)
+                    data_reconstructed[:n_ep, :n_ch, :] = (
+                        data_reconstructed[:n_ep, :n_ch, :] * final_stds[:n_ep, :n_ch, np.newaxis]
+                        + final_means[:n_ep, :n_ch, np.newaxis]
+                    )
+                    if n_ch_data > n_ch_norm:
+                        avg_std = final_stds[:n_ep, :n_ch].mean(axis=1, keepdims=True)
+                        data_reconstructed[:n_ep, n_ch_norm:, :] = (
+                            data_reconstructed[:n_ep, n_ch_norm:, :] * avg_std[:, :, np.newaxis]
+                        )
+            elif 'final_mean' in norm_params and 'final_std' in norm_params:
                 data_reconstructed = data_reconstructed * norm_params['final_std'] + norm_params['final_mean']
 
             if 'global_mean' in norm_params and 'global_std' in norm_params:

@@ -38,3 +38,7 @@ figures/
 wandb
 
 tutorials/data/working/
+
+*.pt
+*.png
+*.npy
