@@ -44,7 +44,7 @@ dependencies = [
 
 # Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)
 [tool.setuptools.package-dir]
-"" = "src"
+"" = "./"
 
 # Include the config in pip site-packages
 [tool.setuptools.package-data]
