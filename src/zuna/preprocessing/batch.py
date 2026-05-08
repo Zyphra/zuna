@@ -18,19 +18,26 @@ _epoch_cache = {
     'positions_list': [],
     'channel_names': None,
     'metadata': None,
-    'file_counter': 0,
+    'file_counter': None,
     'pt_file_counter': 0  # Resets for each new source file
 }
 
 
-def _reset_epoch_cache():
-    """Reset the global epoch cache."""
+def _clear_epoch_cache_file_state(reset_file_counter: bool = False) -> None:
+    """Clear cached epochs and any per-source-file metadata."""
     global _epoch_cache
     _epoch_cache['data_list'].clear()
     _epoch_cache['positions_list'].clear()
     _epoch_cache['channel_names'] = None
     _epoch_cache['metadata'] = None
     _epoch_cache['pt_file_counter'] = 0
+    if reset_file_counter:
+        _epoch_cache['file_counter'] = None
+
+
+def _reset_epoch_cache():
+    """Reset the global epoch cache."""
+    _clear_epoch_cache_file_state(reset_file_counter=True)
     gc.collect()
 
 
@@ -82,6 +89,17 @@ def _add_epochs_to_cache(
 
     # Check if we're starting a new source file
     if _epoch_cache['file_counter'] != file_counter:
+        if _epoch_cache['data_list'] or _epoch_cache['positions_list']:
+            raise RuntimeError(
+                "Epoch cache still contains unsaved epochs when switching source files. "
+                "Flush the current file before processing the next one."
+            )
+        if _epoch_cache['metadata'] is not None or _epoch_cache['channel_names'] is not None:
+            raise RuntimeError(
+                "Epoch cache retained stale per-file metadata when switching source files. "
+                "This indicates the previous file did not fully clear cache state."
+            )
+
         # Reset PT file counter for new source file
         _epoch_cache['pt_file_counter'] = 0
         _epoch_cache['file_counter'] = file_counter
@@ -90,6 +108,15 @@ def _add_epochs_to_cache(
     if _epoch_cache['metadata'] is None:
         _epoch_cache['metadata'] = metadata.copy()
         _epoch_cache['channel_names'] = metadata['channel_names']
+    else:
+        cached_original_filename = _epoch_cache['metadata'].get('original_filename')
+        incoming_original_filename = metadata.get('original_filename')
+        if cached_original_filename != incoming_original_filename:
+            raise RuntimeError(
+                "Epoch cache metadata does not match the current source file. "
+                f"Cached original_filename={cached_original_filename!r}, "
+                f"incoming original_filename={incoming_original_filename!r}."
+            )
 
     # Add epochs to cache
     _epoch_cache['data_list'].extend(epochs_list)
@@ -153,14 +180,15 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     global _epoch_cache
 
     if len(_epoch_cache['data_list']) == 0:
+        _clear_epoch_cache_file_state(reset_file_counter=True)
         return None
 
-    if _epoch_cache['metadata'] is None:
-        return None
+    if _epoch_cache['metadata'] is None or _epoch_cache['channel_names'] is None:
+        raise RuntimeError("Epoch cache has buffered epochs without metadata/channel_names.")
 
     # Get remaining epochs and save metadata BEFORE clearing cache
-    epochs_for_pt = _epoch_cache['data_list']
-    positions_for_pt = _epoch_cache['positions_list']
+    epochs_for_pt = list(_epoch_cache['data_list'])
+    positions_for_pt = list(_epoch_cache['positions_list'])
     n_remaining = len(epochs_for_pt)
 
     # Increment PT file counter FIRST (before saving its value)
@@ -173,10 +201,7 @@ def _flush_remaining_cache(output_path: Path) -> Optional[str]:
     saved_pt_file_counter = _epoch_cache['pt_file_counter']
 
     # Clear cache
-    _epoch_cache['data_list'] = []
-    _epoch_cache['positions_list'] = []
-    _epoch_cache['metadata'] = None  # Reset metadata to prevent carrying over to next file
-    _epoch_cache['channel_names'] = None  # Reset channel names too
+    _clear_epoch_cache_file_state(reset_file_counter=True)
 
     # Generate filename using saved values
     dataset_name = "ds000000"  # Always use ds000000 as base
