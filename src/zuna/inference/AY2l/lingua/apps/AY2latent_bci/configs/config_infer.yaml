@@ -26,13 +26,44 @@ model:
 
 
 data:
-  data_dir: ./tutorials/data/working/2_pt_input/
+
+
+
+  # (CW) comment out.
+  # data_dir: ./tutorials/data/working/2_pt_input/
   export_dir: ./tutorials/data/working/3_pt_output/   # Where to save output .pt files after processing.
-  target_packed_seqlen: 100000            # Target seqlen for packed samples. This is essentially batch size.
+  # glob_filter: ["**/*.pt"] # this filters the dataset to only contain files with this string in it.
+
+  # (CW) add this
+  use_b2: false # If true, use Backblaze B2 for dataset loading, otherwise use local filesystem.
+  use_v3: true # If true, use EEGDataset_v3 for dataset loading, with memaps and quality matrix
+  filter_version: # "v2_notch" # options: {"v1_hpf",  "v2_notch",  "v3_bandpass"}
+    - "v2_notch"
+    - "v3_bandpass"
+  min_quality_any: 0.1 # Default is 0.1
+  min_quality_mean: 0.3 # Default is 0.3
+  sample_duration_str: "30_seconds" # {"5_seconds", "10_seconds", "30_seconds", "5_sec_wt_short_third", "5_sec_wt_short_half", "10_to_30_sec_half", "10_to_30_sec_third", "30_seconds_fifths"}
+  do_avg_ref: true # If true, do average reference before data normalization.
+  z_score_type: "across_channel" # {"across_channel", "across_sample", "none"}
+  data_dir: /data/groups/bci/datasets/v7_evalB # (CW) Not in podman env - was /workspace/bci/data/v7_evalB
+  glob_filter: 
+    - "*.json"
+    #
+    # - "ds*_f03000_*.json"
+    # - "tuh*_f00600_*.json"
+
+  mmap_sample_start: null #4096 #1024 # If not None, only sample from between this and stop in the mmap.
+  mmap_sample_stop: null #42496 #5376 # If not None, only sample from between this and start in the mmap.
+  skip_preepoched_data: false # If true, skip pre-epoched data.
+
+
+
+
+  target_packed_seqlen: 10000 #100000            # Target seqlen for packed samples. This is essentially batch size.
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
 
-  glob_filter: ["**/*.pt"] # this filters the dataset to only contain files with this string in it.
+  
   chan_num_filter: null # null or integer number of channels we want in each sample (another filter on input data)
   sample_rate: 256
   seq_len: 1280 # NOT REALLY USED ANYMORE. number of timepoints in each sample (fixed 5 sec samples at 256 Hz)

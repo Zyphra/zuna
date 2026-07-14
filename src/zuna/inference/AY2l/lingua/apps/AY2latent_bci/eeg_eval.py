@@ -24,6 +24,9 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 from copy import deepcopy
 import gc
+import json
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file as safe_load
 import logging
 import os
 import sys
@@ -196,7 +199,7 @@ class TrainArgs:
     # Inference / diffusion sampling (supplied by the pipeline at eval time)
     diffusion_cfg: float = 1.0
     diffusion_sample_steps: int = 50
-    plot_eeg_signal_samples: bool = False
+    plot_eeg_signal_samples: bool = True #False
     inference_figures_dir: str = "./inference_figures"
 
 
@@ -1401,14 +1404,6 @@ def evaluate(args: TrainArgs):
 
 
     with ExitStack() as context_stack:
-        validate_train_args(
-            args,
-        )
-
-        if get_is_master():
-            os.makedirs(args.dump_dir, exist_ok=True)
-            dump_config(args, Path(args.dump_dir) / "config.yaml")
-        init_logger(Path(args.dump_dir) / "train.log")
         init_signal_handler(set_preemption_flag)  # For handling preemption signals.
         setup_env(args.env)
 
@@ -1434,75 +1429,106 @@ def evaluate(args: TrainArgs):
         # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
         
         if LOAD_THE_MODEL:
-            with torch.device("meta"):
-                model = EncoderDecoder(args.model)
+            if True:
+                # ===== Load model + weights from HuggingFace (Zyphra/ZUNA) =====
+                # Toggle the `if True` to `if False` to fall through to the local
+                # checkpoint / ema.pt loader in the else branch below.
+                device = torch.cuda.current_device()
 
-            logger.info("Model is built !")
+                def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
+                    config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
+                    with open(config_path, "r") as f:
+                        cfig = json.load(f)
+                    return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
 
-            model_param_count = get_num_params(model)
+                REPO_ID = "Zyphra/ZUNA1.1"
+                WEIGHTS = "model-00001-of-00001.safetensors"
+                CONFIG  = "config.json"
 
+                model_args = load_model_args_from_hf(REPO_ID, CONFIG)
+                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+                sd_st_raw = safe_load(weights_path, device="cpu")
 
-            # (CW) - DO NOT NEED TO SHARD MODEL FOR INFERENCE
+                # Normalize: strip leading "model." if present
+                sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
 
-            model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
-            model.encoder = torch.compile(model.encoder)
+                model = EncoderDecoder(model_args).to(device)
+                sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
+                model.load_state_dict(sd_st_on_dev, strict=True)
+                model.eval()
 
-            # Once we shard the model on different gpus we can actually initialize the model
-            # First we create empty tensors of the correct shapes
-            model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
-            # Then we init the model. Please make sure this function initializes *ALL* parameters
-            # and buffers, otherwise you will have random values in the unitialized tensors
-            # which will silently fail (give nan gradients for example)
-
-
-
-            ##(CW. Replace below with above)
-            if args.checkpoint.init_ckpt_path:
-                with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                    torch.manual_seed(args.model.seed)
-                    model.init_weights()
-                check_model_value_range(model, range=10.0, std=1.0)
-                logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-                load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-                check_model_value_range(model, range=10.0, std=1.0)
+                model.sample = torch.compile(model.sample)
+                model.encoder = torch.compile(model.encoder)
             else:
-                with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
-                    torch.manual_seed(args.model.seed)
-                    model.init_weights()
-            check_model_value_range(model, range=10.0, std=1.0)
+                with torch.device("meta"):
+                    model = EncoderDecoder(args.model)
 
-            # log model size
-            logger.info(f"Model size: {model_param_count:,} total parameters")
+                logger.info("Model is built !")
 
-            gpu_memory_monitor = GPUMemoryMonitor("cuda")
-            logger.info(
-                f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-            )
-            logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+                model_param_count = get_num_params(model)
 
 
-            ## DONT THINK I NEED THIS. (CW)
-            # build optimizer after apply parallelisms to the model
-            optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
-            
-            train_state = TrainState(
-                step=0,
-                acc_step=0,
-                scheduler=scheduler,
-            )
-            
-            checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
-            checkpoint.load(model, optimizer, train_state, world_mesh)
-            if getattr(args.optim, "use_ema", False):
-                from apps.AY2latent_bci.ema import EMA
-                _ema = EMA(model)                                  # scaffold; shadow = current weights
-                if _ema.maybe_load(args.checkpoint.init_ckpt_path):  # ema.pt sits IN the step dir
-                    _ema.copy_to(model)                            # overwrite weights with EMA (throwaway eval -> safe)
-                    logger.info(f"[EMA] applied {args.checkpoint.init_ckpt_path}/ema.pt to eval model")
+                # (CW) - DO NOT NEED TO SHARD MODEL FOR INFERENCE
+
+                model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+                model.encoder = torch.compile(model.encoder)
+
+                # Once we shard the model on different gpus we can actually initialize the model
+                # First we create empty tensors of the correct shapes
+                model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
+                # Then we init the model. Please make sure this function initializes *ALL* parameters
+                # and buffers, otherwise you will have random values in the unitialized tensors
+                # which will silently fail (give nan gradients for example)
+
+
+
+                ##(CW. Replace below with above)
+                if args.checkpoint.init_ckpt_path:
+                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                        torch.manual_seed(args.model.seed)
+                        model.init_weights()
+                    check_model_value_range(model, range=10.0, std=1.0)
+                    logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
+                    load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+                    logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
+                    check_model_value_range(model, range=10.0, std=1.0)
                 else:
-                    logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
+                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                        torch.manual_seed(args.model.seed)
+                        model.init_weights()
+                check_model_value_range(model, range=10.0, std=1.0)
+
+                # log model size
+                logger.info(f"Model size: {model_param_count:,} total parameters")
+
+                gpu_memory_monitor = GPUMemoryMonitor("cuda")
+                logger.info(
+                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
+                )
+                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+
+
+                ## DONT THINK I NEED THIS. (CW)
+                # build optimizer after apply parallelisms to the model
+                optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
+
+                train_state = TrainState(
+                    step=0,
+                    acc_step=0,
+                    scheduler=scheduler,
+                )
+
+                checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
+                checkpoint.load(model, optimizer, train_state, world_mesh)
+                if getattr(args.optim, "use_ema", False):
+                    from apps.AY2latent_bci.ema import EMA
+                    _ema = EMA(model)                                  # scaffold; shadow = current weights
+                    if _ema.maybe_load(args.checkpoint.init_ckpt_path):  # ema.pt sits IN the step dir
+                        _ema.copy_to(model)                            # overwrite weights with EMA (throwaway eval -> safe)
+                        logger.info(f"[EMA] applied {args.checkpoint.init_ckpt_path}/ema.pt to eval model")
+                    else:
+                        logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
 
 
             # Either load from latest checkpoint or start from scratch
@@ -1638,9 +1664,11 @@ def evaluate(args: TrainArgs):
         sample_steps = args.diffusion_sample_steps    # for diffusion process in .sample
         cfg = args.diffusion_cfg            # for diffusion process in .sample (1.0 = no cfg)
 
-        dir_base = os.path.join(args.inference_figures_dir, '/'.join(args.checkpoint.init_ckpt_path.split('/')[-3:]), f'cfg{cfg}')
-        print(f"Saving output figures to: {dir_base=}")
-        os.makedirs(dir_base, exist_ok=True)
+
+        dir_base = args.inference_figures_dir 
+        if args.plot_eeg_signal_samples:
+            os.makedirs(dir_base, exist_ok=True)
+
 
         # Loop through batches of data from dataloader and gather up mean & std of data
         print_batch_stats = False

@@ -275,7 +275,7 @@ class BCIDatasetArgs:
     seq_len: int = 1280 # 2560 # Passing in from config now.
     num_fine_time_pts: int = 128
     use_coarse_time: str = "B" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals or chop_signals_only
-    cat_chan_xyz_and_eeg: bool = True
+    cat_chan_xyz_and_eeg: bool = False #True - havent used in a while. Default to False
     dont_noise_chan_xyz: bool = False # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
     randomly_permute_sequence: bool = False
 
