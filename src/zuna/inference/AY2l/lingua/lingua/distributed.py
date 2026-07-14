@@ -92,7 +92,7 @@ class EnvironmentArgs:
     TORCH_NCCL_ASYNC_ERROR_HANDLING: str = "1"
 
 
-def get_device_mesh(distributed_args: DistributedArgs, device: torch.device):
+def get_device_mesh(distributed_args: DistributedArgs):
     tp_size = distributed_args.tp_size
     dp_replicate = distributed_args.dp_replicate
     dp_shard = distributed_args.dp_shard
@@ -118,9 +118,7 @@ def get_device_mesh(distributed_args: DistributedArgs, device: torch.device):
     dims = tuple(dims)
     names = tuple(names)
 
-    # MPS does not support device meshes; use CPU for distributed coordination
-    mesh_device_type = "cpu" if device.type == "mps" else device.type
-    return init_device_mesh(mesh_device_type, mesh_shape=dims, mesh_dim_names=names)
+    return init_device_mesh("cuda", mesh_shape=dims, mesh_dim_names=names)
 
 
 def dist_max(x: Union[int, float], mesh: DeviceMesh = None):
@@ -238,7 +236,7 @@ def setup_env(env_args):
             logger.warning(f"WARNING: Setting {name} to {value}")
 
 
-def setup_torch_distributed(dist_args, device: torch.device):
+def setup_torch_distributed(dist_args):
     """
     Handle single and multi-GPU / multi-node / SLURM jobs.
     Initialize the following variables:
@@ -257,32 +255,31 @@ def setup_torch_distributed(dist_args, device: torch.device):
     os.environ["MASTER_PORT"] = str(
         get_master_port(job_id=int(os.environ.get("SLURM_JOB_ID", -1)))
     )
-    os.environ["MASTER_PORT"] = str(29481) # (CW) - to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
+    # os.environ["MASTER_PORT"] = str(29495) # (CW) - to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
 
     if get_is_torch_run():
         logger.info(f"Run launched with torchrun, local rank: {local_rank}")
     elif get_is_slurm_job():
         logger.info(f"Run launched with slurm, local rank: {local_rank}")
     else:
-        # print("Single GPU job")
+        print("Single GPU job")
         logger.info("Single GPU job")
 
     logger.info(f"ENV: {os.environ}")
 
     # set GPU device
     assert 0 <= local_rank < 8
-    if device.type == "cuda":
-        if dist_args.matmul_allow_tf32:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            logger.warning(
-                f"WARNING: Setting torch.backends.matmul.allow_tf32 to True. This is faster but less accurate."
-            )
-        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = (
-            dist_args.allow_bf16_reduced_precision_reduction
+    if dist_args.matmul_allow_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        logger.warning(
+            f"WARNING: Setting torch.backends.matmul.allow_tf32 to True. This is faster but less accurate."
         )
-        if torch.cuda.device_count() > 1:
-            torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(init_method="env://", backend="nccl" if device.type == "cuda" else "gloo")
+    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = (
+        dist_args.allow_bf16_reduced_precision_reduction
+    )
+    if torch.cuda.device_count() > 1:
+        torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(init_method="env://", backend="nccl")
     torch.autograd.set_detect_anomaly(dist_args.detect_anomaly)
 
 
@@ -422,6 +419,9 @@ def parallelize_model(
 
         tp_parallelize(model, device_mesh["tp"], model_args, distributed_args)
 
+    # print(f"Inside parallelize_model: Distributed args: {distributed_args}")
+    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+
     param_dtype = dict(fp32=torch.float32, fp16=torch.float16, bf16=torch.bfloat16)[
         distributed_args.model_dtype
     ]
@@ -478,6 +478,7 @@ def parallelize_model(
         model = fully_shard(model, **fsdp_config, reshard_after_forward=True)
     else:
         raise ValueError(f"Invalid fsdp_type: {distributed_args.fsdp_type}")
+
 
     if distributed_args.selective_activation_checkpointing:
         model = checkpoint_wrapper(

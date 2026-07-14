@@ -92,6 +92,11 @@ def consolidate_checkpoints(ckpt_dir: str):
     return consolidate_path
 
 def load_from_checkpoint(ckpt_dir: str, model: nn.Module, optimizer: Optional[torch.optim.Optimizer] = None, model_key: str = "model", optim_key: str = "optim"):
+    """
+    Not using anymore. Using CheckpointManager.load function instead.
+    Meh, actually eeg_eval.py is using this.
+    """
+    # pass
     if not (Path(ckpt_dir) / '.metadata').exists():
         raise ValueError(f"Please convert the checkpoint distcp format using `torch.distributed.checkpoint.format_utils.torch_save_to_dcp` before loading it")
     
@@ -156,6 +161,8 @@ class CheckpointManager:
 
         if dist.get_rank() == 0:
             for folder in folder_to_remove:
+                if not folder.exists(): # In case checkpoint folder was already removed.
+                    continue
                 for file in folder.iterdir():
                     if file.is_file():
                         file.unlink()
@@ -227,25 +234,22 @@ class CheckpointManager:
         
         # dcp.load(state_dict, checkpoint_id=ckpt_dir, planner=dcp.default_planner.DefaultLoadPlanner(allow_partial_load=True))
 
-        ## (CW) - was this.
-        if False:
-
-            if self.load_optimizer_state:
-                model_sd, optim_sd = get_state_dict(model, optimizer)
-            else:
-                print(f"Not loading optimizer state from checkpoint!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                model_sd = get_model_state_dict(model)
-                optim_sd = optimizer.state_dict()
-
-                if False:
-                    print(f" INSIDE CHECKPOINT MANAGER GET_STATE_DICT FUNCTION")
-                    print(f" ***** optim_sd: {optim_sd.keys()}")
-                    for key in optim_sd.keys():
-                        print(f"***** key: {key}")
-                        print(f"***** value: {optim_sd[key]}")
-                    # die
-
-            return {"model": model_sd, "optim": optim_sd}
+        ## (CW) - was this. But replaced with load_from_checkpoint function.
+        # if False:
+        #     if self.load_optimizer_state:
+        #         model_sd, optim_sd = get_state_dict(model, optimizer)
+        #     else:
+        #         print(f"Not loading optimizer state from checkpoint!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        #         model_sd = get_model_state_dict(model)
+        #         optim_sd = optimizer.state_dict()
+        #         if False:
+        #             print(f" INSIDE CHECKPOINT MANAGER GET_STATE_DICT FUNCTION")
+        #             print(f" ***** optim_sd: {optim_sd.keys()}")
+        #             for key in optim_sd.keys():
+        #                 print(f"***** key: {key}")
+        #                 print(f"***** value: {optim_sd[key]}")
+        #             # die
+        #     return {"model": model_sd, "optim": optim_sd}
 
     def save(
         self,
@@ -265,7 +269,12 @@ class CheckpointManager:
             dist.barrier()
 
         logger.info("Saving...")
-        state_dict = self.get_state_dict(model, optimizer)
+
+        # state_dict = self.get_state_dict(model, optimizer) # Was a BUG: wrong because didnt save optimizer states when load_optimizer_state=False.
+        state_dict = {} # (CW) - correct way to save model + optimizer states, regardless of load_optimizer_state=True/False.
+        state_dict["model"], state_dict["optim"] = get_state_dict(model, optimizer)
+
+
         dcp.save(state_dict, checkpoint_id=curr_save_dir)
         logger.info("State dict saved!")
 

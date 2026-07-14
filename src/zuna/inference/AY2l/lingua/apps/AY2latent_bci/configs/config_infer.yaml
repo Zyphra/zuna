@@ -14,15 +14,15 @@ model:
   encoder_sliding_window: 65536 # big enough to not be used
   sliding_window: 65536 
   xattn_sliding_window: 65536 
-  max_seqlen: 50                 # used with ROPE - tc and discretized channel positions.
+  max_seqlen: 256                 # Max value for discretized {x,y,z} or tc - used with 4D-ROPE
 
-  adaptive_loss_weighting: true  
+  adaptive_loss_weighting: false  
   num_fine_time_pts: 32 
   rope_dim: 4 # 0 = NoPE, 1 = 1D-RoPE in seq-dim, 4 = 4D-RoPE in {x,y,z,tc}.
   rope_theta: 10000.0
   tok_idx_type: "{x,y,z,tc}"  # null, "t_coarse", "chan_id", "stack_arange_seqlen", "{x,y,z,tc}" 
   stft_global_sigma: 0.1 # Noising process std - should match signal std.
-  dropout_type: "zeros" # {"zero", "learnable"}
+  dropout_vec_type: "zeros" # {"zero", "learnable"}
 
 
 data:
@@ -32,14 +32,14 @@ data:
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
 
-  glob_filter: "**/*.pt" # this filters the dataset to only contain files with this string in it.
+  glob_filter: ["**/*.pt"] # this filters the dataset to only contain files with this string in it.
   chan_num_filter: null # null or integer number of channels we want in each sample (another filter on input data)
   sample_rate: 256
   seq_len: 1280 # NOT REALLY USED ANYMORE. number of timepoints in each sample (fixed 5 sec samples at 256 Hz)
   num_fine_time_pts: 32 
-  use_coarse_time: "B" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals.
+  use_coarse_time: "A" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals.
   randomly_permute_sequence: false
-  channel_dropout_prob: 0.0 # Probability of applying channel dropout to the EEG signal during training if float. of downsampling grid if int
+  token_dropout_prob: 0.99 # Probability of applying channel dropout to the EEG signal during training.
   stft_global_sigma: 0.1 # Noising process std - should match signal std.
 
   num_bins_discretize_xyz_chan_pos: 50 # Number of bins to discretize channel positions to use in 4d-RoPE. (we used 50)

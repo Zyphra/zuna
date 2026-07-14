@@ -134,7 +134,6 @@ def visualize_attention_mask(mask, sample_size=5000, title_suffix=""):
         plt.colorbar(label='Attention Allowed')
 
         # Generate filename with timestamp and config values
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_path = f"figures/attention_mask/mask_{title_suffix}.png"
 
         # Create directory if it doesn't exist

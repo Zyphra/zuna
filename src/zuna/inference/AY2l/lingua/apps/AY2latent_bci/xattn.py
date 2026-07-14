@@ -75,6 +75,11 @@ class CrossAttention(nn.Module):
         self.n_kv_heads = n_kv_heads
         self.heads_per_group = self.n_heads // self.n_kv_heads
 
+        self.do_QK_norm = True
+        if self.do_QK_norm:
+            self.q_norm = RMSNorm(head_dim, eps=1e-5) #(CW) - 1e-5 is the default value in BaseTransformerArgs.norm_eps
+            self.k_norm = RMSNorm(head_dim, eps=1e-5) #(CW) - 1e-5 is the default value in BaseTransformerArgs.norm_eps
+        
         self.wq = nn.Linear(
             dim,
             n_heads * head_dim,
@@ -109,17 +114,31 @@ class CrossAttention(nn.Module):
     ) -> torch.Tensor:
         # B S D
         assert attn_impl == "flex_attention", "Only flex_attention is supported for now"
+
+        xq = xq.to(dtype=self.wq.weight.dtype)
+        xkv = xkv.to(dtype=self.wk.weight.dtype)
+
         bsz, seq_len_q, dim = xq.shape
         _, seq_len_kv, _ = xkv.shape
         xq = self.wq(xq.view_as(xq))
         xk = self.wk(xkv.view_as(xkv))
         xv = self.wv(xkv.view_as(xkv))
 
+        
+
         output_shape = xq.shape
         # B S D -> B S H D
         xq = xq.view(bsz, seq_len_q, self.n_heads, self.head_dim)
         xk = xk.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
+
+
+
+        # DO QK_NORM HERE
+        if self.do_QK_norm:
+            xq = self.q_norm(xq)
+            xk = self.k_norm(xk)
+
 
         if self.rope_dim==0:
             pass
@@ -144,14 +163,12 @@ class CrossAttention(nn.Module):
             freqcis_4RoPE = torch.cat(freqcis_parts, dim=1)
             freqcis_cross_4RoPE = torch.cat(freqcis_cross_parts, dim=1)
 
-
             xq, xk = apply_rotary_emb_xattn(
                 xq, xk, 1, freqcis_4RoPE, freqcis_cross_4RoPE
             )
 
         else:
             print(f"I dont know how to handle {self.rope_dim=} inside xattn.CrossAttention.forward")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         # This condition helps us be easily compatible
         # with inference by adding a pluggable KVCache
@@ -164,23 +181,9 @@ class CrossAttention(nn.Module):
         if attn_impl == "flex_attention":
             assert mask is None or isinstance(mask, BlockMask)
             xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-            if xq.device.type == "mps":
-                # MPS does not support flex_attention; fall back to SDPA with dense mask
-                if mask is not None:
-                    S_q, S_kv = xq.shape[2], xk.shape[2]
-                    q_idx = torch.arange(S_q, device='cpu')
-                    kv_idx = torch.arange(S_kv, device='cpu')
-                    dense_bool = mask.mask_mod(0, 0, q_idx.unsqueeze(1), kv_idx.unsqueeze(0))
-                    attn_mask = torch.zeros(1, 1, S_q, S_kv, dtype=xq.dtype, device=xq.device)
-                    attn_mask.masked_fill_(~dense_bool.unsqueeze(0).unsqueeze(0).to(xq.device), float("-inf"))
-                else:
-                    attn_mask = None
-                output = F.scaled_dot_product_attention(xq, xk, xv, attn_mask=attn_mask)
-            elif xq.device.type == "cuda":
-                output = flex_attention_comp(xq, xk, xv, block_mask=mask)
-            else:
-                output = flex_attention(xq, xk, xv, block_mask=mask)
+            output = flex_attention_comp(xq, xk, xv, block_mask=mask)
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
+
 
         elif attn_impl == "sdpa":
             xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
@@ -224,6 +227,10 @@ class CrossAttention(nn.Module):
             b=3 * init_std,
         )
 
+        if self.do_QK_norm:
+            self.q_norm.reset_parameters()
+            self.k_norm.reset_parameters()
+
 
 class FourierConditioner(nn.Module):
     def __init__(
@@ -243,6 +250,7 @@ class FourierConditioner(nn.Module):
         self.proj = nn.Linear(output_dim, output_dim)
 
     def forward(self, x: list[float], device=None):
+        # x = torch.tensor(x, device=device).reshape(-1, 1)
         x = (x - self.min_val) / (self.max_val - self.min_val)
         f = (2 * torch.pi * x.float() @ self.weight.T).type_as(x)
         return self.proj(torch.cat([f.cos(), f.sin()], dim=-1))
@@ -323,6 +331,17 @@ class DecoderBlock(nn.Module):
         self.attention_norm = AdaRMSNorm(args.t_dim, args.dim, eps=args.norm_eps)
         self.ffn_norm = AdaRMSNorm(args.t_dim, args.dim, eps=args.norm_eps)
 
+
+        self.do_sandwich_norm = True
+        if self.do_sandwich_norm:
+            self.cross_attention_norm_post = RMSNorm(args.dim, eps=args.norm_eps)
+            self.attention_norm_post = RMSNorm(args.dim, eps=args.norm_eps)
+            self.ffn_norm_post = RMSNorm(args.dim, eps=args.norm_eps)
+        else:
+            self.cross_attention_norm_post = nn.Identity()
+            self.attention_norm_post = nn.Identity()
+            self.ffn_norm_post = nn.Identity()
+
     def forward(
         self,
         x: torch.Tensor,
@@ -334,30 +353,32 @@ class DecoderBlock(nn.Module):
         self_attn_mask: Optional[Union[BlockMask, str]] = None,
         cross_attn_mask: Optional[Union[BlockMask, str]] = None,
         attn_impl: str = "sdpa",
-        do_idx: Optional[torch.Tensor] = None,
+        do_idx: Optional[torch.Tensor] = None, # (CW)
         print_layerwise_activation_stats: bool = False,
     ) -> torch.Tensor:
         
         if print_layerwise_activation_stats and do_idx is not None:
 
-            x_normed = self.cross_attention_x_norm(x, c)
-            y_normed = self.cross_attention_y_norm(y, c) if not self.seqlen_t else self.cross_attention_y_norm(y) 
+            print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN DecoderBlock.forward")
 
-            print(f"\n\tDecoder cross_attn_x_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ")
-            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") 
+            x_normed = self.cross_attention_x_norm(x, c) # (CW)
+            y_normed = self.cross_attention_y_norm(y, c) if not self.seqlen_t else self.cross_attention_y_norm(y) # (CW)
+
+            print(f"\n\tDecoder cross_attn_x_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
                         
-            print(f"\tDecoder cross_attn_x_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ")
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") 
+            print(f"\tDecoder cross_attn_x_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
 
-            print(f"\n\tDecoder cross_attn_y_norm: (drop-out) mean={y[:, do_idx, :].mean().item():.6f}, std={y[:, do_idx, :].std().item():.6f}", end=" --> ") 
-            print(f"mean={y_normed[:, do_idx, :].mean().item():.6f}, std={y_normed[:, do_idx, :].std().item():.6f}")
+            print(f"\n\tDecoder cross_attn_y_norm: (drop-out) mean={y[:, do_idx, :].mean().item():.6f}, std={y[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={y_normed[:, do_idx, :].mean().item():.6f}, std={y_normed[:, do_idx, :].std().item():.6f}") # (CW)
 
-            print(f"\tDecoder cross_attn_y_norm: (non-drop) mean={y[:, ~do_idx, :].mean().item():.6f}, std={y[:, ~do_idx, :].std().item():.6f}", end=" --> ")
-            print(f"mean={y_normed[:, ~do_idx, :].mean().item():.6f}, std={y_normed[:, ~do_idx, :].std().item():.6f}") 
+            print(f"\tDecoder cross_attn_y_norm: (non-drop) mean={y[:, ~do_idx, :].mean().item():.6f}, std={y[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={y_normed[:, ~do_idx, :].mean().item():.6f}, std={y_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
         
-            x = x + self.cross_attention( 
-                x_normed, 
-                y_normed, 
+            x = x + self.cross_attention( # (CW)
+                x_normed, # (CW)
+                y_normed, # (CW)
                 freq_cis,
                 tok_idx=tok_idx,
                 cross_tok_idx=cross_tok_idx,
@@ -366,56 +387,72 @@ class DecoderBlock(nn.Module):
             )
 
         else:
-            x = x + self.cross_attention( 
-                self.cross_attention_x_norm(x, c),
-                self.cross_attention_y_norm(y, c) if not self.seqlen_t else self.cross_attention_y_norm(y),
-                freq_cis,
-                tok_idx=tok_idx,
-                cross_tok_idx=cross_tok_idx,
-                mask=cross_attn_mask,
-                attn_impl=attn_impl,
-            )
+
+            # Cross Attention Module:
+            x = x.float() + self.cross_attention_norm_post(
+                    self.cross_attention(                                                                                                   # cross-attention in BF16 / model_dtype
+                        self.cross_attention_x_norm(x.float(), c).to(dtype=self.cross_attention.wq.weight.dtype),                           # pre-norm in FP32
+                        self.cross_attention_y_norm(y.float(), c).to(dtype=self.cross_attention.wk.weight.dtype) if not self.seqlen_t \
+                            else self.cross_attention_y_norm(y.float()).to(dtype=self.cross_attention.wk.weight.dtype),                     # pre-norm in FP32
+                        freq_cis,
+                        tok_idx=tok_idx,
+                        cross_tok_idx=cross_tok_idx,
+                        mask=cross_attn_mask,
+                        attn_impl=attn_impl,
+                    ).float()                                                                                                               # sandwich norm in FP32
+                ).float()                                                                                                                   # residual in FP32
 
 
 
         if print_layerwise_activation_stats and do_idx is not None:
 
-            x_normed = self.attention_norm(x, c) 
+            print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN DecoderBlock.forward")
 
-            print(f"\n\tDecoder self attn_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") 
-            print(f" mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") 
+            x_normed = self.attention_norm(x, c) # (CW)
+
+            print(f"\n\tDecoder self attn_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f" mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
             
-            print(f"\tDecoder self attn_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") 
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") 
+            print(f"\tDecoder self attn_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
         
-            h = x + self.attention( 
-                x_normed, 
+            h = x + self.attention( # (CW)
+                x_normed, # (CW)
                 freq_cis,
                 tok_idx=tok_idx,
                 mask=self_attn_mask,
                 attn_impl=attn_impl,
             )
 
-            h_normed = self.ffn_norm(h, c) 
+            h_normed = self.ffn_norm(h, c) # (CW)
 
-            print(f"\n\tDecoder ffn_norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") 
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") 
+            print(f"\n\tDecoder ffn_norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # (CW)
             
-            print(f"\tDecoder ffn_norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") 
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") 
+            print(f"\tDecoder ffn_norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
 
-            out = h + self.feed_forward(h_normed) 
+            out = h + self.feed_forward(h_normed) # (CW)
 
         else:
 
-            h = x + self.attention(
-                self.attention_norm(x, c),
-                freq_cis,
-                tok_idx=tok_idx,
-                mask=self_attn_mask,
-                attn_impl=attn_impl,
-            )
-            out = h + self.feed_forward(self.ffn_norm(h, c))
+            # Self Attention Module:
+            h = x.float() + self.attention_norm_post(
+                    self.attention(                                                                             # self-attention in BF16 / model_dtype
+                        self.attention_norm(x.float(), c).to(dtype=self.attention.wq.weight.dtype),             # pre-norm in FP32
+                        freq_cis,
+                        tok_idx=tok_idx,
+                        mask=self_attn_mask,
+                        attn_impl=attn_impl,
+                    ).float()                                                                                   # sandwich norm post-norm in FP32
+                ).float()                                                                                       # residual in FP32
+
+            # Feed Forward Module:
+            out = h.float() + self.ffn_norm_post(
+                self.feed_forward(                                                              # FFN in BF16 / model_dtype
+                    self.ffn_norm(h.float(), c).to(dtype=self.feed_forward.w1.weight.dtype)     # pre-norm in FP32
+                ).float()                                                                       # sandwich norm post-norm in FP32
+            ).float()                                                                           # residual in FP32
 
         return out
 
@@ -429,3 +466,8 @@ class DecoderBlock(nn.Module):
 
         self.feed_forward.reset_parameters(init_std, factor)
         self.ffn_norm.reset_parameters()
+
+        if self.do_sandwich_norm:
+            self.cross_attention_norm_post.reset_parameters()
+            self.attention_norm_post.reset_parameters()
+            self.ffn_norm_post.reset_parameters()
