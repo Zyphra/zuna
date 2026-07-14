@@ -2,10 +2,11 @@ import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 # import zarr
 import numpy as np
+import mne
 import math
 import json  #jm
 from dataclasses import dataclass, field
-from typing import Union, List, Optional
+from typing import Union, List, Optional, Any
 from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 import random
@@ -351,6 +352,30 @@ class BCIDatasetArgs:
     b2_secret_access_key: Optional[str] = os.getenv("B2_SECRET_ACCESS_KEY") #None
     b2_local_cache_dir: Optional[str] = "/mnt/shared/datasets/bci/b2_cache"  # Local directory to cache downloaded files
     b2_cache_files: bool = False  # Whether to cache files locally or download on-demand
+
+    # v4 fields — used only by EEGDataset_v4 (.fif inference loader). Defaults are inference-friendly. #jm v4
+    use_v4: bool = False                                                                              #jm v4
+    v4_highpass_hz: Optional[float] = None    # None = skip highpass filter                            #jm v4
+    v4_lowpass_hz: Optional[float] = None     # None = skip lowpass filter                             #jm v4
+    v4_notch_hz: Optional[List[float]] = None  # None = skip notch; pass [60] for single, [50,60,100] for multi  #jm v4
+    v4_montage: Optional[str] = None          # MNE montage name; used only if file has no positions   #jm v4
+    v4_segment_sec: float = 10.0              # length of each segment in seconds                      #jm v4
+    v4_flat_thresh: Optional[float] = None    # per-(ch,coarse-time) std threshold for flat detection  #jm v4
+    v4_noise_thresh: Optional[float] = None   # per-(ch,coarse-time) std MAD multiplier for noisy det. #jm v4
+    v4_require_positions: bool = True         # drop channels lacking 3D coords                        #jm v4
+    v4_recon_save_fif: bool = True            # save model-reconstructed .fif files into dump_dir       #jm v4
+    v4_recon_fill_only_masked: bool = True    # fill only masked cells (True) or whole signal (False)   #jm v4
+    v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
+    v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
+    # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
+    # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
+    # list[str] = add these named channels; None = disabled. Mirrors the zuna release mechanism.         #jm v4
+    # Typed Any (not Union[int, List[str]]) because OmegaConf can't represent unions of containers.       #jm v4
+    v4_target_channel_count: Optional[Any] = None                                                         #jm v4
+    v4_upsample_montage: str = "standard_1005"  # MNE montage used as the source of target ch positions   #jm v4
+    # Profiling: when True, EEGDataset_v4 accumulates per-step timing (read/filter/resample/z-score/...). #jm v4
+    # Off by default so the hot per-segment loop pays nothing in production.                              #jm v4
+    v4_profile: bool = False                                                                              #jm v4
 
 
 
@@ -1895,6 +1920,566 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 
+class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
+    """
+    Inference-time dataset that loads .fif (or any MNE-readable) files directly.
+
+    Differences vs EEGDataset_v3:
+      - Source: .fif via MNE. No precomputed mmap / quality matrix required.
+      - Sequential, deterministic windowing (no random sampling). Walks each file
+        end-to-end in fixed segment_sec windows; final window may be shorter.
+      - Optional inline preprocessing: highpass / lowpass / notch / resample to
+        self.sample_rate. All three filter knobs default to None (= skip), so the
+        loader trusts the file unless told otherwise.
+      - Bad-mask is computed at load time from MNE info['bads'] + BAD_* annotations,
+        optionally augmented with heuristic flat / high-σ detection. Bad cells are
+        fed to the model as dropout tokens — they are *masked*, not removed, so
+        the model interpolates them.
+      - Each yielded segment dict carries reconstruction metadata (seg_mean,
+        seg_std, good_ch, fif_path, seg_start, seg_end) so downstream code can
+        invert the per-segment z-score and reassemble the file.
+
+    Output dict format matches EEGDataset_v3 exactly (same keys), plus the extra
+    reconstruction-metadata keys above, so model code does not need to branch.
+    """
+
+    def __init__(self, args: BCIDatasetArgs):
+        print(f"Inside EEGDataset_v4 with {args.data_dir=}")
+        self.data_dir              = Path(args.data_dir)
+        self.glob_filter           = args.glob_filter
+        self.dataset_id            = args.dataset_id
+        self.seed                  = args.seed
+        self.num_workers           = args.num_workers
+        self._current_epoch        = 0
+        self.num_fine_time_pts     = args.num_fine_time_pts
+        self.sample_rate           = args.sample_rate
+        self.use_coarse_time       = args.use_coarse_time
+        self.cat_chan_xyz_and_eeg  = args.cat_chan_xyz_and_eeg
+        self.target_packed_seqlen  = args.target_packed_seqlen
+        self.token_dropout_prob    = args.token_dropout_prob
+        self.dropout_scheme        = args.dropout_scheme
+        self.num_bins              = args.num_bins_discretize_xyz_chan_pos
+        self.do_avg_ref            = args.do_avg_ref
+        self.z_score_type          = args.z_score_type
+
+        # v4-specific
+        self.highpass_hz           = args.v4_highpass_hz
+        self.lowpass_hz            = args.v4_lowpass_hz
+        self.notch_hz              = args.v4_notch_hz
+        self.montage               = args.v4_montage
+        self.segment_sec           = args.v4_segment_sec
+        self.flat_thresh           = args.v4_flat_thresh
+        self.noise_thresh          = args.v4_noise_thresh
+        self.require_positions     = args.v4_require_positions
+        self.recon_fill_only_masked = args.v4_recon_fill_only_masked  #jm v4
+        self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)  #jm v4
+        self.filter_method         = getattr(args, "v4_filter_method", "fir")  #jm v4
+        self.target_channel_count  = getattr(args, "v4_target_channel_count", None)  #jm v4
+        self.upsample_montage      = getattr(args, "v4_upsample_montage", "standard_1005")  #jm v4
+        self.profile_enabled       = getattr(args, "v4_profile", False)  #jm v4
+        # raw_info_registry: keeps mne.Info per source file so the FifReconstructor    #jm v4
+        # can rebuild .fif outputs with the original metadata (channel names,           #jm v4
+        # sfreq, montage, etc). num_workers must be 0 for this to be visible to the     #jm v4
+        # main process; for num_workers>0 the registry would live in each worker only.  #jm v4
+        self.raw_info_registry: dict = {}                       #jm v4
+
+        # Timing accumulators. _prepare_raw_time = total seconds spent loading+      #jm v4
+        # filtering+resampling .fif files across the run. _segment_build_time =      #jm v4
+        # total seconds spent per-segment (z-score, bad-mask, chop). Read by the     #jm v4
+        # eeg_eval main loop to print summary lines.                                 #jm v4
+        self._prepare_raw_time = 0.0                                                  #jm v4
+        self._segment_build_time = 0.0                                                #jm v4
+        self._n_segments_yielded = 0                                                  #jm v4
+        self._n_files_loaded = 0                                                      #jm v4
+
+        # Per-step timing (only populated when v4_profile=True). Keys cover both the   #jm v4
+        # per-file _prepare_raw sub-steps and the per-segment __iter__ sub-steps.      #jm v4
+        # Surfaced to the main process via the batch dict (see __iter__), since with   #jm v4
+        # num_workers>0 these live in worker processes only.                           #jm v4
+        self._step_times = {
+            # _prepare_raw sub-steps
+            "read": 0.0, "pick": 0.0, "montage": 0.0, "drop_nopos": 0.0,
+            "resample": 0.0, "unfiltered_snapshot": 0.0, "filter": 0.0,
+            "notch": 0.0, "upsample": 0.0,
+            # per-segment sub-steps
+            "slice": 0.0, "avg_ref": 0.0, "z_score": 0.0, "bad_mask": 0.0,
+            "to_torch": 0.0, "token_dropout": 0.0, "chop_reshape": 0.0, "pack": 0.0,
+        }                                                                              #jm v4
+        # Tracks which channel indices were added by upsampling (zero-filled, masked). #jm v4
+        # Reset per file in _prepare_raw; consumed by the avg-ref step in __iter__.    #jm v4
+        self._upsampled_ch_mask = None                                                #jm v4
+
+        # xyz_extremes — identical to V3
+        if args.chan_pos_xyz_extremes_type == "old":
+            self.xyz_extremes = 1.10*torch.tensor([
+                [-0.0861, -0.1124, -0.0680],
+                [0.0858, 0.0849, 0.1002]
+            ])
+        elif args.chan_pos_xyz_extremes_type == "fifteens":
+            self.xyz_extremes = torch.tensor([
+                [-0.15, -0.15, -0.15],
+                [ 0.15,  0.15,  0.15]
+            ])
+        elif args.chan_pos_xyz_extremes_type == "thirteens":
+            self.xyz_extremes = torch.tensor([
+                [-0.13, -0.13, -0.13],
+                [ 0.13,  0.13,  0.13]
+            ])
+        elif args.chan_pos_xyz_extremes_type == "twelves":
+            self.xyz_extremes = torch.tensor([
+                [-0.12, -0.12, -0.12],
+                [ 0.12,  0.12,  0.12]
+            ])
+        else:
+            raise ValueError(f"Invalid value for args.chan_pos_xyz_extremes_type: {args.chan_pos_xyz_extremes_type}")
+
+        # File discovery — supports single-file or directory roots
+        if self.data_dir.is_file():
+            self.file_paths = [self.data_dir]
+        else:
+            patterns = self.glob_filter if isinstance(self.glob_filter, (list, tuple)) else [self.glob_filter]
+            seen = set()
+            self.file_paths = []
+            for pat in patterns:
+                for p in sorted(self.data_dir.glob(pat)):
+                    if p.is_file() and p not in seen:
+                        seen.add(p)
+                        self.file_paths.append(p)
+        print(f"In EEGDataset_v4.__init__, {len(self.file_paths)} file(s) matched glob_filter={self.glob_filter} under {self.data_dir}")
+
+    def __len__(self):
+        return 10**10
+
+    def set_epoch(self, epoch):
+        self._current_epoch = epoch
+
+    # ------------------------------------------------------------------ #
+    # File preparation: load + pick EEG + montage + filter + resample
+    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # Profiling helper: accumulate elapsed into _step_times[key], return  #jm v4
+    # a fresh perf_counter cursor so calls can be chained.                #jm v4
+    # ------------------------------------------------------------------ #
+    def _tick(self, key, t0):                                                          #jm v4
+        now = time.perf_counter()                                                      #jm v4
+        self._step_times[key] += now - t0                                              #jm v4
+        return now                                                                     #jm v4
+
+    # ------------------------------------------------------------------ #
+    # Channel upsampling: append zero-filled channels at target-montage   #jm v4
+    # positions and mark them bad, so the model interpolates them. Mirrors#jm v4
+    # zuna/src/zuna/preprocessing/interpolation.py (greedy + named modes). #jm v4
+    # Sets self._upsampled_ch_mask (bool over the FINAL channel list).     #jm v4
+    # ------------------------------------------------------------------ #
+    def _maybe_upsample_channels(self, raw):                                           #jm v4
+        n_orig = len(raw.ch_names)
+        self._upsampled_ch_mask = np.zeros(n_orig, dtype=bool)
+        target = self.target_channel_count
+        if target is None:
+            return raw
+
+        montage = mne.channels.make_standard_montage(self.upsample_montage)
+        mpos = montage.get_positions()["ch_pos"]   # {name: (x,y,z)}
+        present_lower = {c.lower() for c in raw.ch_names}
+
+        # Candidate montage channels not already present, with finite positions.
+        candidates = [
+            (name, np.asarray(pos, dtype=np.float64))
+            for name, pos in mpos.items()
+            if name.lower() not in present_lower
+            and np.all(np.isfinite(pos)) and not np.allclose(pos, 0.0)
+        ]
+
+        if isinstance(target, (list, tuple)):
+            # Named mode: keep only requested names (case-insensitive), preserve order.
+            want = {str(n).lower() for n in target}
+            to_add = [(nm, p) for (nm, p) in candidates if nm.lower() in want]
+        else:
+            # Greedy mode: add (target - current) channels, furthest-first from the
+            # existing electrode set to maximize spatial coverage (zuna algorithm).
+            n_to_add = int(target) - n_orig
+            if n_to_add <= 0:
+                return raw
+            cur_pos = np.array([ch["loc"][:3] for ch in raw.info["chs"]], dtype=np.float64)
+            valid = ~np.all(cur_pos == 0, axis=1) & ~np.isnan(cur_pos).any(axis=1)
+            cur_pos = cur_pos[valid] if valid.any() else cur_pos
+            scored = []
+            for nm, p in candidates:
+                d = np.linalg.norm(cur_pos - p[None, :], axis=1).min() if len(cur_pos) else 0.0
+                scored.append((d, nm, p))
+            scored.sort(key=lambda s: s[0], reverse=True)   # furthest first
+            to_add = [(nm, p) for (_, nm, p) in scored[:n_to_add]]
+
+        if not to_add:
+            return raw
+
+        add_names = [nm for nm, _ in to_add]
+        add_pos   = np.array([p for _, p in to_add], dtype=np.float64)
+        zeros = np.zeros((len(add_names), raw.n_times), dtype=np.float64)
+        add_info = mne.create_info(add_names, raw.info["sfreq"], ch_types="eeg")
+        add_raw = mne.io.RawArray(zeros, add_info, verbose="ERROR")
+        # Set 3D positions on the new channels' loc[:3].
+        for i, ch in enumerate(add_raw.info["chs"]):
+            ch["loc"][:3] = add_pos[i]
+        raw.add_channels([add_raw], force_update_info=True)
+        # Mark the new channels bad so they are masked everywhere -> model interpolates.
+        raw.info["bads"] = list(raw.info["bads"]) + add_names
+
+        mask = np.zeros(len(raw.ch_names), dtype=bool)
+        name_to_idx = {nm: i for i, nm in enumerate(raw.ch_names)}
+        for nm in add_names:
+            mask[name_to_idx[nm]] = True
+        self._upsampled_ch_mask = mask
+        print(f"  [v4] upsampled {n_orig} -> {len(raw.ch_names)} channels "
+              f"(added {len(add_names)}: {add_names[:8]}{'…' if len(add_names) > 8 else ''})")
+        return raw
+
+    def _prepare_raw(self, fif_path):
+        _t_prep_start = time.perf_counter()                                           #jm v4
+        _t = _t_prep_start                                                            #jm v4
+        prof = self.profile_enabled                                                   #jm v4
+        raw = mne.io.read_raw(str(fif_path), preload=True, verbose="ERROR")
+        if prof: _t = self._tick("read", _t)                                          #jm v4
+        raw.pick("eeg")
+        if prof: _t = self._tick("pick", _t)
+
+        # Apply named montage only as a FALLBACK when the file lacks positions.   #jm v4
+        if self.montage is not None:
+            _pre_locs = np.array([ch["loc"][:3] for ch in raw.info["chs"]])
+            _has_pos  = ~np.all(_pre_locs == 0, axis=1) & ~np.isnan(_pre_locs).any(axis=1)
+            if not _has_pos.all():
+                raw.set_montage(self.montage, on_missing="warn", match_case=False)
+            else:
+                print(f"  [v4] all {len(raw.ch_names)} ch have file-provided positions; skipping montage '{self.montage}'")
+        if prof: _t = self._tick("montage", _t)                                       #jm v4
+
+        # Drop channels with no 3D position
+        chs_loc = np.array([ch["loc"][:3] for ch in raw.info["chs"]])
+        valid_pos = ~np.all(chs_loc == 0, axis=1) & ~np.isnan(chs_loc).any(axis=1)
+        if self.require_positions and not valid_pos.all():
+            bad_pos_names = [raw.ch_names[i] for i, ok in enumerate(valid_pos) if not ok]
+            print(f"  [v4] dropping {len(bad_pos_names)} channels without 3D coords: {bad_pos_names[:8]}{'…' if len(bad_pos_names) > 8 else ''}")
+            raw.pick([raw.ch_names[i] for i, ok in enumerate(valid_pos) if ok])
+            if len(raw.ch_names) < 3:
+                raise RuntimeError(f"{fif_path}: <3 channels with valid 3D coords")
+        if prof: _t = self._tick("drop_nopos", _t)                                    #jm v4
+
+        # Resample FIRST. MNE's resample() includes its own anti-alias lowpass so      #jm v4
+        # this is safe; running the user filter AFTER resample is much faster (the     #jm v4
+        # 0.01 Hz FIR is ~4× shorter at 256 Hz than at 1000 Hz). Has no meaningful     #jm v4
+        # effect on signal content vs the old filter-then-resample order.              #jm v4
+        if int(round(raw.info["sfreq"])) != self.sample_rate:
+            raw.resample(self.sample_rate, verbose="ERROR")
+        if prof: _t = self._tick("resample", _t)                                      #jm v4
+
+        # Snapshot the resampled-but-unfiltered data BEFORE applying highpass/notch.   #jm v4
+        # Used by FifReconstructor when v4_recon_unmasked_from_original=True so the    #jm v4
+        # unmasked cells of the recon come straight from the file rather than from the #jm v4
+        # filtered-then-inverse-zscored model input path.                              #jm v4
+        unfiltered_data = None
+        if self.recon_unmasked_from_original:
+            unfiltered_data = raw.get_data().astype(np.float32, copy=True)
+        if prof: _t = self._tick("unfiltered_snapshot", _t)                           #jm v4
+
+        # Apply user filter(s).
+        filter_method = self.filter_method if self.filter_method in ("fir", "iir") else "fir"
+        if self.highpass_hz is not None or self.lowpass_hz is not None:
+            raw.filter(l_freq=self.highpass_hz, h_freq=self.lowpass_hz,
+                       method=filter_method, verbose="ERROR")
+        if prof: _t = self._tick("filter", _t)                                        #jm v4
+        if self.notch_hz is not None:
+            raw.notch_filter(self.notch_hz, method=filter_method, verbose="ERROR")
+        if prof: _t = self._tick("notch", _t)                                         #jm v4
+
+        # Channel upsampling (adds zero-filled, masked channels at montage positions). #jm v4
+        # If recon_unmasked_from_original snapshot was taken above, extend it with     #jm v4
+        # zero rows for the added channels so shapes stay aligned downstream.          #jm v4
+        n_before_upsample = len(raw.ch_names)
+        raw = self._maybe_upsample_channels(raw)
+        if unfiltered_data is not None and len(raw.ch_names) > n_before_upsample:
+            pad = np.zeros((len(raw.ch_names) - n_before_upsample, unfiltered_data.shape[1]),
+                           dtype=unfiltered_data.dtype)
+            unfiltered_data = np.concatenate([unfiltered_data, pad], axis=0)
+        if prof: _t = self._tick("upsample", _t)                                      #jm v4
+
+        # Register the (post-preprocessing) info so the FifReconstructor can use it.  #jm v4
+        self.raw_info_registry[str(fif_path)] = raw.info.copy()                       #jm v4
+
+        elapsed = time.perf_counter() - _t_prep_start                                  #jm v4
+        self._prepare_raw_time += elapsed                                              #jm v4
+        self._n_files_loaded += 1                                                      #jm v4
+        print(f"[v4 timing] _prepare_raw {Path(fif_path).name}: {elapsed*1000:.1f} ms")  #jm v4
+
+        return raw, unfiltered_data
+
+    # ------------------------------------------------------------------ #
+    # 2D bad-mask: shape (n_channels, n_coarse_time_bins) for the segment
+    # ------------------------------------------------------------------ #
+    def _compute_bad_mask_2d(self, data_seg, raw, seg_start_sample, n_coarse):
+        """
+        data_seg : (C, T_samples)  -- ALREADY z-scored for the segment, so std is ~1 by default.
+        raw      : the prepared MNE Raw (for info['bads'] and annotations).
+        seg_start_sample : sample index of segment start in the (resampled) Raw.
+        n_coarse : number of tf-sized coarse-time bins in the segment.
+
+        Returns bad_2d : (C, n_coarse) bool — True where (channel, coarse-time-bin) is bad.
+        """
+        C, T = data_seg.shape
+        tf = self.num_fine_time_pts
+        bad_2d = np.zeros((C, n_coarse), dtype=bool)
+
+        # 1. Whole-channel bads (MNE info['bads'])
+        ch_names = raw.ch_names
+        for bad_name in raw.info.get("bads", []):
+            if bad_name in ch_names:
+                bad_2d[ch_names.index(bad_name), :] = True
+
+        # 2. Bad time annotations: any annotation whose description starts with 'BAD'
+        sfreq = raw.info["sfreq"]
+        for ann in raw.annotations:
+            if not str(ann["description"]).upper().startswith("BAD"):
+                continue
+            ann_start = int(round(ann["onset"] * sfreq))
+            ann_end   = int(round((ann["onset"] + ann["duration"]) * sfreq))
+            # Intersect with this segment
+            ovl_start = max(0, ann_start - seg_start_sample)
+            ovl_end   = min(T, ann_end   - seg_start_sample)
+            if ovl_end > ovl_start:
+                bin_s = ovl_start // tf
+                bin_e = (ovl_end + tf - 1) // tf
+                bad_2d[:, bin_s:bin_e] = True
+
+        # 3. Heuristic flat / noisy detection on the z-scored segment (per-bin std)
+        if self.flat_thresh is not None or self.noise_thresh is not None:
+            usable = (n_coarse * tf)
+            x = data_seg[:, :usable].reshape(C, n_coarse, tf)
+            bin_std = x.std(axis=2)                       # (C, n_coarse)
+            if self.flat_thresh is not None:
+                bad_2d |= (bin_std < self.flat_thresh)
+            if self.noise_thresh is not None:
+                bad_2d |= (bin_std > self.noise_thresh)
+
+        return bad_2d
+
+    # ------------------------------------------------------------------ #
+    # Main iteration: walk every file sequentially in fixed-size windows
+    # ------------------------------------------------------------------ #
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info else 0
+        num_workers_per_rank = worker_info.num_workers if worker_info else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        global_worker_id = rank * num_workers_per_rank + worker_id
+
+        # Worker seed (used only for perform_token_dropout's RNG)
+        if self.seed is not None:
+            worker_seed = int(self.seed + (1e3 * rank) + (1e6 * worker_id) + (1e9 * self._current_epoch))
+        else:
+            worker_seed = int(time.time() * 1000) % (2**31) + global_worker_id
+        rng = np.random.default_rng(worker_seed)
+        random.seed(worker_seed)
+
+        # Soft-shard files across (rank * num_workers_per_rank) workers
+        n_global_workers = max(1, world_size * num_workers_per_rank)
+        my_files = [p for i, p in enumerate(self.file_paths) if i % n_global_workers == global_worker_id]
+
+        # Packing state — persists ACROSS files so we maximally fill batches
+        seqlen_accum = 0
+        packed_batch = []
+        tf = self.num_fine_time_pts
+        prof = self.profile_enabled                                                   #jm v4
+
+        for file_idx_global, fif_path in enumerate(my_files):
+            try:
+                raw, unfiltered_full = self._prepare_raw(fif_path)
+            except Exception as e:
+                import traceback
+                print(f"Error preparing {fif_path}: {e}\n{traceback.format_exc()}")
+                continue
+
+            data_full = raw.get_data().astype(np.float32, copy=False)   # (C, T) in volts
+            n_channels, n_total = data_full.shape
+            positions = np.array([ch["loc"][:3] for ch in raw.info["chs"]], dtype=np.float32)  # (C, 3)
+            channel_names_all = list(raw.ch_names)
+
+            # File-level stats (for downstream reference; reconstruction itself
+            # only needs the per-segment μ/σ since we don't z-score at file level).
+            file_mean = data_full.mean(axis=1).astype(np.float32)
+            file_std  = data_full.std(axis=1).astype(np.float32) + 1e-6
+
+            # Segment length in samples, snapped to a multiple of tf
+            target_seg_samples = max(tf, int(round(self.segment_sec * self.sample_rate) // tf) * tf)
+
+            seg_starts = list(range(0, n_total, target_seg_samples))
+
+            for seg_start in seg_starts:
+                _t_seg_start = time.perf_counter()                                     #jm v4
+                _t = _t_seg_start                                                      #jm v4
+                seg_end = min(seg_start + target_seg_samples, n_total)
+                seg_samples = seg_end - seg_start
+                # Snap segment length down to a multiple of tf (allows shorter final segment)
+                seg_samples = (seg_samples // tf) * tf
+                if seg_samples < tf:
+                    continue
+                seg_end = seg_start + seg_samples
+
+                # 1. Slice
+                data_np = data_full[:, seg_start:seg_end].copy()
+                if prof: _t = self._tick("slice", _t)                                  #jm v4
+
+                # 2. Average reference (per-segment) — buffer the offset so the    #jm v4
+                # reconstructor can add it back when inverting the normalization.   #jm v4
+                # Upsampled channels are zero-filled; exclude them from the mean so #jm v4
+                # the reference isn't diluted by the added zero rows.               #jm v4
+                if self.do_avg_ref:
+                    if self._upsampled_ch_mask is not None and self._upsampled_ch_mask.any():
+                        _real = ~self._upsampled_ch_mask                            #jm v4
+                        avg_ref_offset = data_np[_real].mean(axis=0)               #jm v4
+                    else:                                                           #jm v4
+                        avg_ref_offset = data_np.mean(axis=0)         # (T_seg,)    #jm v4
+                    data_np = data_np - avg_ref_offset[None, :]                     #jm v4
+                else:                                                               #jm v4
+                    avg_ref_offset = np.zeros(data_np.shape[1], dtype=np.float32)   #jm v4
+                if prof: _t = self._tick("avg_ref", _t)                                #jm v4
+
+                # 3. Per-segment z-score (matches V3 contract — model sees ~unit-variance input)
+                if self.z_score_type == "across_channel":
+                    seg_mean = data_np.mean(axis=1, keepdims=True)    # (C, 1)
+                    seg_std  = data_np.std(axis=1, keepdims=True) + 1e-6
+                    data_np  = (data_np - seg_mean) / seg_std
+                elif self.z_score_type == "across_sample":
+                    g_mean = data_np.mean()
+                    g_std  = data_np.std() + 1e-6
+                    seg_mean = np.full((n_channels, 1), g_mean, dtype=np.float32)
+                    seg_std  = np.full((n_channels, 1), g_std,  dtype=np.float32)
+                    data_np  = (data_np - g_mean) / g_std
+                elif self.z_score_type == "none":
+                    seg_mean = np.zeros((n_channels, 1), dtype=np.float32)
+                    seg_std  = np.ones((n_channels, 1),  dtype=np.float32)
+                else:
+                    raise ValueError(f"Invalid z_score_type: {self.z_score_type}")
+                if prof: _t = self._tick("z_score", _t)                                #jm v4
+
+                # 4. Bad-mask: MNE bads + annotations + (optional) heuristic detection
+                n_coarse = seg_samples // tf
+                bad_2d = self._compute_bad_mask_2d(data_np, raw, seg_start, n_coarse)  # (C, n_coarse)
+                if prof: _t = self._tick("bad_mask", _t)                               #jm v4
+
+                # 5. To torch
+                eeg_t             = torch.from_numpy(data_np).float()
+                chan_pos          = torch.from_numpy(positions).float()
+                chan_pos_discrete = discretize_chan_pos(chan_pos, self.xyz_extremes, self.num_bins)
+                channel_names     = channel_names_all   # unchanged this segment (no per-segment drops in v4)
+                if prof: _t = self._tick("to_torch", _t)                               #jm v4
+
+                # 6. Random token dropout (matches V3 hook; typically off in inference via token_dropout_prob < 0)
+                token_dropout = perform_token_dropout(
+                    dropout_scheme=self.dropout_scheme,
+                    token_dropout_prob=self.token_dropout_prob,
+                    num_fine_time_pts=tf,
+                    mmap=[eeg_t],
+                    channel_names=channel_names,
+                    chan_pos=chan_pos,
+                )
+                assert len(token_dropout) == 1
+                if prof: _t = self._tick("token_dropout", _t)                          #jm v4
+
+                # 7. Chop + reshape (identical to V3)
+                reshaped = chop_and_reshape_signals(eeg_t, chan_pos, chan_pos_discrete, tf, self.use_coarse_time)
+                if self.cat_chan_xyz_and_eeg:
+                    eeg_cat = torch.cat((reshaped[1], reshaped[0]), dim=1)
+                else:
+                    eeg_cat = reshaped[0]
+                if prof: _t = self._tick("chop_reshape", _t)                           #jm v4
+
+                # 8. Build per-token dropout_bool from (a) random dropout + (b) bad-mask
+                chan_id_r    = reshaped[3]
+                t_coarse_r   = reshaped[4]
+                dropout_bool = torch.zeros_like(chan_id_r, dtype=torch.bool)
+                for cd, td in token_dropout[0]:
+                    dropout_bool[(chan_id_r == cd) & (t_coarse_r == td)] = True
+                # OR-in the bad-mask (channel_idx, coarse-time-bin)
+                bad_2d_t = torch.from_numpy(bad_2d)                    # (C, n_coarse)
+                dropout_bool |= bad_2d_t[chan_id_r.long(), t_coarse_r.long()]
+
+                # 9. Pack into packed_batch — yield when target_packed_seqlen is hit
+                seg_dict = {
+                    "eeg_signal":         eeg_cat,
+                    "chan_pos":           reshaped[1],
+                    "chan_pos_discrete":  reshaped[2],
+                    "chan_id":            chan_id_r,
+                    "t_coarse":           t_coarse_r,
+                    "seq_lens":           reshaped[5],
+                    "max_tc":             t_coarse_r.max().item() + 1,
+                    "token_dropout":      dropout_bool,
+                    "pad_mask":           torch.ones(reshaped[5], 1, dtype=torch.float32),  # v4: whole segments are all-real -> satisfies zuna collate
+                    "ids":                file_idx_global,
+                    "dataset_id":         self.dataset_id,
+                    # v4 reconstruction metadata
+                    "seg_mean":           torch.from_numpy(seg_mean.squeeze(1)),         # (C,)
+                    "seg_std":            torch.from_numpy(seg_std.squeeze(1)),          # (C,)
+                    "avg_ref_offset":     torch.from_numpy(avg_ref_offset.astype(np.float32)),  # (T_seg,)  #jm v4
+                    "file_mean":          torch.from_numpy(file_mean),                   # (C,)
+                    "file_std":           torch.from_numpy(file_std),                    # (C,)
+                    "channel_names":      channel_names,
+                    "fif_path":           str(fif_path),
+                    "seg_start":          int(seg_start),
+                    "seg_end":            int(seg_end),
+                    "sfreq":              float(self.sample_rate),
+                    # mne.Info travels with every segment so FifReconstructor can       #jm v4
+                    # work when num_workers > 0 (the dataset's raw_info_registry isn't  #jm v4
+                    # shared across worker processes; the batch queue is).              #jm v4
+                    "raw_info":           raw.info,
+                }
+
+                # If recon_unmasked_from_original is on, ship the resampled-but-       #jm v4
+                # unfiltered volts for this segment so FifReconstructor can use them   #jm v4
+                # for unmasked cells in place of the inverse-zscored model input.      #jm v4
+                if unfiltered_full is not None:
+                    seg_dict["unfiltered_volts"] = torch.from_numpy(
+                        unfiltered_full[:, seg_start:seg_end].copy()
+                    )
+
+                if prof: _t = self._tick("pack", _t)                                   #jm v4
+                self._segment_build_time += time.perf_counter() - _t_seg_start   #jm v4
+                self._n_segments_yielded += 1                                     #jm v4
+
+                # Ship a cumulative per-worker timing snapshot so the main process can  #jm v4
+                # aggregate per-step timings even with num_workers>0 (the dataset's     #jm v4
+                # own counters live in worker processes). Mirrors the raw_info /        #jm v4
+                # unfiltered_volts batch-dict-shipping pattern. One dict per segment;   #jm v4
+                # the collate fn keeps only the last (largest) snapshot per batch.      #jm v4
+                if prof:                                                               #jm v4
+                    seg_dict["v4_step_times"] = {
+                        "worker_id": int(global_worker_id),
+                        "n_segments": int(self._n_segments_yielded),
+                        "n_files": int(self._n_files_loaded),
+                        "prepare_raw_time": float(self._prepare_raw_time),
+                        "segment_build_time": float(self._segment_build_time),
+                        "step_times": dict(self._step_times),
+                    }
+
+                if seqlen_accum + reshaped[5] <= self.target_packed_seqlen:
+                    seqlen_accum += reshaped[5]
+                    packed_batch.append(seg_dict)
+                else:
+                    # This segment would overflow — yield current batch and start a new one
+                    # with this segment as its first member (do NOT split the segment, so that
+                    # reconstruction boundaries stay clean).
+                    if packed_batch:
+                        yield packed_batch
+                    seqlen_accum = reshaped[5]
+                    packed_batch = [seg_dict]
+
+        # End of all files for this worker — yield any leftover partial batch
+        if packed_batch:
+            yield packed_batch
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+
 class EEGDataset_v2(IterableDataset):
     """
     Iterable dataset because we have lots more data for training.
@@ -2914,7 +3499,9 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
 
 
 def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
-    if args.use_v3:  #jm
+    if args.use_v4:  #jm v4
+        dataset = EEGDataset_v4(args) # IterableDataset loading .fif files directly for inference!
+    elif args.use_v3:  #jm
         dataset = EEGDataset_v3(args) # IterableDataset pulling from v7 mmap format!
     elif args.use_b2:
         dataset = EEGDataset_b2(args) # IterableDataset pulling from B2!
