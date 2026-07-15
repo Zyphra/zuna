@@ -14,48 +14,38 @@
 
 
 import numpy as np
-from scipy.signal import welch, hilbert
 from scipy.fft import rfft, rfftfreq
-from scipy.stats import skew, kurtosis
 import matplotlib.pyplot as plt
-from matplotlib.colors import to_hex
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
-from copy import deepcopy
 import gc
 import json
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file as safe_load
 import logging
 import os
-import sys
-import time
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
-from timeit import default_timer as timer
 from typing import Any, Dict, List, Optional
 import random
 import numpy as np
 from omegaconf import OmegaConf
 import torch
 import torch.distributed
-import torch.nn.functional as F
 from torch.optim import lr_scheduler
 from torch.distributed.checkpoint.stateful import Stateful
-from torch.distributed._tensor import DTensor
 
-from lingua.args import dataclass_from_dict, dump_config, flatten_dict
+from lingua.args import dataclass_from_dict
 from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
 from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
 
 from apps.AY2latent_bci.eeg_data import (
-    EEGProcessor, 
-    BCIDatasetArgs, 
+    EEGProcessor,
+    BCIDatasetArgs,
     create_dataloader_v2,
-    chop_and_reshape_signals, # for debug
+    # chop_and_reshape_signals, # for debug
     invert_reshape_signals,
 )
 
@@ -63,18 +53,12 @@ from lingua.distributed import (
     DistributedArgs,
     EnvironmentArgs,
     init_signal_handler,
-    dist_mean_dict,
     get_device_mesh,
     get_is_master,
-    get_world_size,
-    parallelize_model,
     setup_env,
     setup_torch_distributed,
-    clean_env,
-    requeue_slurm_job,
     check_model_value_range,
 )
-from lingua.logger import init_logger
 from lingua.metrics import (
     GPUMemoryMonitor,
     LoggingArgs,
@@ -85,19 +69,11 @@ from lingua.optim import OptimArgs, build_optimizer
 from apps.AY2latent_bci.transformer import (
     DecoderTransformerArgs,
     EncoderDecoder,
-    get_num_flop_per_token,
-    build_fsdp_grouping_plan,
-    get_no_recompute_ops,
 )
-from lingua.probe import AutoProbeD
-from lingua.stool import StoolArgs, launch_job
 
-import wandb
 from dotenv import load_dotenv
 load_dotenv() # Load WANDB_API_KEY from .env file
 
-from torch._dynamo.decorators import mark_static_address
-import functools
 logger = logging.getLogger()
 
 LOAD_THE_MODEL = True           # Flag to load model onto GPU or not. If False, just explore data.
@@ -221,66 +197,6 @@ class TrainState(Stateful):
         self.step = state_dict["step"]
         self.acc_step = state_dict["acc_step"]
         self.scheduler.load_state_dict(state_dict["scheduler"])
-
-def validate_train_args(args: TrainArgs,):
-    assert args.dump_dir, "Dump dir not set"
-
-    if args.checkpoint.path is None:
-        logger.info(f"Setting checkpoint path to {str(Path(args.dump_dir) / 'checkpoints')}")
-        args.checkpoint.path = str(Path(args.dump_dir) / "checkpoints")
-
-    # (CW) - if using local filesystem, check if data_dir exists.
-    if not args.data.use_b2:
-        assert os.path.exists(args.data.data_dir), f"{args.data.data_dir} doesn't exist" # (CW) - replaced with this (NEWEST)
-
-    if (
-        args.distributed.dp_replicate
-        * args.distributed.dp_shard
-        * args.distributed.tp_size
-        != get_world_size()
-    ):
-        assert get_world_size() % args.distributed.dp_shard == 0
-        args.distributed.dp_replicate = get_world_size() // args.distributed.dp_shard
-
-        assert args.distributed.dp_replicate % args.distributed.tp_size == 0
-        args.distributed.dp_replicate = (
-            args.distributed.dp_replicate // args.distributed.tp_size
-        )
-
-        logger.warning(
-            f"Setting Data Parallel size to {args.distributed.dp_replicate * args.distributed.dp_shard}"
-        )
-        assert (
-            args.distributed.dp_replicate
-            * args.distributed.dp_shard
-            * args.distributed.tp_size
-            == get_world_size()
-        )
-
-        if args.distributed.fsdp_type == "no_shard":
-            assert (
-                args.distributed.dp_shard == 1
-                and args.distributed.dp_replicate == get_world_size()
-            )
-
-
-    if args.distributed.tp_size == 1:
-        logger.warning(
-            "Tensor parallelism has not been tested for a while, use at your own risk"
-        )
-
-    ## (CW)
-
-    if args.logging.wandb is not None:
-        args.logging.wandb.name = args.name
-
-    if args.probe_freq is not None:
-        assert (
-            args.distributed.tp_size == 1
-        ), "Probing not supported with tensor parallelism"
-        assert (
-            args.distributed.selective_activation_checkpointing is False
-        ), "Probing not supported with selective activation checkpointing"
 
 preemption_flag = dict(flag=False)
 
@@ -1531,20 +1447,6 @@ def evaluate(args: TrainArgs):
                         logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
 
 
-            # Either load from latest checkpoint or start from scratch
-            if args.probe_freq is not None:
-                if get_is_master():
-                    os.makedirs(Path(args.dump_dir) / "probe", exist_ok=True)
-                torch.distributed.barrier()
-                probe = AutoProbeD(
-                    model,
-                    (
-                        Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl"
-                        if (dp_rank % 128 == 0)
-                        else None
-                    ),
-                )
-
             gc.disable()
 
 
@@ -1636,8 +1538,6 @@ def evaluate(args: TrainArgs):
                     torch.manual_seed(sample_noise_seed(base_seed, gi))  # process()+sample() noise
                     yield {k: v for k, v in b.items()}   # shallow copy; loop's .pop() won't mutate the cache
             batch_iterator = _frozen_batch_iter(_subset, args.data.eval_noise_seed)
-
-        torch_profiler = None
 
         #make sure all model parameters require gradients
         if LOAD_THE_MODEL:
