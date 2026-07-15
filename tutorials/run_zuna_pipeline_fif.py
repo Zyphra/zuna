@@ -41,7 +41,7 @@ CONFIG_PATH = APP_DIR / "configs/config_infer_fif.yaml"
 LINGUA_ROOT = APP_DIR.parent.parent                          # holds the `lingua` + `apps` packages
 
 # ============================================================================= INFERENCE
-GPU_DEVICE             = 5        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
+GPU_DEVICE             = 2        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
 TOKENS_PER_BATCH       = 100000  # data.target_packed_seqlen
 DATA_NORM              = 10.0    # rescale eeg to std ~= 0.1 (ZUNA expects this)
 DIFFUSION_CFG          = 1.0     # 1.0 = no cfg
@@ -131,6 +131,12 @@ def make_overlay_figures():
 
 
 if __name__ == "__main__":
+    # Run under the repo venv (its scipy/numpy are compatible; the system python is not).
+    # If launched with a different interpreter, re-exec with venv/bin/python3.
+    _venv_py = REPO_ROOT / "venv" / "bin" / "python3"
+    if _venv_py.exists() and Path(sys.executable) != _venv_py:
+        os.execv(str(_venv_py), [str(_venv_py), *sys.argv])
+
     if not CONFIG_PATH.exists():
         raise FileNotFoundError(f"V4 config not found at {CONFIG_PATH}")
     if not EEG_EVAL.exists():

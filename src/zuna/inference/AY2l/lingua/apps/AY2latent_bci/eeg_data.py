@@ -368,6 +368,7 @@ class BCIDatasetArgs:
     v4_recon_fill_only_masked: bool = True    # fill only masked cells (True) or whole signal (False)   #jm v4
     v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
     v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir #jm v4
+    v4_recon_seam_correct: bool = True  # re-anchor hybrid infills to neighbouring original (remove boundary jumps; DC/near-DC only) #jm v4
     v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
     # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
     # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
@@ -2252,11 +2253,17 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
 
         # 2. Bad time annotations: any annotation whose description starts with 'BAD'
         sfreq = raw.info["sfreq"]
+        # Annotation onsets are in the recording's absolute (orig_time) frame when orig_time is
+        # set, while get_data() is 0-based from first_samp. Subtract first_samp so onsets map to
+        # the correct data sample — recordings that start at t>0 (first_samp>0), e.g. a cropped
+        # file, would otherwise be off by first_samp. When orig_time is None the onsets are
+        # already data-relative, so no shift is applied.  #jm v4
+        ann_first_samp = raw.first_samp if raw.annotations.orig_time is not None else 0
         for ann in raw.annotations:
             if not str(ann["description"]).upper().startswith("BAD"):
                 continue
-            ann_start = int(round(ann["onset"] * sfreq))
-            ann_end   = int(round((ann["onset"] + ann["duration"]) * sfreq))
+            ann_start = int(round(ann["onset"] * sfreq)) - ann_first_samp
+            ann_end   = int(round((ann["onset"] + ann["duration"]) * sfreq)) - ann_first_samp
             # Intersect with this segment
             ovl_start = max(0, ann_start - seg_start_sample)
             ovl_end   = min(T, ann_end   - seg_start_sample)
@@ -2533,7 +2540,7 @@ class FifReconstructor:   #jm v4
         segments (if any) stay NaN in the signals and False in the mask.
     """
     def __init__(self, output_dir, raw_info_registry, fill_only_masked, num_fine_time_pts,
-                 data_norm=1.0, unmasked_from_original=False):  #jm v4
+                 data_norm=1.0, unmasked_from_original=False, seam_correct=True):  #jm v4
         from pathlib import Path
         self.output_dir = Path(output_dir)
         # Two output subfolders (jonas): full model reconstruction, and hybrid
@@ -2551,6 +2558,12 @@ class FifReconstructor:   #jm v4
         # cells go through the inverse-zscore + model-output path. fill_only_masked     #jm v4
         # is implied to be True in this mode.                                           #jm v4
         self.unmasked_from_original = bool(unmasked_from_original)
+        # Seam correction for the hybrid: the model is trained on high-pass / per-segment      #jm v4
+        # z-scored data, so an infilled span carries no slow drift and can sit at a different  #jm v4
+        # DC/level than the surrounding original -> a visible jump at the boundary. When on,    #jm v4
+        # each infilled span in the hybrid is re-anchored (linear deramp) so its ends meet the  #jm v4
+        # neighbouring original samples. Only affects DC/near-DC; the PSD bands are untouched.  #jm v4
+        self.seam_correct = bool(seam_correct)
         # buffer: { fif_path : list of (seg_start, seg_end, signal_array (C_seg, T_seg), channel_names) }
         self.buffer: dict = {}
 
@@ -2649,6 +2662,48 @@ class FifReconstructor:   #jm v4
                 (seg_start, seg_end, mod_out_volts, recon_hybrid, mask_full.astype(bool), ch_names)
             )
 
+    @staticmethod
+    def _seam_correct_hybrid(hybrid, mask):
+        """Re-anchor each infilled (masked) span so it connects to the neighbouring original.  #jm v4
+
+        Per contiguous masked run in a channel:
+          - original on BOTH sides -> subtract a linear ramp so the run's ends meet the left/right
+            original neighbours (keeps the infill's shape; adds only a linear trend => DC/near-DC
+            only, PSD bands untouched);
+          - original on ONE side (run touches a recording edge) -> constant DC shift to that side;
+          - NEITHER (whole-channel infill, e.g. a bad channel) -> unchanged (no temporal seam).
+        Modifies `hybrid` (C, N) in place. `mask` is the bool (C, N) inferred-cell mask.
+        """
+        C, N = hybrid.shape
+        for c in range(C):
+            m = mask[c]
+            if not m.any() or m.all():
+                continue  # nothing masked, or whole channel inferred (no seam to fix)
+            d = np.diff(m.astype(np.int8))
+            starts = list(np.where(d == 1)[0] + 1)
+            ends   = list(np.where(d == -1)[0] + 1)
+            if m[0]:
+                starts = [0] + starts
+            if m[-1]:
+                ends = ends + [N]
+            for s, e in zip(starts, ends):
+                span = hybrid[c, s:e]
+                L = hybrid[c, s - 1] if s > 0 else np.nan   # left original neighbour
+                R = hybrid[c, e]     if e < N else np.nan   # right original neighbour
+                has_L, has_R = (s > 0 and np.isfinite(L)), (e < N and np.isfinite(R))
+                mlen = e - s
+                if has_L and has_R:
+                    dL, dR = L - span[0], R - span[-1]
+                    if mlen == 1:
+                        hybrid[c, s] = span[0] + 0.5 * (dL + dR)
+                    else:
+                        hybrid[c, s:e] = span + dL + (dR - dL) * (np.arange(mlen) / (mlen - 1))
+                elif has_L:
+                    hybrid[c, s:e] = span + (L - span[0])
+                elif has_R:
+                    hybrid[c, s:e] = span + (R - span[-1])
+        return hybrid
+
     def save_all(self):
         from pathlib import Path
         if not self.buffer:
@@ -2702,6 +2757,10 @@ class FifReconstructor:   #jm v4
             model_path = self.full_dir / f"{base}_raw.fif"
             mne.io.RawArray(full_model, info, verbose="ERROR").save(
                 str(model_path), overwrite=True, verbose="ERROR")
+
+            # Seam-correct the hybrid so infilled spans connect to the surrounding original.  #jm v4
+            if self.seam_correct:
+                self._seam_correct_hybrid(full_hybrid, full_mask)
 
             # (2) Hybrid: original on kept cells, model output on dropped cells.
             hybrid_path = self.hybrid_dir / f"{base}_raw.fif"
