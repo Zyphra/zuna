@@ -54,6 +54,7 @@ from apps.AY2latent_bci.eeg_data import (
     create_dataloader_v2,
     chop_and_reshape_signals, # for debug
     invert_reshape_signals,
+    FifReconstructor,
 )
 
 from lingua.distributed import (
@@ -204,6 +205,7 @@ class TrainArgs:
 @dataclass
 class TrainState(Stateful):
     step: int  # Nb of steps taken by the optimizer
+    acc_step: int  # Nb of gradient-accumulation micro-steps (referenced by state_dict/load_state_dict + constructor)
     scheduler: lr_scheduler.LambdaLR
     # data_loader_state: PackTokensState
 
@@ -1545,6 +1547,20 @@ def evaluate(args: TrainArgs):
         print("Finishing create dataloader on rank", dp_rank)
 
 
+        # V4 .fif save-out: buffer per-segment model output, stitch to continuous .fif.  #jm v4
+        v4_reconstructor = None
+        if getattr(args.data, "use_v4", False) and getattr(args.data, "v4_recon_save_fif", False):
+            _recon_out = getattr(args.data, "v4_recon_out_dir", None) or args.dump_dir
+            v4_reconstructor = FifReconstructor(
+                output_dir=_recon_out,
+                raw_info_registry=data_loader.dataset.raw_info_registry,
+                fill_only_masked=args.data.v4_recon_fill_only_masked,
+                num_fine_time_pts=args.data.num_fine_time_pts,
+                data_norm=getattr(args.data, "data_norm", 1.0),
+                unmasked_from_original=getattr(args.data, "v4_recon_unmasked_from_original", False),
+            )
+            print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
+
         epoch = 0 # if using nonlocal epoch
         def make_batch_iterator(dataloader, data_args):  # (CW) Use with IterableDataset.
             """
@@ -1570,7 +1586,7 @@ def evaluate(args: TrainArgs):
                         print(f"Clipping input at +/-{eeg_sig_clip}")
                         eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip) # 
 
-                    yield {
+                    yielded = {
                         'eeg_signal': eeg_signal, # pass out the clipped and normalized eeg signal.
                         'chan_pos': batch['chan_pos'],
                         'chan_pos_discrete': batch['chan_pos_discrete'],
@@ -1583,8 +1599,20 @@ def evaluate(args: TrainArgs):
                         'idx': batch['ids'],
                         'dataset_id': batch['dataset_id'],
                     }
+                    # Pass V4 reconstruction metadata through (no-op for V2/V3/B2).  #jm v4
+                    for _k in ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
+                               'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
+                               'v4_channel_names', 'v4_sfreq', 'v4_raw_info',
+                               'v4_unfiltered_volts', 'v4_step_times'):
+                        if _k in batch:
+                            yielded[_k] = batch[_k]
+                    yield yielded
 
                 print("Finished epoch", epoch)
+                # V4 is single-pass inference — stop after one full walk of the .fif files.  #jm v4
+                if getattr(data_args, "use_v4", False):
+                    print("[v4] one full pass through all .fif files complete — stopping iterator")
+                    return
 
         batch_iterator = make_batch_iterator(data_loader, args.data)
         print("Entering create batch iterator on rank", dp_rank)
@@ -1633,7 +1661,9 @@ def evaluate(args: TrainArgs):
         plot_fft_samples = False #True             # Plot fft of eeg for data and model reconstruction for single samples
         plot_latent_samples = False #True
         compute_encoder_consistency = True
-        compute_reconstruction_metrics_stats_across_dataset = True
+        # Recon-only v4 runs skip the per-sample metrics + eval figures (the *_vs_* plots       #jm v4
+        # under the checkpoint dir): we only want the reconstructed .fif. Much faster.
+        compute_reconstruction_metrics_stats_across_dataset = (v4_reconstructor is None)
 
         sample_steps = args.diffusion_sample_steps    # for diffusion process in .sample
         cfg = args.diffusion_cfg            # for diffusion process in .sample (1.0 = no cfg)
@@ -1667,7 +1697,8 @@ def evaluate(args: TrainArgs):
 
         # CLODE: plot/score exactly this many samples (subset of the frozen pool in
         # fixed_eval mode). Was hardcoded to 5; now driven by config plot_num_batches.
-        num_batches = getattr(args.data, "plot_num_batches", 5)
+        # V4 single-pass: process ALL segments (natural stop = StopIteration); lift the cap.  #jm v4
+        num_batches = 10**9 if getattr(args.data, "use_v4", False) else getattr(args.data, "plot_num_batches", 5)
         batch_cntr = 0
 
         
@@ -1700,7 +1731,11 @@ def evaluate(args: TrainArgs):
 
 
         while True:
-            batch = next(batch_iterator)     
+            try:
+                batch = next(batch_iterator)
+            except StopIteration:                                                    #jm v4
+                print(f"[v4] batch iterator exhausted after {batch_cntr} batches")   #jm v4
+                break
             batch_cntr += 1
 
 
@@ -1710,10 +1745,21 @@ def evaluate(args: TrainArgs):
             batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
             
 
+            # Pop V4 reconstruction metadata before process(**batch)/.cuda(); re-attach after.  #jm v4
+            v4_meta_keys = ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
+                            'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
+                            'v4_channel_names', 'v4_sfreq', 'v4_raw_info', 'v4_unfiltered_volts')
+            v4_meta = {k: batch.pop(k) for k in v4_meta_keys if k in batch}
+            batch.pop('v4_step_times', None)
+            v4_token_dropout = batch.get('token_dropout', None)
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
             
             batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
+            if v4_reconstructor is not None:                                          #jm v4
+                batch.update(v4_meta)   # re-attach non-tensor recon metadata
+                if v4_token_dropout is not None:
+                    batch['token_dropout'] = v4_token_dropout.cuda(non_blocking=True)
 
             tf = args.data.num_fine_time_pts
             tc = args.data.seq_len // tf # This would assume tc is same for all samples, but is overwritten below by max_tc for each sample.
@@ -1817,6 +1863,19 @@ def evaluate(args: TrainArgs):
 
 
                 
+                # Buffer per-segment reconstructions for .fif save-out.  #jm v4
+                if v4_reconstructor is not None:
+                    v4_reconstructor.add_batch(
+                        batch=batch,
+                        model_signal_input_unwrapped=model_signal_input_unwrapped,
+                        model_signal_output_unwrapped=model_signal_output_unwrapped,
+                        channel_id_unwrapped=channel_id_unwrapped,
+                        t_coarse_unwrapped=t_coarse_unwrapped,
+                    )
+                    # Recon-only fast path: the .fif is buffered above, so skip the per-sample   #jm v4
+                    # MNE interpolation, reconstruction metrics and eval figures below.
+                    continue
+
                 # Prepare channel positions for MNE - now, tc can be different for each sample.
                 chan_pos_list = []
                 for i in range(len(model_signal_input_unwrapped)):
@@ -2101,6 +2160,11 @@ def evaluate(args: TrainArgs):
             # # Here if you want to only do a certain number of epochs (like for computng eval metric stats)
             # if epoch > 1:
             #     break
+
+        # V4: stitch buffered segments into continuous .fif (full_reconstruction/ + hybrid/).  #jm v4
+        if v4_reconstructor is not None:
+            v4_reconstructor.save_all()
+            return   # recon-only run: per-sample metrics were skipped, nothing to print  #jm v4
 
         ## Display Stats of reconstruction-based metrics across batches of data
         try:
