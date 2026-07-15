@@ -1477,6 +1477,7 @@ def evaluate(args: TrainArgs):
                 num_fine_time_pts=args.data.num_fine_time_pts,
                 data_norm=getattr(args.data, "data_norm", 1.0),
                 unmasked_from_original=getattr(args.data, "v4_recon_unmasked_from_original", False),
+                seam_correct=getattr(args.data, "v4_recon_seam_correct", True),
             )
             print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
 
