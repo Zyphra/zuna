@@ -40,6 +40,9 @@ def plot_reconstruction_overlay(
     window_sec=None,
     demean=True,
     highlight=True,
+    input_highpass_hz=None,
+    input_lowpass_hz=None,
+    input_notch_hz=None,
 ):
     """Save a stacked per-channel overlay of `input_fif` vs `recon_fif` over the full duration.
 
@@ -52,6 +55,10 @@ def plot_reconstruction_overlay(
     window_sec           : float|None    seconds to plot from the start (None = full recording)
     demean               : bool         subtract each trace's mean for visual alignment
     highlight            : bool         shade inferred (channel, time) regions
+    input_highpass_hz,               apply this preprocessing to the plotted "input" so it is
+    input_lowpass_hz,                compared in the SAME domain as the reconstruction (the model
+    input_notch_hz                   sees highpass/resampled data). Resample-to-recon-rate is
+                                     automatic; these mirror the model's filter settings.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -65,8 +72,20 @@ def plot_reconstruction_overlay(
         except Exception:
             pass
 
+    # Put the plotted "input" in the SAME domain as the reconstruction: resample to the recon's
+    # rate (so the time axes align — inputs are often a different sfreq) and apply the model's
+    # preprocessing (highpass/lowpass/notch). Mirrors EEGDataset_v4._prepare_raw (resample first,
+    # then filter), so input-vs-reconstruction differences reflect the model, not preprocessing.
+    rec_sfreq = raw_rec.info["sfreq"]
+    if int(round(raw_in.info["sfreq"])) != int(round(rec_sfreq)):
+        raw_in.resample(rec_sfreq, verbose="ERROR")
+    if input_highpass_hz is not None or input_lowpass_hz is not None:
+        raw_in.filter(l_freq=input_highpass_hz, h_freq=input_lowpass_hz, verbose="ERROR")
+    if input_notch_hz:
+        raw_in.notch_filter(input_notch_hz, verbose="ERROR")
+
     ch_names = raw_in.ch_names
-    sfreq = raw_in.info["sfreq"]
+    sfreq = raw_in.info["sfreq"]             # == rec_sfreq after resample
     din = raw_in.get_data() * 1e6            # µV
     drec_all = raw_rec.get_data() * 1e6
     T = min(din.shape[1], drec_all.shape[1])
