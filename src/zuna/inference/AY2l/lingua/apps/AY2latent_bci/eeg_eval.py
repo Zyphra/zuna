@@ -1347,7 +1347,8 @@ def evaluate(args: TrainArgs):
         # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
         
         if LOAD_THE_MODEL:
-            if True:
+            Load_from_HF = False
+            if Load_from_HF:
                 # ===== Load model + weights from HuggingFace (Zyphra/ZUNA) =====
                 # Toggle the `if True` to `if False` to fall through to the local
                 # checkpoint / ema.pt loader in the else branch below.
