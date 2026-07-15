@@ -10,7 +10,7 @@ from torch.nn import functional as F
 
 from torch.nn import RMSNorm as TorchRMSNorm
 
-# from xformers.ops import fmha, AttentionBias (CW)
+# from xformers.ops import fmha, AttentionBias 
 from torch.nn.attention.flex_attention import (
     BlockMask,
     flex_attention,
@@ -20,94 +20,12 @@ from torch.nn.attention.flex_attention import (
 import math
 
 from lingua import probe
-# flex_attention_comp = torch.compile(flex_attention, dynamic=True, mode='max-autotune') # (CW) - This is the default for training. For eval, we can drop the mode='max-autotune' to save time.
-flex_attention_comp = torch.compile(flex_attention, dynamic=True)                        # (CW) - ??? For eval, we drop the mode='max-autotune' to save time. Will slow down training time by ~10-40% on attention.
+# flex_attention_comp = torch.compile(flex_attention, dynamic=True, mode='max-autotune') # This is the default for training. For eval, we can drop the mode='max-autotune' to save time.
+flex_attention_comp = torch.compile(flex_attention, dynamic=True)                        # ??? For eval, we drop the mode='max-autotune' to save time. Will slow down training time by ~10-40% on attention.
 # flex_attention_comp = torch.compile(flex_attention)
 # flex_attention_comp = flex_attention
 
 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
-#
-# (CW) - moved all this generate_doc_mask stuff into AY2latent_bci/transformer.py 
-
-# def lengths_to_start_ids(lengths):
-#     doc_start = lengths.cumsum(0)
-#     doc_start = doc_start.roll(1)
-#     doc_start[0] = 0
-#     return doc_start
-
-
-# def lengths_to_local_ids(lengths):
-#     assert lengths.ndim == 1
-#     nb_seqs = lengths.size(0)
-#     total_seqlen = lengths.sum()
-#     # This gives the document id of each token
-#     doc_id = torch.repeat_interleave(lengths)
-#     # Compute document start for each document
-#     doc_start = lengths_to_start_ids(lengths)
-#     # Compute document start for each token
-#     doc_start = doc_start[doc_id]
-#     # Compute the position of each token within each document
-#     tok_id = torch.arange(total_seqlen, device=lengths.device) - doc_start
-
-#     return doc_id, tok_id
-
-
-# def generate_doc_mask_mod(
-#     mask_mod: _mask_mod_signature,
-#     lengths: torch.Tensor,
-#     kv_lengths: Optional[torch.Tensor] = None, # for cross-attn
-# ) -> _mask_mod_signature:
-#     """Generates mask mods that apply to inputs to flex attention in the sequence stacked
-#     format.
-
-#     Args:
-#         mask_mod: The mask mod to apply to the documents
-#         lengths: Lengths of each document
-
-#     Note:
-#         What is the sequence stacked format? When assembling batches of inputs, we
-#         take multiple sequences and stack them together to form 1 large sequence. We then
-#         use masking to ensure that the attention scores are only applied to tokens within
-#         the same document.
-
-#     Example:
-
-#     - Square mask
-#       doc_mask         lengths
-#       a a b b b c c    2 3 2
-#     a 1 0 0 0 0 0 0
-#     a 1 1 0 0 0 0 0
-#     b 0 0 1 0 0 0 0
-#     b 0 0 1 1 0 0 0
-#     b 0 0 1 1 1 0 0
-#     c 0 0 0 0 0 1 0
-#     c 0 0 0 0 0 1 1
-
-#     """
-
-#     kv_lengths = kv_lengths if kv_lengths is not None else lengths
-#     q_document_id, q_token_id = lengths_to_local_ids(lengths)
-#     kv_document_id, kv_token_id = lengths_to_local_ids(kv_lengths)
-#     q_max_idx = lengths.sum() - 1
-#     kv_max_idx = kv_lengths.sum() - 1
-
-#     def doc_mask_mod(b, h, q_idx, kv_idx):        
-#         q_idx_cap = torch.minimum(q_max_idx, q_idx)
-#         kv_idx_cap = torch.minimum(kv_max_idx, kv_idx)
-#         valid_idx = (q_idx <= q_max_idx) & (kv_idx <= kv_max_idx)
-#         same_doc = q_document_id[q_idx_cap] == kv_document_id[kv_idx_cap]
-#         q_logical = q_token_id[q_idx_cap]
-#         kv_logical = kv_token_id[kv_idx_cap]
-#         inner_mask = mask_mod(b, h, q_logical, kv_logical)
-
-#         return same_doc & inner_mask & valid_idx
-
-#     return doc_mask_mod
-
-# (CW) - moved all this generate_doc_mask stuff into AY2latent_bci/transformer.py 
-#
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 
 
@@ -284,7 +202,7 @@ class RotaryEmbedding(torch.nn.Module):
             Tuple(torch.Tensor, torch.Tensor): Embedded input tensor and freqs_cis
         """
 
-        tok_idx = None # HARDCODE (CW)! SEE NOTE BELOW. WILL USE SEQLEN PATH.   
+        tok_idx = None # HARDCODE ! SEE NOTE BELOW. WILL USE SEQLEN PATH.   
 
         test = (seqlen is not None) or (tok_idx is not None)
         assert test, "Should provide atleast seqlen or tok_idx"
@@ -431,7 +349,6 @@ class RMSNorm_MohVersion(nn.Module):
 
 
         # print(f"Inside RMSNorm.__init__, {channel_dim=}, {dim=}, {eps=}")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         if channel_dim != -1: #channel_dim is the index of the channel dimension, dim is the number of channels. assume 4 dimensions.
             self.weight = nn.Parameter(torch.ones([1]*channel_dim + [dim] + [1]*(4-channel_dim-1))).float()
@@ -535,7 +452,7 @@ class Attention(nn.Module):
 
         self.do_QK_norm = True
         if self.do_QK_norm:
-            self.q_norm = RMSNorm(head_dim, eps=1e-5) #(CW) - 1e-5 is the default value in BaseTransformerArgs.norm_eps
+            self.q_norm = RMSNorm(head_dim, eps=1e-5) #1e-5 is the default value in BaseTransformerArgs.norm_eps
             self.k_norm = RMSNorm(head_dim, eps=1e-5) 
 
         self.wq = nn.Linear(
@@ -569,8 +486,6 @@ class Attention(nn.Module):
         attn_impl: str = "sdpa",
     ) -> torch.Tensor:
 
-        # print("Inside lingua.transformer.Attention forward!!! ")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         x = x.to(dtype=self.wq.weight.dtype) 
 
@@ -594,7 +509,6 @@ class Attention(nn.Module):
             xk = self.k_norm(xk)
             # print(f"\n\nInside lingua.transformer.Attention forward, after qk_norm: {xq.shape=}, {xk.shape=}")
             # print(f"after qk_norm: {xq.abs().max()=}, {xk.abs().max()=},{xq.norm(dim=-1).mean()=}, {xk.norm(dim=-1).mean()=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
         if self.rope_dim==0:
@@ -603,7 +517,6 @@ class Attention(nn.Module):
         elif self.rope_dim==1:
 
             # print(f"Inside attention block with 1d-RoPE: with \n \t{freq_cis.shape=}, \n \t{tok_idx.shape=}, \n \t{freq_cis[tok_idx].shape=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             # Inside attention block with 1d-RoPE:
             #   freq_cis.shape            = [10, 32, 2, 2] = [max_seqlen, head_dim//2, 2, 2]
@@ -617,7 +530,6 @@ class Attention(nn.Module):
         elif self.rope_dim==4:
 
             # print(f"Inside attention block with 4d-RoPE: \n \t{freq_cis.shape=}, \n \t{tok_idx.shape=}, \n \t{freq_cis[tok_idx].shape=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             # Inside attention block with 4d-RoPE: 
             #     freq_cis.shape = [10, 8, 2, 2] = [max_seqlen, head_dim//(2*rope_dim), 2, 2] 
@@ -636,8 +548,7 @@ class Attention(nn.Module):
 
 
         else:
-            print(f"I dont know how to handle {self.rope_dim=} inside lingua.transformer.Attention.forward")
-            import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+            raise ValueError(f"Unsupported rope_dim={self.rope_dim} in Attention.forward")
 
 
         # print(x, xq, xk, xv, freq_cis, tok_idx, seq_len)
@@ -649,7 +560,7 @@ class Attention(nn.Module):
         xk = repeat_kv(xk, self.heads_per_group, dim=2)
         xv = repeat_kv(xv, self.heads_per_group, dim=2)
 
-        # print(f"Inside attention.forward, {mask=}") # (CW)
+        # print(f"Inside attention.forward, {mask=}") # 
 
         if attn_impl == "flex_attention":
             assert mask is None or isinstance(mask, BlockMask)
@@ -674,7 +585,6 @@ class Attention(nn.Module):
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
             # print(f"Inside lingua.transformer.Attention forward, after flex_attention_comp: {xq.shape=}, {xk.shape=}, {xv.shape=}, {output.shape=}")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
             # print(f"Inside lingua.transformer.Attention forward, after flex_attention_comp: {xq.shape=}, {xk.shape=}, {xv.shape=}, {output.shape=}")
 
         elif attn_impl == "sdpa":
@@ -698,7 +608,6 @@ class Attention(nn.Module):
         output = self.wo(output.reshape(output_shape))
 
         # print(f"INside Attention.forward, after attention, {output.shape=}, {output.dtype=}")
-        # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         return output
 
@@ -765,8 +674,6 @@ class FeedForward(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        # print("Inside lingua.transformer.FeedForward forward!!! ")
-        # import IPython; print('\n\n\Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         x = x.to(dtype=self.w1.weight.dtype)
 
@@ -840,7 +747,6 @@ class TransformerBlock(nn.Module):
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
         # print(f"Inside TransformerBlock __init__, ")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
         # print(f"Insider TransformerBlock __init__, {args.dim=}, {args.norm_eps=}, ")
 
@@ -863,33 +769,31 @@ class TransformerBlock(nn.Module):
             print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN TransformerBlock.forward")
 
             # # Print all the activation stats for the dropped and non-dropped tokens if do_idx is provided
-            x_normed = self.attention_norm(x) # (CW)
+            x_normed = self.attention_norm(x) # 
 
             # print("\nInside TransformerBlock.forward with do_idx provided:")
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
-            print(f"\n\t Encoder attn_norm (drop-out): mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
-            print(f"\t Encoder attn_norm (non-drop): mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
-            h = + self.attention(                         # (CW) - lingua.transformer.Attention
-                x_normed, # (CW)
+            print(f"\n\t Encoder attn_norm (drop-out): mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # 
+            print(f"\t Encoder attn_norm (non-drop): mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # 
+            h = + self.attention(                         # lingua.transformer.Attention
+                x_normed, # 
                 freq_cis,
                 tok_idx=tok_idx,
-                mask=mask, # (CW) - WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
+                mask=mask, # WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
                 attn_impl=attn_impl,
             )
-            h_normed = self.ffn_norm(h) # (CW)
-            print(f"\n\t Encoder ffn_norm (drop-out): mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # (CW)
-            print(f"\t Encoder ffn_norm (non-drop): mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
-            out = h + self.feed_forward(h_normed)  # (CW) - lingua.transformer.FeedForward
+            h_normed = self.ffn_norm(h) # 
+            print(f"\n\t Encoder ffn_norm (drop-out): mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # 
+            print(f"\t Encoder ffn_norm (non-drop): mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # 
+            out = h + self.feed_forward(h_normed)  # lingua.transformer.FeedForward
 
         else:
 
             # print(f"INside TransformerBlock.forward, before attention,  {x.dtype=}")
-            # import IPython; print('\n\n Debug:'); IPython.embed(); import time;  time.sleep(0.3)
 
             # Attention Module:
             h = x.float() + self.attention_norm_post(
@@ -897,7 +801,7 @@ class TransformerBlock(nn.Module):
                     self.attention_norm(x.float()).to(dtype=self.attention.wq.weight.dtype),               # pre-norm in FP32
                     freq_cis,
                     tok_idx=tok_idx,
-                    mask=mask, # (CW) - WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
+                    mask=mask, # WORKS IF MASK=NONE.  FlexAttn BlockMask object does not get along with torch.compile()
                     attn_impl=attn_impl,
                 ).float()                                                                                   # sandwich norm post-norm in FP32
             ).float()                                                                                       # residual in FP32
@@ -918,53 +822,3 @@ class TransformerBlock(nn.Module):
         self.ffn_norm.reset_parameters()
 
 
-# class BaseTransformer(nn.Module):
-#     def __init__(self, args: BaseTransformerArgs):
-#         super().__init__()
-#         self.dim = args.dim
-#         self.init_base_std = args.init_base_std
-#         self.init_std_factor = InitStdFactor(args.init_std_factor)
-#         self.max_seqlen = args.max_seqlen
-#         self.rope_embeddings = RotaryEmbedding(
-#             theta=args.rope_theta,
-#             head_dim=args.head_dim or args.dim // args.n_heads,
-#             max_seqlen=args.max_seqlen,
-#         )
-
-#         self.layers = nn.ModuleList()
-#         for _ in range(args.n_layers):
-#             self.layers.append(TransformerBlock(args))
-
-#         print("WRONG ONE BaseTransformer __init__")
-
-#     def forward(
-#         self,
-#         h,
-#         tok_idx: Optional[torch.Tensor] = None,
-#         mask: Optional[Union[BlockMask,  str]] = None,
-#         attn_impl: str = "sdpa",
-#     ):
-        
-#         print("WRONG ONE BaseTransformer forward")
-
-#         freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, tok_idx=tok_idx)
-
-#         for i, layer in enumerate(self.layers):
-#             h = layer(h, freq_cis, tok_idx=tok_idx, mask=mask, attn_impl=attn_impl)
-#         return h
-
-#     def reset_parameters(self):
-#         # Either use fixed base std or sqrt model dim
-#         self.rope_embeddings.reset_parameters()
-
-#     def init_weights(self):
-#         self.reset_parameters()
-#         for depth, layer in enumerate(self.layers):
-#             factor = {
-#                 InitStdFactor.CURRENT_DEPTH: (2 * (depth + 1)) ** 0.5,
-#                 InitStdFactor.GLOBAL_DEPTH: (2 * (len(self.layers) + 1)) ** 0.5,
-#                 InitStdFactor.DIM_RATIO: self.dim / 4096,
-#                 InitStdFactor.DISABLED: 1.0,
-#             }[self.init_std_factor]
-
-#             layer.init_weights(self.init_base_std, factor)

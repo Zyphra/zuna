@@ -9,7 +9,7 @@
 #   >> bash /data/home/jonas/workspace/AY2l/lingua/lingua_jonas.sh #jonas
 
 # 2nd, run something like:
-#   >> CUDA_VISIBLE_DEVICES=0 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
+#   >> CUDA_VISIBLE_DEVICES=1 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
 #   >> CUDA_VISIBLE_DEVICES=4 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
 
 
@@ -216,7 +216,7 @@ def plot_compare_eeg_signal(data,
                             reconst,  
                             mse_value,
                             pcc_value,
-                            eeg_signal=None,  # (CW) - added this argument to see original signal with no dropout  
+                            eeg_signal=None,  # added this argument to see original signal with no dropout  
                             mne_reconstruction = None,
                             fs=256,
                             batch=0, 
@@ -244,7 +244,7 @@ def plot_compare_eeg_signal(data,
     dimx, dimy = best_div
     fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12))
 
-    ## (CW) - old way of doing it, when we were dropping whole channels.
+    ## old way of doing it, when we were dropping whole channels.
 
     # More general way of dropout - assumes anything that is 0.0 has been dropped.
     pct_dropout = (data==0).sum()/data.size
@@ -1376,7 +1376,7 @@ def evaluate(args: TrainArgs):
                 CONFIG  = "config.json"
 
                 model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=False)
+                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
                 sd_st_raw = safe_load(weights_path, device="cpu")
 
                 # Normalize: strip leading "model." if present
@@ -1399,10 +1399,10 @@ def evaluate(args: TrainArgs):
                 model_param_count = get_num_params(model)
 
 
-                # (CW) - DO NOT NEED TO SHARD MODEL FOR INFERENCE
+                # DO NOT NEED TO SHARD MODEL FOR INFERENCE
 
                 if device.type == "cuda":
-                    model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+                    model.sample = torch.compile(model.sample)  # compiled despite graph breaks from the sampling loop in .sample
                     model.encoder = torch.compile(model.encoder)
 
                 # Once we shard the model on different gpus we can actually initialize the model
@@ -1445,7 +1445,7 @@ def evaluate(args: TrainArgs):
 
                 # Model weights are fully loaded above via load_from_checkpoint(init_ckpt_path).
                 # The training-resume path (build_optimizer + TrainState + CheckpointManager, which
-                # needs args.checkpoint.path) is not needed for inference and has been removed. (CW)
+                # needs args.checkpoint.path) is not needed for inference and has been removed. 
                 if getattr(args.optim, "use_ema", False):
                     from apps.AY2latent_bci.ema import EMA
                     _ema = EMA(model)                                  # scaffold; shadow = current weights
@@ -1472,6 +1472,11 @@ def evaluate(args: TrainArgs):
             random.seed(rank_seed)
 
             model.eval()
+            # Inference codebase: never touch Weights & Biases. logging.wandb defaults
+            # to a non-None WandbArgs(), which would trigger wandb.init(); force it off so
+            # MetricLogger only writes the local metrics.jsonl. 
+            if getattr(args, "logging", None) is not None:
+                args.logging.wandb = None
             metric_logger = context_stack.enter_context(
                 MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
         )
@@ -1483,7 +1488,7 @@ def evaluate(args: TrainArgs):
         print("Finishing create dataloader on rank", dp_rank)
 
 
-        # V4 .fif save-out: buffer per-segment model output, stitch to continuous .fif.  #jm v4
+        # V4 .fif save-out: buffer per-segment model output, stitch to continuous .fif.
         v4_reconstructor = None
         if getattr(args.data, "use_v4", False) and getattr(args.data, "v4_recon_save_fif", False):
             _recon_out = getattr(args.data, "v4_recon_out_dir", None) or args.dump_dir
@@ -1499,15 +1504,15 @@ def evaluate(args: TrainArgs):
             print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
 
         epoch = 0 # if using nonlocal epoch
-        def make_batch_iterator(dataloader, data_args):  # (CW) Use with IterableDataset.
+        def make_batch_iterator(dataloader, data_args):  # Use with IterableDataset.
             """
             Moving sequence packing into Dataset/Dataloader/Collator. Too slow when done here.
             """
             nonlocal epoch
             print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
 
-            eeg_sig_norm = data_args.data_norm # (CW) - normalization factor for eeg signal.
-            eeg_sig_clip = data_args.data_clip # (CW) - clipping factor for eeg signal.
+            eeg_sig_norm = data_args.data_norm # normalization factor for eeg signal.
+            eeg_sig_clip = data_args.data_clip # clipping factor for eeg signal.
 
             while True:
                 epoch += 1
@@ -1517,7 +1522,7 @@ def evaluate(args: TrainArgs):
 
                     eeg_signal = batch['eeg_signal']
 
-                    eeg_signal = eeg_signal/eeg_sig_norm # (CW) - Divide by eeg_sig_norm to normalize the data and change its STD.
+                    eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
 
                     if eeg_sig_clip is not None:
                         print(f"Clipping input at +/-{eeg_sig_clip}")
@@ -1532,11 +1537,11 @@ def evaluate(args: TrainArgs):
                         'token_dropout': batch['token_dropout'],
                         'seq_lens': batch['seq_lens'],
                         'max_tc': batch['max_tc'],
-                        'pad_mask': batch['pad_mask'],   # CLODE
+                        'pad_mask': batch['pad_mask'],
                         'idx': batch['ids'],
                         'dataset_id': batch['dataset_id'],
                     }
-                    # Pass V4 reconstruction metadata through (no-op for V2/V3/B2).  #jm v4
+                    # Pass V4 reconstruction metadata through (no-op for V2/V3/B2).
                     for _k in ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
                                'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
                                'v4_channel_names', 'v4_sfreq', 'v4_raw_info',
@@ -1546,7 +1551,7 @@ def evaluate(args: TrainArgs):
                     yield yielded
 
                 print("Finished epoch", epoch)
-                # V4 is single-pass inference — stop after one full walk of the .fif files.  #jm v4
+                # V4 is single-pass inference — stop after one full walk of the .fif files.
                 if getattr(data_args, "use_v4", False):
                     print("[v4] one full pass through all .fif files complete — stopping iterator")
                     return
@@ -1554,11 +1559,11 @@ def evaluate(args: TrainArgs):
         batch_iterator = make_batch_iterator(data_loader, args.data)
         print("Entering create batch iterator on rank", dp_rank)
 
-        # CLODE fixed-eval: plot/score the SAME frozen samples that back the training
+        # fixed-eval: plot/score the SAME frozen samples that back the training
         # curve. Load the identical on-disk pool the training run built (keyed by
         # data_dir/seed/N), take the first `plot_num_batches`, and seed the sampler
         # per GLOBAL pool index so each reconstruction is byte-identical to training.
-        # See eval_harness_clode.md. NOTE: for coherence the training run (or a
+        # See eval_harness.py. NOTE: for coherence the training run (or a
         # pre-build) should create the pool file first; if it is missing here, this
         # single process builds it from its own (world_size=1) data stream.
         if getattr(args.data, "fixed_eval", False):
@@ -1596,7 +1601,7 @@ def evaluate(args: TrainArgs):
         plot_fft_samples = False #True             # Plot fft of eeg for data and model reconstruction for single samples
         plot_latent_samples = False #True
         compute_encoder_consistency = True
-        # Recon-only v4 runs skip the per-sample metrics + eval figures (the *_vs_* plots       #jm v4
+        # Recon-only v4 runs skip the per-sample metrics + eval figures (the *_vs_* plots
         # under the checkpoint dir): we only want the reconstructed .fif. Much faster.
         compute_reconstruction_metrics_stats_across_dataset = (v4_reconstructor is None)
 
@@ -1632,9 +1637,9 @@ def evaluate(args: TrainArgs):
 
 
 
-        # CLODE: plot/score exactly this many samples (subset of the frozen pool in
+        # plot/score exactly this many samples (subset of the frozen pool in
         # fixed_eval mode). Was hardcoded to 5; now driven by config plot_num_batches.
-        # V4 single-pass: process ALL segments (natural stop = StopIteration); lift the cap.  #jm v4
+        # V4 single-pass: process ALL segments (natural stop = StopIteration); lift the cap.
         num_batches = 10**9 if getattr(args.data, "use_v4", False) else getattr(args.data, "plot_num_batches", 5)
         batch_cntr = 0
 
@@ -1670,8 +1675,8 @@ def evaluate(args: TrainArgs):
         while True:
             try:
                 batch = next(batch_iterator)
-            except StopIteration:                                                    #jm v4
-                print(f"[v4] batch iterator exhausted after {batch_cntr} batches")   #jm v4
+            except StopIteration:
+                print(f"[v4] batch iterator exhausted after {batch_cntr} batches")
                 break
             batch_cntr += 1
 
@@ -1679,10 +1684,10 @@ def evaluate(args: TrainArgs):
             eeg_signal = batch['eeg_signal']
 
             batch_idx = batch.pop('idx', None)
-            batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. (CW) - if left in, breaks things below and not training on these.
+            batch_dataset_id = batch.pop('dataset_id', None)   # NOTE: pop takes them out of batch. if left in, breaks things below and not training on these.
             
 
-            # Pop V4 reconstruction metadata before process(**batch)/.cuda(); re-attach after.  #jm v4
+            # Pop V4 reconstruction metadata before process(**batch)/.cuda(); re-attach after.
             v4_meta_keys = ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
                             'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
                             'v4_channel_names', 'v4_sfreq', 'v4_raw_info', 'v4_unfiltered_volts')
@@ -1690,10 +1695,10 @@ def evaluate(args: TrainArgs):
             batch.pop('v4_step_times', None)
             v4_token_dropout = batch.get('token_dropout', None)
             with torch.no_grad(): 
-                batch = data_processor.process(**batch)                             #  > option 3. (CW)
+                batch = data_processor.process(**batch)                             #  > option 3. 
             
             batch = {k: v.to(device, non_blocking=(device.type == "cuda")) for k, v in batch.items()}
-            if v4_reconstructor is not None:                                          #jm v4
+            if v4_reconstructor is not None:
                 batch.update(v4_meta)   # re-attach non-tensor recon metadata
                 if v4_token_dropout is not None:
                     batch['token_dropout'] = v4_token_dropout.to(device, non_blocking=(device.type == "cuda"))
@@ -1702,7 +1707,7 @@ def evaluate(args: TrainArgs):
             tc = args.data.seq_len // tf # This would assume tc is same for all samples, but is overwritten below by max_tc for each sample.
 
             if args.data.use_coarse_time=="C":
-                tc = 1 # (CW) - HARDCODE: USE THIS when chop_signals_only, using first tf seconds in signal.
+                tc = 1 # HARDCODE: USE THIS when chop_signals_only, using first tf seconds in signal.
 
             # ## Options for tok_idx.  Choose 1 in config.
             if args.model.tok_idx_type is None:
@@ -1800,7 +1805,7 @@ def evaluate(args: TrainArgs):
 
 
                 
-                # Buffer per-segment reconstructions for .fif save-out.  #jm v4
+                # Buffer per-segment reconstructions for .fif save-out.
                 if v4_reconstructor is not None:
                     v4_reconstructor.add_batch(
                         batch=batch,
@@ -1809,7 +1814,7 @@ def evaluate(args: TrainArgs):
                         channel_id_unwrapped=channel_id_unwrapped,
                         t_coarse_unwrapped=t_coarse_unwrapped,
                     )
-                    # Recon-only fast path: the .fif is buffered above, so skip the per-sample   #jm v4
+                    # Recon-only fast path: the .fif is buffered above, so skip the per-sample
                     # MNE interpolation, reconstruction metrics and eval figures below.
                     continue
 
@@ -1829,7 +1834,7 @@ def evaluate(args: TrainArgs):
                 )
 
                 # Compute FFT of signal input into model and signal output from model.
-                fft_signal_input_unwrapped, freqs = compute_sig_FFT(eeg_signal_unwrapped, fs) # (CW) - non-dropped-out signal.
+                fft_signal_input_unwrapped, freqs = compute_sig_FFT(eeg_signal_unwrapped, fs) # non-dropped-out signal.
                 fft_signal_output_unwrapped, _ = compute_sig_FFT(model_signal_output_unwrapped, fs)            
 
                 # Compute reconstruction-based metrics between original and reconstructions from model
@@ -2098,10 +2103,10 @@ def evaluate(args: TrainArgs):
             # if epoch > 1:
             #     break
 
-        # V4: stitch buffered segments into continuous .fif (full_reconstruction/ + hybrid/).  #jm v4
+        # V4: stitch buffered segments into continuous .fif (full_reconstruction/ + hybrid/).
         if v4_reconstructor is not None:
             v4_reconstructor.save_all()
-            return   # recon-only run: per-sample metrics were skipped, nothing to print  #jm v4
+            return   # recon-only run: per-sample metrics were skipped, nothing to print
 
         ## Display Stats of reconstruction-based metrics across batches of data
         try:

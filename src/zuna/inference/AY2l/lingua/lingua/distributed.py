@@ -245,7 +245,7 @@ def setup_torch_distributed(dist_args, device: torch.device):
         - global_rank
         - world_size
     """
-    # mp.set_start_method(dist_args.spawn_method) (CW) - commented out because got error it had already been set up.
+    # mp.set_start_method(dist_args.spawn_method) commented out because got error it had already been set up.
     with mp.Manager():
         pass
 
@@ -257,7 +257,7 @@ def setup_torch_distributed(dist_args, device: torch.device):
     os.environ["MASTER_PORT"] = str(
         get_master_port(job_id=int(os.environ.get("SLURM_JOB_ID", -1)))
     )
-    # os.environ["MASTER_PORT"] = str(29495) # (CW) - to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
+    # os.environ["MASTER_PORT"] = str(29495) # to run multiple jobs at one time. Need different master port values. COMMENT OUT FOR MULTI-GPU!
 
     if get_is_torch_run():
         logger.info(f"Run launched with torchrun, local rank: {local_rank}")
@@ -423,7 +423,6 @@ def parallelize_model(
         tp_parallelize(model, device_mesh["tp"], model_args, distributed_args)
 
     # print(f"Inside parallelize_model: Distributed args: {distributed_args}")
-    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
     param_dtype = dict(fp32=torch.float32, fp16=torch.float16, bf16=torch.bfloat16)[
         distributed_args.model_dtype

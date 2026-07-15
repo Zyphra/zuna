@@ -48,9 +48,6 @@ data:
   data_dir: /data/groups/bci/datasets/v7_evalB # (CW) Not in podman env - was /workspace/bci/data/v7_evalB
   glob_filter: 
     - "*.json"
-    #
-    # - "ds*_f03000_*.json"
-    # - "tuh*_f00600_*.json"
 
   mmap_sample_start: null #4096 #1024 # If not None, only sample from between this and stop in the mmap.
   mmap_sample_stop: null #42496 #5376 # If not None, only sample from between this and start in the mmap.
