@@ -363,9 +363,11 @@ class BCIDatasetArgs:
     v4_flat_thresh: Optional[float] = None    # per-(ch,coarse-time) std threshold for flat detection  #jm v4
     v4_noise_thresh: Optional[float] = None   # per-(ch,coarse-time) std MAD multiplier for noisy det. #jm v4
     v4_require_positions: bool = True         # drop channels lacking 3D coords                        #jm v4
+    v4_drop_channels: Optional[List[str]] = None  # channel names to repair (mask->interpolate) even if not flagged bad in the .fif  #jm v4
     v4_recon_save_fif: bool = True            # save model-reconstructed .fif files into dump_dir       #jm v4
     v4_recon_fill_only_masked: bool = True    # fill only masked cells (True) or whole signal (False)   #jm v4
     v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
+    v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir #jm v4
     v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
     # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
     # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
@@ -1971,6 +1973,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         self.flat_thresh           = args.v4_flat_thresh
         self.noise_thresh          = args.v4_noise_thresh
         self.require_positions     = args.v4_require_positions
+        self.drop_channels         = getattr(args, "v4_drop_channels", None)  #jm v4
         self.recon_fill_only_masked = args.v4_recon_fill_only_masked  #jm v4
         self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)  #jm v4
         self.filter_method         = getattr(args, "v4_filter_method", "fir")  #jm v4
@@ -2152,6 +2155,19 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
             else:
                 print(f"  [v4] all {len(raw.ch_names)} ch have file-provided positions; skipping montage '{self.montage}'")
         if prof: _t = self._tick("montage", _t)                                       #jm v4
+
+        # Force-mark user-requested channels as bad (case-insensitive) so the model     #jm v4
+        # interpolates them even if the .fif didn't flag them in info['bads']. Reuses    #jm v4
+        # the same whole-channel bad path as file-marked bads (_compute_bad_mask_2d).    #jm v4
+        if self.drop_channels:
+            _name_by_lower = {c.lower(): c for c in raw.ch_names}
+            _to_bad  = [_name_by_lower[n.lower()] for n in self.drop_channels if n.lower() in _name_by_lower]
+            _missing = [n for n in self.drop_channels if n.lower() not in _name_by_lower]
+            if _missing:
+                print(f"  [v4] v4_drop_channels not present in {Path(fif_path).name}: {_missing}")
+            raw.info["bads"] = list(dict.fromkeys(list(raw.info["bads"]) + _to_bad))
+            if _to_bad:
+                print(f"  [v4] repairing user-requested channels (mask->interpolate): {_to_bad}")
 
         # Drop channels with no 3D position
         chs_loc = np.array([ch["loc"][:3] for ch in raw.info["chs"]])
@@ -2475,6 +2491,233 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         # End of all files for this worker — yield any leftover partial batch
         if packed_batch:
             yield packed_batch
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+
+class FifReconstructor:   #jm v4
+    """
+    Buffers per-segment model reconstructions during an inference run and writes
+    them out as continuous .fif files at the end.
+
+    Usage from eeg_eval.py:
+        rec = FifReconstructor(
+            output_dir=args.dump_dir,
+            raw_info_registry=data_loader.dataset.raw_info_registry,
+            fill_only_masked=args.data.v4_recon_fill_only_masked,
+            num_fine_time_pts=args.data.num_fine_time_pts,
+        )
+        # ... in the eval loop, after `unwrap_all_the_signals(...)`:
+        rec.add_batch(
+            batch=batch,
+            model_signal_input_unwrapped=model_signal_input_unwrapped,
+            model_signal_output_unwrapped=model_signal_output_unwrapped,
+            channel_id_unwrapped=channel_id_unwrapped,
+            t_coarse_unwrapped=t_coarse_unwrapped,
+        )
+        # ... after the loop:
+        rec.save_all()
+
+    Notes:
+      - All math runs in numpy. Model outputs are detached + .cpu().numpy() by the
+        time they reach `add_batch` (via unwrap_all_the_signals).
+      - save_all() writes THREE artifacts per source file:
+          <base>_recon_raw.fif   — pure model output (model everywhere)
+          <base>_hybrid_raw.fif  — original on kept cells, model output on dropped cells
+          <base>_mask.npz        — per (channel, sample) dropout mask + ch_names + sfreq
+        The hybrid's "original" is the raw (resampled, unfiltered) file signal when
+        v4_unfiltered_volts is shipped (v4_recon_unmasked_from_original=true); otherwise
+        it falls back to the filtered model-input signal.
+      - Segments are grouped by fif_path and sorted by seg_start; gaps between
+        segments (if any) stay NaN in the signals and False in the mask.
+    """
+    def __init__(self, output_dir, raw_info_registry, fill_only_masked, num_fine_time_pts,
+                 data_norm=1.0, unmasked_from_original=False):  #jm v4
+        from pathlib import Path
+        self.output_dir = Path(output_dir)
+        # Two output subfolders (jonas): full model reconstruction, and hybrid
+        # (original everywhere except the masked/repaired cells).
+        self.full_dir   = self.output_dir / "full_reconstruction"
+        self.hybrid_dir = self.output_dir / "hybrid"
+        self.full_dir.mkdir(parents=True, exist_ok=True)
+        self.hybrid_dir.mkdir(parents=True, exist_ok=True)
+        self.raw_info_registry = raw_info_registry
+        self.fill_only_masked = fill_only_masked
+        self.tf = int(num_fine_time_pts)
+        self.data_norm = float(data_norm) if data_norm else 1.0
+        # When True, unmasked cells of the recon come straight from the resampled-but-  #jm v4
+        # unfiltered file data shipped in batch['v4_unfiltered_volts']. Only masked     #jm v4
+        # cells go through the inverse-zscore + model-output path. fill_only_masked     #jm v4
+        # is implied to be True in this mode.                                           #jm v4
+        self.unmasked_from_original = bool(unmasked_from_original)
+        # buffer: { fif_path : list of (seg_start, seg_end, signal_array (C_seg, T_seg), channel_names) }
+        self.buffer: dict = {}
+
+    def add_batch(self, batch, model_signal_input_unwrapped, model_signal_output_unwrapped,
+                  channel_id_unwrapped, t_coarse_unwrapped):
+        # Only proceed for V4 batches (which carry the per-segment metadata).
+        if 'v4_fif_path' not in batch:
+            return
+        # Lazily register raw_info from incoming batches. Needed when num_workers>0    #jm v4
+        # because the dataset's raw_info_registry lives in worker processes and is     #jm v4
+        # invisible to the main process. With num_workers=0 this is a no-op since the  #jm v4
+        # dataset already populated the same dict.                                     #jm v4
+        if 'v4_raw_info' in batch:
+            for i, p in enumerate(batch['v4_fif_path']):
+                if p not in self.raw_info_registry:
+                    self.raw_info_registry[p] = batch['v4_raw_info'][i]
+        n_samples = len(model_signal_output_unwrapped)
+        for i in range(n_samples):
+            # invert_reshape_signals returns 2D (C, T_seg) where T_seg = tc * tf.   #jm v4
+            mod_in  = model_signal_input_unwrapped[i]        # (C, T_seg)
+            mod_out = model_signal_output_unwrapped[i]       # (C, T_seg)
+            C, T_seg = mod_out.shape
+            tc = T_seg // self.tf
+            assert T_seg == tc * self.tf, f"reconstructor expected T_seg ({T_seg}) = tc * tf ({tc}*{self.tf})"
+
+            # Slice this sample's token_dropout out of the packed batch.
+            seq_lens     = batch['seq_lens'].cpu().numpy()
+            seqlen_accum = int(sum(seq_lens[:i]))
+            seqlen       = int(seq_lens[i])
+            tok_drop_flat = batch['token_dropout'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(bool)
+            # Use the PACKED chan_id/t_coarse (same token order as token_dropout) so the      #jm v4
+            # (channel, coarse-time) attribution is correct. The *_unwrapped copies are in     #jm v4
+            # grid order (invert_reshape_signals reorders them) and would scramble the mask.    #jm v4
+            chan_id_flat  = batch['chan_id'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(np.int64)
+            t_coarse_flat = batch['t_coarse'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(np.int64)
+
+            # Scatter (chan_id, t_coarse) -> (C, tc) mask.
+            mask_ct = np.zeros((C, tc), dtype=bool)
+            valid = (chan_id_flat < C) & (t_coarse_flat < tc)
+            mask_ct[chan_id_flat[valid], t_coarse_flat[valid]] = tok_drop_flat[valid]
+
+            # Expand (C, tc) -> (C, T_seg) by repeating each coarse bin tf times.
+            mask_full = np.repeat(mask_ct, self.tf, axis=1)   # (C, T_seg)
+
+            # Invert the per-segment normalization back to volts. We build TWO signals  #jm v4
+            # per segment — the pure model output (model everywhere) and the hybrid      #jm v4
+            # (original on kept cells, model on dropped cells) — plus the dropout mask.   #jm v4
+            seg_mean = batch['v4_seg_mean'][i].cpu().numpy().astype(np.float32)    # (C_full,)
+            seg_std  = batch['v4_seg_std'][i].cpu().numpy().astype(np.float32)
+            if seg_mean.shape[0] != C:
+                seg_mean = seg_mean[:C]
+                seg_std  = seg_std[:C]
+            avg_ref_offset = batch['v4_avg_ref_offset'][i].cpu().numpy().astype(np.float32)  # (T_seg,)
+            T_actual = mod_out.shape[1]
+
+            def _add_ref(volts):  # add the per-sample avg-ref offset back (length-robust)
+                if avg_ref_offset.shape[0] >= T_actual:
+                    return volts + avg_ref_offset[None, :T_actual]
+                out = volts.copy()
+                out[:, :avg_ref_offset.shape[0]] += avg_ref_offset[None, :]
+                return out
+
+            # (1) Pure model output, in volts, for EVERY cell.
+            mod_out_volts = _add_ref(
+                (mod_out.astype(np.float32) * self.data_norm) * seg_std[:, None] + seg_mean[:, None]
+            )
+
+            # (2) "Original" signal used for the unmasked cells of the hybrid. Prefer the
+            #     raw (resampled, unfiltered) file volts so the hybrid matches the input
+            #     .fif exactly outside dropped regions; fall back to the model-input
+            #     (filtered) signal when unfiltered volts weren't shipped.
+            if 'v4_unfiltered_volts' in batch:
+                orig_volts = batch['v4_unfiltered_volts'][i].cpu().numpy().astype(np.float32)
+                if orig_volts.shape[1] >= T_actual:
+                    orig_volts = orig_volts[:, :T_actual]
+                else:
+                    pad = np.full((orig_volts.shape[0], T_actual - orig_volts.shape[1]), np.nan, dtype=np.float32)
+                    orig_volts = np.concatenate([orig_volts, pad], axis=1)
+                if orig_volts.shape[0] != C:
+                    orig_volts = orig_volts[:C]
+            else:
+                orig_volts = _add_ref(
+                    (mod_in.astype(np.float32) * self.data_norm) * seg_std[:, None] + seg_mean[:, None]
+                )
+
+            # (3) Hybrid: original on kept cells, model output on dropped cells.
+            recon_hybrid = np.where(mask_full, mod_out_volts, orig_volts).astype(np.float32)
+
+            fif_path  = batch['v4_fif_path'][i]
+            seg_start = int(batch['v4_seg_start'][i])
+            seg_end   = int(batch['v4_seg_end'][i])
+            ch_names  = list(batch['v4_channel_names'][i])
+
+            # Buffer: (seg_start, seg_end, model-output, hybrid, dropout-mask, ch_names)
+            self.buffer.setdefault(fif_path, []).append(
+                (seg_start, seg_end, mod_out_volts, recon_hybrid, mask_full.astype(bool), ch_names)
+            )
+
+    def save_all(self):
+        from pathlib import Path
+        if not self.buffer:
+            print("[v4 recon] no segments buffered — nothing to save.")
+            return
+
+        for fif_path, segs in self.buffer.items():
+            # Dedup by seg_start (later passes overwrite earlier). Necessary when    #jm v4
+            # eeg_eval's make_batch_iterator does multiple epochs over the V4 data.   #jm v4
+            seg_by_start = {}
+            for s in segs:
+                seg_by_start[s[0]] = s
+            segs_sorted = sorted(seg_by_start.values(), key=lambda s: s[0])
+            info = self.raw_info_registry.get(fif_path)
+            if info is None:
+                print(f"[v4 recon] no info registered for {fif_path}; skipping.")
+                continue
+
+            n_chans = len(info["ch_names"])
+            # Determine total length from the largest seg_end
+            n_samples_total = max(s[1] for s in segs_sorted)
+            # Stitch each segment into full-length arrays. Signals start as NaN (so any
+            # uncovered gap is visible); the mask starts as False (uncovered = not dropped).
+            full_model  = np.full((n_chans, n_samples_total), np.nan, dtype=np.float32)
+            full_hybrid = np.full((n_chans, n_samples_total), np.nan, dtype=np.float32)
+            full_mask   = np.zeros((n_chans, n_samples_total), dtype=bool)
+
+            # Map ch_names from the segment back to indices in the full info channel list
+            full_ch_to_idx = {name: i for i, name in enumerate(info["ch_names"])}
+            for seg_start, seg_end, model_seg, hybrid_seg, mask_seg, ch_names in segs_sorted:
+                col_idx = np.array(
+                    [full_ch_to_idx[name] for name in ch_names if name in full_ch_to_idx],
+                    dtype=np.int64,
+                )
+                # Segments are (C_seg, T_seg). T_seg may be < (seg_end - seg_start) if the
+                # segment was snapped down to a tf multiple. Trim to the common window.
+                T_seg = model_seg.shape[1]
+                end_clipped = min(seg_end, seg_start + T_seg)
+                w    = end_clipped - seg_start
+                rows = col_idx[:model_seg.shape[0]]
+                nr   = col_idx.shape[0]
+                full_model[rows,  seg_start:end_clipped] = model_seg[:nr, :w]
+                full_hybrid[rows, seg_start:end_clipped] = hybrid_seg[:nr, :w]
+                full_mask[rows,   seg_start:end_clipped] = mask_seg[:nr, :w]
+
+            src_name = Path(fif_path).stem
+            # Ensure ends with _raw.fif so MNE doesn't warn
+            base = src_name.replace("_raw", "")
+
+            # (1) Pure model output everywhere.
+            model_path = self.full_dir / f"{base}_raw.fif"
+            mne.io.RawArray(full_model, info, verbose="ERROR").save(
+                str(model_path), overwrite=True, verbose="ERROR")
+
+            # (2) Hybrid: original on kept cells, model output on dropped cells.
+            hybrid_path = self.hybrid_dir / f"{base}_raw.fif"
+            mne.io.RawArray(full_hybrid, info, verbose="ERROR").save(
+                str(hybrid_path), overwrite=True, verbose="ERROR")
+
+            # (3) Dropout mask (per channel x sample) so plot_compare_fif can highlight    #jm v4
+            # exactly the cells the model filled in. ch_names travel with it for alignment.
+            mask_path = self.hybrid_dir / f"{base}_mask.npz"
+            np.savez_compressed(str(mask_path), mask=full_mask,
+                                ch_names=np.array(info["ch_names"]),
+                                sfreq=np.float32(info["sfreq"]))
+
+            n_dropped = int(full_mask.sum())
+            print(f"[v4 recon] wrote {model_path.name}, {hybrid_path.name}, {mask_path.name}  "
+                  f"({n_chans} ch, {n_samples_total} samples, {n_dropped} dropped cells)")
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -3491,8 +3734,24 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
             'max_tc':                   torch.tensor([item['max_tc'] for item in batch[0]]),
             'seq_lens':                 torch.tensor([item['seq_lens'] for item in batch[0]]),
             'ids':                      torch.tensor([item['ids'] for item in batch[0]]),                
-            'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),  
+            'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),
         }
+        # V4-only reconstruction metadata, detected by 'fif_path' in the segment dicts.  #jm v4
+        # Absent for V2/V3/B2 batches, so these keys simply aren't added (backward compatible).
+        if batch[0] and ('fif_path' in batch[0][0]):
+            packed_batch_dict['v4_seg_mean']       = [item['seg_mean']       for item in batch[0]]
+            packed_batch_dict['v4_seg_std']        = [item['seg_std']        for item in batch[0]]
+            packed_batch_dict['v4_avg_ref_offset'] = [item['avg_ref_offset'] for item in batch[0]]
+            packed_batch_dict['v4_fif_path']       = [item['fif_path']       for item in batch[0]]
+            packed_batch_dict['v4_seg_start']      = [item['seg_start']      for item in batch[0]]
+            packed_batch_dict['v4_seg_end']        = [item['seg_end']        for item in batch[0]]
+            packed_batch_dict['v4_channel_names']  = [item['channel_names']  for item in batch[0]]
+            packed_batch_dict['v4_sfreq']          = [item['sfreq']          for item in batch[0]]
+            packed_batch_dict['v4_raw_info']       = [item['raw_info']       for item in batch[0]]
+            if 'unfiltered_volts' in batch[0][0]:
+                packed_batch_dict['v4_unfiltered_volts'] = [item['unfiltered_volts'] for item in batch[0]]
+            if 'v4_step_times' in batch[0][0]:
+                packed_batch_dict['v4_step_times'] = batch[0][-1]['v4_step_times']
         return packed_batch_dict
 
     return pack_chans_collate_fn
