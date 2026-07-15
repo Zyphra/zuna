@@ -2884,7 +2884,8 @@ class EEGDataset_v2(IterableDataset):
                                             + (1e15 * self._current_epoch))
                 rng_worker = random.Random(worker_seed)
                 torch.manual_seed(worker_seed)
-                torch.cuda.manual_seed(worker_seed) 
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(worker_seed)
                 #
                 g = torch.Generator()
                 g.manual_seed(worker_seed)  
@@ -3384,8 +3385,9 @@ class EEGDataset_b2(IterableDataset):
                                             + (1e15 * self._current_epoch))
                 rng_worker = random.Random(worker_seed)
                 torch.manual_seed(worker_seed)
-                torch.cuda.manual_seed(worker_seed)
-                
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(worker_seed)
+
                 g = torch.Generator()
                 g.manual_seed(worker_seed)
                 

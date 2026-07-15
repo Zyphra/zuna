@@ -169,11 +169,16 @@ def create_document_mask(lengths: torch.Tensor,
     if base_mask_mod is None:
         base_mask_mod = noop_mask
 
-
-    doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths, kv_lengths)
-
     kv_lengths = kv_lengths if kv_lengths is not None else lengths # added CW.
-    return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), kv_lengths.sum().item())
+
+    if torch.cuda.is_available():
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths, kv_lengths)
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), kv_lengths.sum().item())
+    else:
+        # create_block_mask runs on CPU; ensure closure tensors are on CPU too
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths.cpu(), kv_lengths.cpu())
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), kv_lengths.sum().item(),
+                                device='cpu', _compile=False)
 
 
 def attention_flops_per_token(n_layers, seq_len, dim, causal):
@@ -856,7 +861,7 @@ class EncoderTransformer(BaseTransformer):
 
         self.dropout_vec_type = args.dropout_vec_type
         if self.dropout_vec_type=="learnable":
-            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32, device='cuda')) # rand init for learnable dropout vector # (CW)
+            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) # rand init for learnable dropout vector # (CW) - device follows model via .to(device)
         else:
             self.dropout_vec = None # If None, it will just use zeros for dropped out chans (rather than learnable vector).
 

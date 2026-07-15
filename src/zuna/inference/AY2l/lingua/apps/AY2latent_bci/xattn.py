@@ -181,7 +181,22 @@ class CrossAttention(nn.Module):
         if attn_impl == "flex_attention":
             assert mask is None or isinstance(mask, BlockMask)
             xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-            output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+            if xq.device.type == "mps":
+                # MPS does not support flex_attention; fall back to SDPA with dense mask
+                if mask is not None:
+                    S_q, S_kv = xq.shape[2], xk.shape[2]
+                    q_idx = torch.arange(S_q, device='cpu')
+                    kv_idx = torch.arange(S_kv, device='cpu')
+                    dense_bool = mask.mask_mod(0, 0, q_idx.unsqueeze(1), kv_idx.unsqueeze(0))
+                    attn_mask = torch.zeros(1, 1, S_q, S_kv, dtype=xq.dtype, device=xq.device)
+                    attn_mask.masked_fill_(~dense_bool.unsqueeze(0).unsqueeze(0).to(xq.device), float("-inf"))
+                else:
+                    attn_mask = None
+                output = F.scaled_dot_product_attention(xq, xk, xv, attn_mask=attn_mask)
+            elif xq.device.type == "cuda":
+                output = flex_attention_comp(xq, xk, xv, block_mask=mask)
+            else:
+                output = flex_attention(xq, xk, xv, block_mask=mask)
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
 
 

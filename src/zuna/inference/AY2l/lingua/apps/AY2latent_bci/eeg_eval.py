@@ -1321,12 +1321,23 @@ def evaluate(args: TrainArgs):
     num_t = args.data.seq_len
 
 
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        os.environ['TORCH_COMPILE_DISABLE'] = "1"
+        os.environ['TORCHDYNAMO_DISABLE'] = "1"
+    else:
+        device = torch.device("cpu")
+        os.environ['TORCH_COMPILE_DISABLE'] = "1"
+        os.environ['TORCHDYNAMO_DISABLE'] = "1"
+
     with ExitStack() as context_stack:
         init_signal_handler(set_preemption_flag)  # For handling preemption signals.
         setup_env(args.env)
 
-        setup_torch_distributed(args.distributed)
-        world_mesh = get_device_mesh(args.distributed)
+        setup_torch_distributed(args.distributed, device=device)
+        world_mesh = get_device_mesh(args.distributed, device=device)
         logger.info(f"Starting job: {args.name}")
 
         # build dataloader
@@ -1352,7 +1363,7 @@ def evaluate(args: TrainArgs):
                 # ===== Load model + weights from HuggingFace (Zyphra/ZUNA) =====
                 # Toggle the `if True` to `if False` to fall through to the local
                 # checkpoint / ema.pt loader in the else branch below.
-                device = torch.cuda.current_device()
+                # device selected above (cuda / mps / cpu)
 
                 def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
                     config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
@@ -1376,8 +1387,9 @@ def evaluate(args: TrainArgs):
                 model.load_state_dict(sd_st_on_dev, strict=True)
                 model.eval()
 
-                model.sample = torch.compile(model.sample)
-                model.encoder = torch.compile(model.encoder)
+                if device.type == "cuda":
+                    model.sample = torch.compile(model.sample)
+                    model.encoder = torch.compile(model.encoder)
             else:
                 with torch.device("meta"):
                     model = EncoderDecoder(args.model)
@@ -1389,12 +1401,13 @@ def evaluate(args: TrainArgs):
 
                 # (CW) - DO NOT NEED TO SHARD MODEL FOR INFERENCE
 
-                model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
-                model.encoder = torch.compile(model.encoder)
+                if device.type == "cuda":
+                    model.sample = torch.compile(model.sample)  # <-- this works. Why?!? The for loop in .sample causes graph breaks??
+                    model.encoder = torch.compile(model.encoder)
 
                 # Once we shard the model on different gpus we can actually initialize the model
                 # First we create empty tensors of the correct shapes
-                model = model.to_empty(device=torch.cuda.current_device()) # Use local device, not cuda:0
+                model = model.to_empty(device=device) # Use local device, not cuda:0
                 # Then we init the model. Please make sure this function initializes *ALL* parameters
                 # and buffers, otherwise you will have random values in the unitialized tensors
                 # which will silently fail (give nan gradients for example)
@@ -1403,7 +1416,7 @@ def evaluate(args: TrainArgs):
 
                 ##(CW. Replace below with above)
                 if args.checkpoint.init_ckpt_path:
-                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
                         torch.manual_seed(args.model.seed)
                         model.init_weights()
                     check_model_value_range(model, range=10.0, std=1.0)
@@ -1412,7 +1425,7 @@ def evaluate(args: TrainArgs):
                     logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
                     check_model_value_range(model, range=10.0, std=1.0)
                 else:
-                    with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
+                    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
                         torch.manual_seed(args.model.seed)
                         model.init_weights()
                 check_model_value_range(model, range=10.0, std=1.0)
@@ -1420,12 +1433,15 @@ def evaluate(args: TrainArgs):
                 # log model size
                 logger.info(f"Model size: {model_param_count:,} total parameters")
 
-                gpu_memory_monitor = GPUMemoryMonitor("cuda")
-                logger.info(
-                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-                )
-                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+                if device.type == "cuda":
+                    gpu_memory_monitor = GPUMemoryMonitor("cuda")
+                    logger.info(
+                        f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                        f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
+                    )
+                    logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+                else:
+                    logger.info("Running on CPU/MPS")
 
                 # Model weights are fully loaded above via load_from_checkpoint(init_ckpt_path).
                 # The training-resume path (build_optimizer + TrainState + CheckpointManager, which
@@ -1446,7 +1462,8 @@ def evaluate(args: TrainArgs):
             # Make seed unique per GPU/rank by adding rank to base seed
             rank_seed = args.seed + dp_rank
             torch.manual_seed(rank_seed)
-            torch.cuda.manual_seed(rank_seed)
+            if device.type == "cuda":
+                torch.cuda.manual_seed(rank_seed)
 
             logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
             
@@ -1564,7 +1581,7 @@ def evaluate(args: TrainArgs):
             for p in model.parameters():
                 p.requires_grad = False # True (False for eval, True for training)
 
-        data_processor = EEGProcessor(args.data).to(torch.cuda.current_device())
+        data_processor = EEGProcessor(args.data).to(device)
 
 
 
@@ -1675,11 +1692,11 @@ def evaluate(args: TrainArgs):
             with torch.no_grad(): 
                 batch = data_processor.process(**batch)                             #  > option 3. (CW)
             
-            batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()} 
+            batch = {k: v.to(device, non_blocking=(device.type == "cuda")) for k, v in batch.items()}
             if v4_reconstructor is not None:                                          #jm v4
                 batch.update(v4_meta)   # re-attach non-tensor recon metadata
                 if v4_token_dropout is not None:
-                    batch['token_dropout'] = v4_token_dropout.cuda(non_blocking=True)
+                    batch['token_dropout'] = v4_token_dropout.to(device, non_blocking=(device.type == "cuda"))
 
             tf = args.data.num_fine_time_pts
             tc = args.data.seq_len // tf # This would assume tc is same for all samples, but is overwritten below by max_tc for each sample.
