@@ -1427,19 +1427,9 @@ def evaluate(args: TrainArgs):
                 )
                 logger.info(f"GPU memory usage: {gpu_memory_monitor}")
 
-
-                ## DONT THINK I NEED THIS. (CW)
-                # build optimizer after apply parallelisms to the model
-                optimizer, scheduler = build_optimizer(model, args.optim, args.steps,)
-
-                train_state = TrainState(
-                    step=0,
-                    acc_step=0,
-                    scheduler=scheduler,
-                )
-
-                checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
-                checkpoint.load(model, optimizer, train_state, world_mesh)
+                # Model weights are fully loaded above via load_from_checkpoint(init_ckpt_path).
+                # The training-resume path (build_optimizer + TrainState + CheckpointManager, which
+                # needs args.checkpoint.path) is not needed for inference and has been removed. (CW)
                 if getattr(args.optim, "use_ema", False):
                     from apps.AY2latent_bci.ema import EMA
                     _ema = EMA(model)                                  # scaffold; shadow = current weights
