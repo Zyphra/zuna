@@ -65,17 +65,17 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 
 ## Quick Start
 
-See `tutorials/run_zuna_pipeline_fif.py` for a complete working example. 
+See `tutorials/run_zuna_pipeline_new.py` for a complete working example. 
 
 Note that you can also find a version of this script [here](https://colab.research.google.com/drive/1aL3Gh4FkrWnSBRUqmQmHNz7GTHvWhuf5?usp=sharing) on Google Colaboratory for free GPU access.
 
 Edit the paths and options, then run:
 
 ```bash
-python tutorials/run_zuna_pipeline_fif.py
+python tutorials/run_zuna_pipeline_new.py
 ```
 
-Input `.fif` files must have a channel montage set with 3D positions (see [Setting Montages](#setting-montages) below). The pipeline runs 4 steps:
+<!-- Input `.fif` files must have a channel montage set with 3D positions (see [Setting Montages](#setting-montages) below). The pipeline runs 4 steps:
 
 | Step | Function | Description |
 |------|----------|-------------|
@@ -194,7 +194,7 @@ raw = mne.io.read_raw_fif('data.fif', preload=True)
 montage = mne.channels.make_standard_montage('standard_1005')
 raw.set_montage(montage)
 raw.save('data_with_montage.fif', overwrite=True)
-```
+``` -->
 
 ## Citation
 
