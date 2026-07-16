@@ -6,7 +6,7 @@
 
 [![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA1.1-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA1.1) [![PyPI](https://img.shields.io/pypi/v/zuna?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/)  [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![arXiv](https://img.shields.io/badge/arXiv-2602.18478-b31b1b.svg)](https://arxiv.org/pdf/2602.18478) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**ZUNA1.1** is Zyphra's open foundation model for EEG. It reconstructs noisy or missing channels, denoises recordings, and upsamples sparse electrode layouts to denser ones. Because it conditions on each electrode's **3D scalp coordinates** rather than a fixed channel list, it works on essentially any montage — from a 4-channel Muse headband to a 256-channel research cap — without retraining, and can even generate signals at electrode locations that were never recorded.
+**ZUNA1.1** is Zyphra's open foundation model for EEG. It reconstructs noisy or missing channels, denoises recordings, and upsamples sparse electrode layouts to denser ones. Because it conditions on each electrode's **3D scalp coordinates** rather than a fixed channel list, it works on essentially any montage, from a 4-channel Muse headband to a 256-channel research cap, without retraining, and can even generate signals at electrode locations that were never recorded.
 
 - **Denoise** existing EEG channels
 - **Reconstruct** missing or dropped channels
@@ -20,15 +20,13 @@ ZUNA1.1 is a 380M-parameter diffusion autoencoder trained on ~3.5M channel-hours
 
 No install, no GPU, no code. Upload an EEG recording (`.fif`) — or use a provided sample — to the **[Zyphra Cloud EEG Playground](https://cloud.zyphra.com)**, mark noisy segments (by hand or with auto-select), and denoise or upsample directly in the browser. We host the model and run inference on our servers; nothing is retained after your session, and we do not train on user data.
 
-<!-- TODO: confirm the exact Zyphra Cloud / EEG Playground URL above. -->
-
 ## What's new in ZUNA1.1
 
 ZUNA1.1 keeps the architecture of the original [ZUNA1](https://huggingface.co/Zyphra/ZUNA) but is trained to be far more flexible and robust to real-world data, while matching or exceeding ZUNA1's reconstruction quality:
 
-1. **Variable-length inputs (0.5–30 s)** — a segment length is sampled per training example (snapped to the 0.125 s token grid) instead of only fixed 5 s windows, so the same model serves a 0.5 s trial snippet or a 30 s continuous stretch with no reconfiguration.
-2. **A richer mixture of reconstruction tasks** — trained on **four** realistic channel-dropout patterns (see [Training](#training)) rather than a single random-dropout scheme, covering the many ways real EEG actually gets corrupted.
-3. **Quality-aware preprocessing and a bigger corpus** — a per-channel, per-second quality score recovers signal from partially-noisy channels the old whole-recording pipeline discarded, growing the corpus from ~2M to ~3.5M channel-hours. Two filter variants per recording (a 0.1–45 Hz bandpass and a lighter 0.01 Hz highpass + notch) teach the model to generalize across heterogeneous preprocessing.
+1. **Variable-length inputs (0.5–30 s):** a segment length is sampled per training example (snapped to the 0.125 s token grid) instead of only fixed 5 s windows, so the same model serves a 0.5 s trial snippet or a 30 s continuous stretch with no reconfiguration.
+2. **A richer mixture of reconstruction tasks:** trained on **four** realistic channel-dropout patterns (see [Training](#training)) rather than a single random-dropout scheme, covering the many ways real EEG actually gets corrupted.
+3. **Quality-aware preprocessing and a bigger corpus:** a per-channel, per-second quality score recovers signal from partially-noisy channels the old whole-recording pipeline discarded, growing the corpus from ~2M to ~3.5M channel-hours. Two filter variants per recording (a 0.1–45 Hz bandpass and a lighter 0.01 Hz highpass + notch) teach the model to generalize across heterogeneous preprocessing.
 
 ## Architecture
 
@@ -37,16 +35,16 @@ ZUNA1.1 keeps the architecture of the original [ZUNA1](https://huggingface.co/Zy
   <em>ZUNA1.1 is a transformer encoder–decoder diffusion autoencoder trained to reconstruct masked EEG channels. The main changes from ZUNA1 improve training stability (e.g. additional normalization layers).</em>
 </p>
 
-ZUNA slices each EEG channel into short **0.125 s segments (32 samples at 256 Hz)**, turns each into a continuous-valued token, and serializes them in channel × time order. The key idea is the positional encoding: each token carries a **4D rotary positional encoding over (x, y, z, t)** — the electrode's 3D scalp coordinate plus its coarse-time index. Because *position*, not array index, tells the model where a channel sits, ZUNA is **channel-agnostic**: it accepts any number of electrodes in any layout and can synthesize signals at positions that were never recorded (arbitrary upsampling by location). The encoder compresses the signal into a latent that conditions the decoder via adaptive-RMS norm; the decoder is trained with a rectified-flow objective. For full architecture details, see the [ZUNA technical paper](https://www.zyphra.com/zuna-technical-paper).
+ZUNA slices each EEG channel into short **0.125 s segments (32 samples at 256 Hz)**, turns each into a continuous-valued token, and serializes them in channel × time order. The key idea is the positional encoding: each token carries a **4D rotary positional encoding over (x, y, z, t)** — the electrode's 3D scalp coordinate plus its coarse-time index. Because *position*, not array index, tells the model where a channel sits, ZUNA is **channel-agnostic**: it accepts any number of electrodes in any layout and can synthesize signals at positions that were never recorded (arbitrary upsampling by location). The encoder compresses the signal into a latent that conditions the decoder via adaptive-RMS norm; the decoder is trained with a rectified-flow objective.
 
 ## Training
 
 ZUNA1.1 was trained on a mixture of **four channel-dropout schemes**, each capturing a different way EEG gets corrupted or goes missing:
 
-- **Whole-channel** — entire channels removed (sparse montages, dead electrodes).
-- **Full-time** — short time stretches removed across *every* channel (whole-signal dropouts, head-movement bursts).
-- **Channel-time** — those same time stretches removed from *some* channels only (gaps clustered in space and time, e.g. motion artifacts on nearby electrodes).
-- **Random-uniform** — missing values scattered across individual points (transient, localized noise like a muscle twitch).
+- **Whole-channel:** entire channels removed (sparse montages, dead electrodes).
+- **Full-time:** short time stretches removed across *every* channel (whole-signal dropouts, head-movement bursts).
+- **Channel-time:** those same time stretches removed from *some* channels only (gaps clustered in space and time, e.g. motion artifacts on nearby electrodes).
+- **Random-uniform:** missing values scattered across individual points (transient, localized noise like a muscle twitch).
 
 <p align="center">
   <img src="assets/dropout_schemes_schematic_dark.png" alt="ZUNA1.1 dropout schemes" width="100%"><br>
@@ -121,10 +119,10 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 
 ## Quick Start
 
-`tutorials/run_zuna_pipeline_new.py` is a complete, editable example. It reads `.fif` files from an input directory, reconstructs the selected cells with the model, and writes `.fif` files back out (no `.pt` round-trip). Edit the constants at the top, then run:
+`tutorials/run_zuna_pipeline.py` is a complete, editable example. It reads `.fif` files from an input directory, reconstructs the selected cells with the model, and writes `.fif` files back out (no `.pt` round-trip). Edit the constants at the top, then run:
 
 ```bash
-python tutorials/run_zuna_pipeline_new.py
+python tutorials/run_zuna_pipeline.py
 ```
 
 Model weights download from HuggingFace automatically on first run. Outputs land under `OUTPUT_DIR`:
