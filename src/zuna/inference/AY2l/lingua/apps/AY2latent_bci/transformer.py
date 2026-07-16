@@ -1,3 +1,5 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+
 from dataclasses import dataclass, field
 from math import inf
 from typing import Optional, Tuple, Union, List
@@ -13,12 +15,19 @@ from torch.nn.attention.flex_attention import (
     noop_mask,
 )
 
-torch._dynamo.config.capture_scalar_outputs = True 
+torch._dynamo.config.capture_scalar_outputs = True # to fix graph breaks due to .item() in create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
+
 
 from lingua.transformer import (
+    
+    BaseTransformerArgs,
     RMSNorm,
+    TiedLinear,
     InitStdFactor,
     RotaryEmbedding,
+    SinusoidalEmbedding,             # Single learned scaling parameter for all dimensions.
+    ScaledSinusoidalEmbedding,       # Learnable per-dimension scaling (and optional global gate).
+    LearnedSinusoidalInitEmbedding,  # Fully Learnable [max_seqlen, dim], initialized from analytic sinusoidal_pe.
     TransformerBlock,
 )
 from .xattn import DecoderBlock, FourierConditioner, DecoderArgs, AdaRMSNorm
@@ -27,15 +36,56 @@ from .bottlenecks import mmd_imq
 from vector_quantize_pytorch import SimVQ, FSQ
 import functools
 
-# def create_causal_mask(seqlen, attn_impl, sliding_window):
-#     if attn_impl == "sdpa":
-#         return "causal"
-#     elif attn_impl == "flex_attention":
-#         return create_block_mask(causal_mask, None, None, seqlen, seqlen)
-#     else:
-#         raise NotImplementedError(
-#             f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
-#         )
+def create_causal_mask(seqlen, attn_impl, sliding_window):
+    if attn_impl == "sdpa":
+        return "causal"
+    elif attn_impl == "flex_attention":
+        return create_block_mask(causal_mask, None, None, seqlen, seqlen)
+    else:
+        raise NotImplementedError(
+            f"Attention {attn_impl} with {sliding_window} sliding window not implemented"
+        )
+
+#cache masks with the same args
+
+
+@functools.lru_cache(maxsize=128)
+def create_bidi_mask(seqlen, attn_impl, sliding_window, cross_seqlen=None):
+    """
+    Create a bidirectional attention mask with sliding window constraint.
+    
+    For self-attention: implements true bidirectional window where each token 
+    can attend to tokens within +/- sliding_window positions.
+    
+    For cross-attention: implements position-mapped windows where each query
+    is mapped to a corresponding position in the key space, and can attend to
+    a window around that position.
+    
+    Args:
+        seqlen: Sequence length for queries
+        attn_impl: Attention implementation type
+        sliding_window: Size of the sliding window
+        cross_seqlen: Optional sequence length for keys/values in cross-attention
+    """
+    assert attn_impl == "flex_attention", "Bidirectional mask only supported with flex_attention for now"
+    SLIDING_WINDOW = sliding_window
+    def sliding_window_func(b, h, q_idx, kv_idx):
+        if cross_seqlen is None or cross_seqlen == seqlen:
+            # Self-attention case
+            return (q_idx - kv_idx).abs() <= SLIDING_WINDOW
+        else:
+            # Cross-attention case
+            # Use purely tensor arithmetic instead of int(...) on a torch.Tensor
+            center_k_idx = (q_idx * cross_seqlen) // seqlen
+            return (kv_idx - center_k_idx).abs() <= SLIDING_WINDOW
+
+    # Create the block mask using our sliding window function
+    if cross_seqlen:
+        return create_block_mask(sliding_window_func, None, None, seqlen, cross_seqlen,)
+    else:
+        return create_block_mask(sliding_window_func, None, None, seqlen, seqlen,)
+
+
 
 
 def create_document_mask(lengths: torch.Tensor,
@@ -119,13 +169,15 @@ def create_document_mask(lengths: torch.Tensor,
     if base_mask_mod is None:
         base_mask_mod = noop_mask
 
+    kv_lengths = kv_lengths if kv_lengths is not None else lengths # added CW.
+
     if torch.cuda.is_available():
-        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths)
-        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item())
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths, kv_lengths)
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), kv_lengths.sum().item())
     else:
         # create_block_mask runs on CPU; ensure closure tensors are on CPU too
-        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths.cpu())
-        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), lengths.sum().item(),
+        doc_mask_mod = generate_doc_mask_mod(base_mask_mod, lengths.cpu(), kv_lengths.cpu())
+        return create_block_mask(doc_mask_mod, None, None, lengths.sum().item(), kv_lengths.sum().item(),
                                 device='cpu', _compile=False)
 
 
@@ -196,28 +248,36 @@ def huber_cosine_weighted(input, target, huber_c = 0.1):
 @dataclass
 class DecoderTransformerArgs(DecoderArgs):
 
+
     seed: int = 42
 
     weight_tying: bool = False
     sliding_window: int = 128
     xattn_sliding_window: int = 32
-    input_dim: int = 64 
+    input_dim: int = 64 # was 256 # The same number as number of channels in input BCI data
 
     decoder_encoder_dropout: float = 0.1
     decoder_timestep_dropout: float = 0.1
 
     encoder_sliding_window: int = 128
-    encoder_input_dim: int = input_dim 
-    encoder_output_dim: int = input_dim*2
-    encoder_latent_downsample_factor: int = 2  
+    encoder_input_dim: int = input_dim # was 256  # 
+    encoder_output_dim: int = input_dim*2 # was 32                # "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
+    encoder_latent_downsample_factor: int = 2   # effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
     encoder_hidden_dim: Optional[int] = None
 
-    adaptive_loss_weighting: bool = False  
+    adaptive_loss_weighting: bool = False  # set to true to try to fix GradNorm Spikes. 
+    kept_token_loss_weight: float = 1.0 # weight on NON-dropped tokens
+                                        # loss. 1.0 = current behaviour,
+                                        # 0.0 = MAE (dropped only), 
+                                        # 0.1-0.3 = downweight.
+
+
     num_fine_time_pts: int = 128
     dont_noise_chan_xyz: bool = False
-    stft_global_sigma: Union[str, float] = 1.0 
+    zero_spatial: bool = False # If zero_spatial is True, zero out the spatial dimensions of tok_idx to mimic data with no channel {x,y,z} position information.
+    stft_global_sigma: Union[str, float] = 1.0 # global sigma for stft noise schedule in EncoderDecoder.sample().
 
-    dropout_type: str =  "zero" # {"zero", "rand", "learnable"}
+    dropout_vec_type: str =  "zero" # {"zero", "learnable"}
 
     bottleneck_type: str = "mmd"
     distill_output_dim: int = 0
@@ -236,6 +296,20 @@ class DecoderTransformerArgs(DecoderArgs):
     compression_free_conv_stem: bool = False
 
     max_seqlen: int = 1024
+    max_chans: int = 512 # max number of channels in the dataset - used for APE sinusoidal position embeddings
+
+    rope_dim: int = 4 # 0 = NoPE, 1 = 1D-RoPE in seq-dim, 4 = 4D-RoPE in {x,y,z,tc}.
+    rope_theta: float = 10000.0
+    ape_dim: int = 1 # 0 = No-APE, 1 = 1D-APE on ch_id,
+    ape_theta: float = 10000.0 
+    ape_embedding_type: str = "scaled_1d_sinusoidal" # {"scaled_1d_sinusoidal", "scaled_dim_sinusoidal", "full_learned_sinusoidal"} - Type of APE embedding to use.
+    tok_idx_type: str = "{x,y,z,tc,ch}" # null, "t_coarse", "chan_id", "stack_arange_seqlen", "{x,y,z,tc}", "{x,y,z,tc,ch}"
+
+    model_dtype: str = "fp32" # needed for APE sinusoidal position embeddings. Must match model_dtype in distributed.model_dtype.
+
+    register_tok_idx: str = "mean_all" # {"zero_all", "mean_all", "mean_t"} - If "zero_all", then each register has {x,y,z,t,(ch)} = {0,0,0,0,(0)}. 
+                           # If "mean_all", then each register has {x,y,z,t,(ch)} = {mean(x),mean(y),mean(z),mean(t),mean(ch)}.
+                           # If "mean_t", then each register has {x,y,z,t,(ch)} = {0,0,0,mean(t),(0)}.                                   
 
 class BaseTransformerDecoder(nn.Module):
     def __init__(self, args: DecoderTransformerArgs):
@@ -252,13 +326,15 @@ class BaseTransformerDecoder(nn.Module):
             rope_dim=args.rope_dim,
         )
 
+        
+
+
         self.layers = nn.ModuleList()
         for _ in range(args.n_layers):
             self.layers.append(DecoderBlock(args))
 
         self.repa_index = args.decoder_repa_index
         if self.repa_index != inf:
-            # self.repa_proj = nn.Linear(args.dim, args.repa_dim)
             self.repa_proj = nn.Sequential(
                 nn.Linear(args.dim, args.repa_dim),
                 nn.SiLU(),
@@ -280,13 +356,18 @@ class BaseTransformerDecoder(nn.Module):
         cross_attn_mask: Optional[Union[BlockMask,  str]] = None,
         attn_impl: str = "sdpa",
         repa_target: Optional[torch.Tensor] = None,
-        do_idx: Optional[torch.Tensor] = None,
+        do_idx: Optional[torch.Tensor] = None, # 
     ):
 
         freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, tok_idx=tok_idx)
         repa_loss = None
 
+
+
         for i, layer in enumerate(self.layers):     # all these layers are type 'xattn.DecoderBlock'
+
+
+
             h = layer(h,
                       x_attended,
                       t,
@@ -296,11 +377,12 @@ class BaseTransformerDecoder(nn.Module):
                       self_attn_mask=mask,
                       cross_attn_mask=cross_attn_mask,
                       attn_impl=attn_impl,
-                      do_idx=do_idx,
+                      do_idx=do_idx, # 
             )
 
             if self.training and self.repa_index != inf and i == self.repa_index:
                 repa_loss = self.repa_loss_fn(self.repa_proj(self.repa_norm(h, t)).float(), repa_target,)
+
 
         return h, repa_loss
 
@@ -326,6 +408,8 @@ class BaseTransformerDecoder(nn.Module):
         if self.repa_index != float('inf'):
             init_std = self.init_base_std or (self.dim ** (-0.5))
             self.repa_norm.reset_parameters() # Ensure repa_norm is also reset
+
+            #init repa_proj.weight with zeros
             
             #now repa_proj is nn.Sequential, let's do it in a loop
             for i, layer in enumerate(self.repa_proj):
@@ -337,7 +421,6 @@ class BaseTransformerDecoder(nn.Module):
                         a=-3 * init_std,
                         b=3 * init_std,
                     )
-                    # nn.init.zeros_(layer.weight)
                     if layer.bias is not None:
                         nn.init.zeros_(layer.bias)
             
@@ -368,6 +451,7 @@ class BaseTransformer(nn.Module):
             self.repa_loss_fn = cosine_similarity_loss if args.repa_loss_fn == "cosine" else huber_cosine_weighted
 
 
+
     def forward(
         self,
         h,
@@ -379,12 +463,26 @@ class BaseTransformer(nn.Module):
         **kwargs
     ):
 
-        freq_cis = self.rope_embeddings(seqlen=self.max_seqlen,
-                                        tok_idx=tok_idx
+
+
+
+        # This was the orignal code .
+        freq_cis = self.rope_embeddings(seqlen=self.max_seqlen, # USES MAX_SEQLEN TO BUILD ROPE
+                                        tok_idx=tok_idx         # TOK_IDX IS SET TO NONE INSIDE!
         )
         repa_loss = None
 
+
+
+
+
+        # freqs_cis.shape should be  [1920, 256, 2, 2] I think.
+
+
+        
         for i, layer in enumerate(self.layers):     # all these layers are type 'TransformerBlock'
+
+
             h = layer(h, 
                       freq_cis, 
                       tok_idx=tok_idx, 
@@ -393,8 +491,10 @@ class BaseTransformer(nn.Module):
                       do_idx=do_idx,
             )
 
+
             if self.training and self.repa_index != inf and i == self.repa_index:
                 repa_loss = cosine_similarity_loss(self.repa_proj(self.repa_norm(extract_non_registers(h, **kwargs))).float(), repa_target,)
+
 
 
         return h, repa_loss
@@ -422,13 +522,13 @@ class BaseTransformer(nn.Module):
              nn.init.trunc_normal_(
                  self.repa_proj.weight,
                  mean=0.0,
-                 std=init_std, 
+                 std=init_std, # Use out_init_std based on repa_dim if desired, using self.dim for now
                  a=-3 * init_std,
                  b=3 * init_std,
              )
              if self.repa_proj.bias is not None:
                  nn.init.zeros_(self.repa_proj.bias)
-             self.repa_norm.reset_parameters() 
+             self.repa_norm.reset_parameters() # Ensure repa_norm is also reset
 
 class DecoderTransformer(BaseTransformerDecoder):
     def __init__(self, args: DecoderTransformerArgs):
@@ -439,19 +539,19 @@ class DecoderTransformer(BaseTransformerDecoder):
         if args.huber_c is not None:
             self.huber_c = args.huber_c
         else:
-            self.huber_c = None 
+            self.huber_c = None
 
-        self.tok_embeddings = nn.Linear(args.input_dim, args.dim,) 
+        self.tok_embeddings = nn.Linear(args.input_dim, args.dim,) # *2 was for STFT amplitude & phase
 
         self.t_embedder = FourierConditioner(args.t_dim, std=args.init_base_std)
 
-        self.encoder_proj = nn.Linear(args.encoder_output_dim, args.dim)
+        self.encoder_proj = nn.Linear(args.encoder_output_dim, args.dim) # projection from encoder output dim to model dim
 
         self.norm = AdaRMSNorm(args.t_dim, args.dim, eps=args.norm_eps)
 
         self.output = nn.Linear(
             args.dim,
-            args.input_dim, 
+            args.input_dim, # *2 was for STFT amplitude & phase
             bias=False,
         )
         self.init_base_std = args.init_base_std
@@ -460,19 +560,35 @@ class DecoderTransformer(BaseTransformerDecoder):
             self.use_compression_free_conv_stem = True
 
             self.compression_free_conv_stem_input = CausalConv2DStem(
-                input_features = args.input_dim, 
+                input_features = args.input_dim, # *2 was for STFT amplitude & phase
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,
             )
             self.compression_free_conv_stem_output = CausalConv2DStem(
-                input_features = args.input_dim,
+                input_features = args.input_dim, # *2 was for STFT amplitude & phase
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,
             )
 
         self.adaptive_loss_weighting = args.adaptive_loss_weighting
+        self.kept_token_loss_weight = args.kept_token_loss_weight
+
+        self.ape_dim = args.ape_dim
+        self.ape_theta = args.ape_theta
+
+        if self.ape_dim == 1:
+            if args.ape_embedding_type == "scaled_1d_sinusoidal":
+                self.ape_embedding = SinusoidalEmbedding(args.dim, args.max_chans, args.model_dtype) # Single learned scaling parameter for all dimensions.
+            elif args.ape_embedding_type == "scaled_dim_sinusoidal":
+                self.ape_embedding = ScaledSinusoidalEmbedding(args.dim, args.max_chans, args.model_dtype) # Learnable per-dimension scaling (and optional global gate).
+            elif args.ape_embedding_type == "full_learned_sinusoidal":
+                self.ape_embedding = LearnedSinusoidalInitEmbedding(args.dim, args.max_chans, args.model_dtype) # Fully Learnable [max_seqlen, dim], initialized from analytic sinusoidal_pe.
+            else:
+                raise ValueError(f"Invalid APE embedding type: {args.ape_embedding_type}")
+
+
 
 
     def forward(
@@ -493,10 +609,17 @@ class DecoderTransformer(BaseTransformerDecoder):
         repa_target: Optional[torch.Tensor] = None,
         freq_masks: Optional[torch.Tensor] = None,
         do_idx: Optional[torch.Tensor] = None,
+        pad_mask: Optional[torch.Tensor] = None,   # [N,1] 1=real 0=pad
         print_layerwise_activation_stats: bool = False,
     ):
 
-        tokens = tokens.squeeze(1)  
+
+
+        tokens = tokens.to(dtype=self.tok_embeddings.weight.dtype)
+        cross_attended = cross_attended.to(dtype=self.encoder_proj.weight.dtype)
+
+
+        tokens = tokens.squeeze(1)              
 
         bsz, seqlen, dim = tokens.shape
         _, cross_seqlen, _ = cross_attended.shape
@@ -510,12 +633,13 @@ class DecoderTransformer(BaseTransformerDecoder):
             tokens = self.compression_free_conv_stem_input(tokens)
 
         h = self.tok_embeddings(tokens)
+
         t = self.t_embedder(timeD)
 
         cross_attended = self.encoder_proj(cross_attended)
 
 
-        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK
+        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK - I THINK THIS WORKS!!
         SLIDING_WINDOW = self.sliding_window
         def selfattn_sliding_window_func(b, h, q_idx, kv_idx):
             # Self-attention case
@@ -523,13 +647,16 @@ class DecoderTransformer(BaseTransformerDecoder):
         mask_mod_slide = selfattn_sliding_window_func
         mask = create_document_mask(lengths=seq_lens, base_mask_mod=mask_mod_slide)
         #
+        
+
+
         SLIDING_WINDOW = self.xattn_sliding_window
         def crossattn_sliding_window_func(b, h, q_idx, kv_idx):
             # Cross-attention case
             center_k_idx = (q_idx * cross_seqlen) // seqlen
             return (kv_idx - center_k_idx).abs() <= SLIDING_WINDOW
-        mask_mod_slide = crossattn_sliding_window_func
-        cross_attn_mask = create_document_mask(lengths=seq_lens, kv_lengths=cross_seq_lens, base_mask_mod=mask_mod_slide)
+        cross_mask_mod_slide = crossattn_sliding_window_func
+        cross_attn_mask = create_document_mask(lengths=seq_lens, kv_lengths=cross_seq_lens, base_mask_mod=cross_mask_mod_slide)
 
         visualize_attention_masks = False
         if visualize_attention_masks:
@@ -540,6 +667,11 @@ class DecoderTransformer(BaseTransformerDecoder):
             torch._dynamo.config.disable = False
 
 
+
+
+
+
+
         if tok_idx is not None:
             if tok_idx.ndim==3 and tok_idx.shape[0]==1:
                 tok_idx = tok_idx.squeeze().squeeze() # make it the right size for RoPE.
@@ -548,32 +680,46 @@ class DecoderTransformer(BaseTransformerDecoder):
             if cross_tok_idx.ndim==3 and cross_tok_idx.shape[0]==1:
                 cross_tok_idx = cross_tok_idx.squeeze().squeeze() # make it the right size for RoPE.
 
+
+        # Add APE sinusoidal position embeddings for channel id into token embeddings and cross-attended token embeddings.
+        if self.ape_dim == 1:
+
+            h += self.ape_embedding(tok_idx[:,4]) 
+            cross_attended += self.ape_embedding(cross_tok_idx[:,4])
+
+
+        # . Here we are passing input tokens (h) and enc_out (cross_attended) through the different layers of the BaseTransformerDecoder model.
         h, repa_loss = super().forward(h,
                                        cross_attended,
                                        t=t,
                                        tok_idx=tok_idx,
                                        cross_tok_idx=cross_tok_idx,
-                                       mask=mask, 
-                                       cross_attn_mask=cross_attn_mask, 
+                                       mask=mask, # works if mask set to None.  NOT SURE WHY!
+                                       cross_attn_mask=cross_attn_mask, # works if cross_attn_mask set to None.  NOT SURE WHY!
                                        attn_impl=attn_impl,
                                        repa_target=repa_target,
-                                       do_idx=do_idx,
+                                       do_idx=do_idx, # 
         )
 
-        h_normed = self.norm(h, t) 
 
-        # if print_layerwise_activation_stats and do_idx is not None:
-        #     print(f"\nDecoder output norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ")
-        #     print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}")
-        #     print(f"Decoder output norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ")
-        #     print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}")
 
-        logits = self.output(h_normed) 
+
+        h_normed = self.norm(h, t) # 
+
+        if print_layerwise_activation_stats and do_idx is not None: # 
+            print(f"\nDecoder output norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # 
+            print(f"Decoder output norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # 
+
+        logits = self.output(h_normed.to(dtype=self.output.weight.dtype)) # 
 
         if self.use_compression_free_conv_stem:
             logits = self.compression_free_conv_stem_output(logits)
 
-        losses = self.compute_losses(target, logits, time_masks, freq_masks, channel_loss_weighting)
+
+        losses = self.compute_losses(target, logits, time_masks, freq_masks, channel_loss_weighting, do_idx=do_idx, pad_mask=pad_mask)
+
 
         if repa_target is not None:
             losses["decoder_repa_loss"] = repa_loss#.mean()
@@ -583,33 +729,58 @@ class DecoderTransformer(BaseTransformerDecoder):
 
     
     @torch.compile()
-    def compute_losses(self, target, logits, time_masks, freq_masks, channel_loss_weighting):
+    def compute_losses(self, target, logits, time_masks, freq_masks, channel_loss_weighting, do_idx=None, pad_mask=None):   # +pad_mask
         losses = {}
 
+        # NOTES: Inside EEGProcessor, targets = noise - eeg_signal
         if target is not None:
             if self.huber_c is None:
-                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none") # shape = [B, T, C]
+                batchwise_loss = F.mse_loss(target.float(), logits.float(), reduction="none")  # [B, N, C]
             else:
-                batchwise_loss = huber_loss(target.float(), logits.float(), self.huber_c)
+                batchwise_loss = huber_loss(target.float(), logits.float(), self.huber_c)      # [B, N, C]
 
-            #  Do Adaptive Loss Weighting - to boost loss from channels with small signals so we can better learn small signals.
+            # Do Adaptive Loss Weighting - to boost loss from channels with small signals so we can better learn small signals.
             if self.adaptive_loss_weighting:
                 ALW = batchwise_loss.detach().abs().mean(dim=2).unsqueeze(2) # shape = [B,C,1]
                 batchwise_loss = batchwise_loss/(ALW + 1e-5)
 
-
+            # ---- optional channel / freq / time weighting (all None in current training) ----
             if channel_loss_weighting is not None:
                 batchwise_loss = batchwise_loss * channel_loss_weighting
 
             if freq_masks is not None:
-                batchwise_loss = (batchwise_loss * freq_masks).sum(dim=1) / (freq_masks.sum(dim=1) + 1e-6) # shape = [B,C,1]
+                per_token = (batchwise_loss * freq_masks).sum(dim=1) / (freq_masks.sum(dim=1) + 1e-6)
             else:
-                batchwise_loss = batchwise_loss.mean(dim=-1)
+                per_token = batchwise_loss.mean(dim=-1)            # [B, N]  per-token MSE
 
             if time_masks is not None:
-                batchwise_loss = (batchwise_loss * time_masks).sum(dim=-1) / time_masks.sum(dim=-1)
+                per_token = (per_token * time_masks).sum(dim=-1) / time_masks.sum(dim=-1)
 
-            losses["decoder_rf_loss"] = batchwise_loss.mean()
+            # per-token real mask [1,N]; 1=real, 0=pad. Pad must never enter the
+            #        objective or the diagnostics, regardless of do_idx.
+            pm = (pad_mask.reshape(1, -1).to(per_token.dtype)
+                  if pad_mask is not None else torch.ones_like(per_token))
+
+            # ---- always log the TRUE (un-weighted) full-token loss for monitoring ----
+            losses["decoder_rf_loss_raw"] = ((per_token * pm).sum() / pm.sum().clamp_min(1.0)).detach()  # real-only
+
+            # ---- MAE-style: focus the objective on DROPPED (masked) tokens ----
+            if do_idx is not None and per_token.dim() == 2:
+                # do_idx: bool [N], True = dropped. Make a [1, N] float weight mask.
+                do   = do_idx.reshape(1, -1).to(per_token.dtype) * pm                  # pad is never "dropped"
+                kept = (1.0 - do_idx.reshape(1, -1).to(per_token.dtype)) * pm          # kept AND real
+
+                # compile-safe masked means (no dynamic-shape boolean indexing)
+                nd = do.sum().clamp_min(1.0)
+                nk = kept.sum().clamp_min(1.0)
+                losses["decoder_rf_loss_dropped"] = ((per_token * do).sum() / nd).detach()        # diagnostic
+                losses["decoder_rf_loss_kept"]    = ((per_token * kept).sum() / nk).detach()      # diagnostic
+
+                # objective weight: dropped tokens get 1.0, kept tokens get kept_token_loss_weight, pad gets 0
+                w = do + self.kept_token_loss_weight * kept          # [1, N]  # 0 on pad
+                losses["decoder_rf_loss"] = (per_token * w).sum() / w.sum().clamp_min(1.0)
+            else:
+                losses["decoder_rf_loss"] = (per_token * pm).sum() / pm.sum().clamp_min(1.0)  # real-only
 
         return losses
 
@@ -663,18 +834,39 @@ class EncoderTransformer(BaseTransformer):
         self.weight_tying = False
         self.sliding_window = args.encoder_sliding_window
         self.bottleneck_type = args.bottleneck_type
-        self.downsample_factor = args.encoder_latent_downsample_factor
+        self.df = args.encoder_latent_downsample_factor
         self.distill = args.distill_output_dim != 0
-        self.tok_embeddings = nn.Linear(args.encoder_input_dim, args.dim) 
+
+        self.tok_embeddings = nn.Linear(args.encoder_input_dim, args.dim) # *2 was for STFT amplitude & phase
+
+        self.ape_dim = args.ape_dim
+        self.ape_theta = args.ape_theta
+
+        if self.ape_dim == 1:
+            if args.ape_embedding_type == "scaled_1d_sinusoidal":
+                self.ape_embedding = SinusoidalEmbedding(args.dim, args.max_chans, args.model_dtype) # Single learned scaling parameter for all dimensions.
+            elif args.ape_embedding_type == "scaled_dim_sinusoidal":
+                self.ape_embedding = ScaledSinusoidalEmbedding(args.dim, args.max_chans, args.model_dtype) # Learnable per-dimension scaling (and optional global gate).
+            elif args.ape_embedding_type == "full_learned_sinusoidal":
+                self.ape_embedding = LearnedSinusoidalInitEmbedding(args.dim, args.max_chans, args.model_dtype) # Fully Learnable [max_seqlen, dim], initialized from analytic sinusoidal_pe.
+            else:
+                raise ValueError(f"Invalid APE embedding type: {args.ape_embedding_type}")
+
+
         self.norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.registers = torch.nn.Parameter(torch.zeros(1, args.encoder_input_dim))
-        self.dropout_type = args.dropout_type
-        if self.dropout_type=="learnable":
-            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) # rand init for learnable dropout vector
+
+        self.registers = torch.nn.Parameter(torch.zeros(1, args.encoder_input_dim)) # *2 was for STFT amplitude & phase
+
+        self.register_tok_idx = args.register_tok_idx
+
+        self.dropout_vec_type = args.dropout_vec_type
+        if self.dropout_vec_type=="learnable":
+            self.dropout_vec = torch.nn.Parameter(args.stft_global_sigma*torch.rand(1, args.encoder_input_dim, dtype=torch.float32)) # rand init for learnable dropout vector # device follows model via .to(device)
         else:
             self.dropout_vec = None # If None, it will just use zeros for dropped out chans (rather than learnable vector).
 
         self.init_base_std = args.init_base_std
+
         self.output = nn.Linear(args.dim, args.encoder_output_dim, bias=False)
 
         if args.distill_output_dim != 0:
@@ -701,16 +893,66 @@ class EncoderTransformer(BaseTransformer):
             self.use_compression_free_conv_stem = True
 
             self.compression_free_conv_stem_input = CausalConv2DStem(
-                input_features = args.input_dim,
+                input_features = args.input_dim, # *2 was for STFT amplitude & phase
                 hidden_channels = 32,
                 activation = nn.SELU,
                 compress_channels=False,
             )
 
 
+
+
+
+    def _interleave_registers_combined(self, x: torch.Tensor, tok_idx: torch.Tensor, seq_lens: torch.Tensor):
+        """
+        1) Pad `x` along the sequence dimension so it’s divisible by `self.df`.
+        2) Reshape into groups of length `df`.
+        3) Insert a copy of `self.registers` in front of each group.
+        4) Flatten back out.
+
+        Returns:
+            interleaved: [B, num_groups*(df+1), D]
+            num_groups: int
+            seq_lens_wreg: [1, samples]?
+        """
+
+
+
+        bsz, seqlen, dim = x.shape
+        bsz2, seqlen2, r = tok_idx.shape
+
+        assert seqlen2 == seqlen == seq_lens.sum(), f"seqlen {seqlen} is not equal to seqlen2 {seqlen2} or seq_lens.sum() {seq_lens.sum()}"
+
+
+        df = self.df
+
+        # Number of groups
+        num_groups = (seqlen + df - 1) // df
+        new_seqlen = num_groups * df
+
+        # Pad if needed
+        if new_seqlen > seqlen:
+            pad_len = new_seqlen - seqlen
+            x = torch.cat([x, x.new_zeros(bsz, pad_len, dim)], dim=1)
+            tok_idx = torch.cat([tok_idx, tok_idx.new_zeros(bsz, pad_len, r)], dim=1)
+
+        # Reshape to [B, num_groups, df, D]
+        x = x.reshape(bsz, num_groups, df, dim)
+        tok_idx = tok_idx.reshape(bsz, num_groups, df, r)
+
+        # Expand the single register => [B, num_groups, 1, D]
+        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2)
+
+        # Cat the register in front of each group => [B, num_groups, df+1, D]
+        x = torch.cat([regs, x], dim=2)
+
+        # Flatten => [B, num_groups*(df+1), D]
+        x = x.reshape(bsz, -1, dim).contiguous()
+        return x, num_groups
+
     def _interleave_registers(self, x: torch.Tensor):
         """
-        1) Pad `x` along the sequence dimension so it’s divisible by `self.downsample_factor`.
+        1) Pad `x` along the sequence dimension so it’s divisible by `self.df`.
         2) Reshape into groups of length `df`.
         3) Insert a copy of `self.registers` in front of each group.
         4) Flatten back out.
@@ -721,7 +963,7 @@ class EncoderTransformer(BaseTransformer):
         """
 
         bsz, seqlen, dim = x.shape
-        df = self.downsample_factor
+        df = self.df
 
         # Number of groups
         num_groups = (seqlen + df - 1) // df
@@ -736,7 +978,7 @@ class EncoderTransformer(BaseTransformer):
         x = x.reshape(bsz, num_groups, df, dim)
 
         # Expand the single register => [B, num_groups, 1, D]
-        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2)
+        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2) ##  This .expand errors cryptically. Fix with above. But that errors later. Ugh!
 
         # Cat the register in front of each group => [B, num_groups, df+1, D]
         x = torch.cat([regs, x], dim=2)
@@ -744,6 +986,54 @@ class EncoderTransformer(BaseTransformer):
         # Flatten => [B, num_groups*(df+1), D]
         x = x.reshape(bsz, -1, dim).contiguous()
         return x, num_groups
+
+    def _interleave_register_tok_idx(self, tok_idx: torch.Tensor, seq_lens: torch.Tensor) -> torch.Tensor:
+        """
+        Match `_interleave_registers` along the sequence: each group is
+        [register, tok_0, ..., tok_{df-1}]. Register rows are zero indices.
+
+        tok_idx: [B, S, R]
+        Returns: [B, num_groups * (df + 1), R]
+        """
+        bsz, seqlen, r = tok_idx.shape
+        df = self.df
+
+        num_groups = (seqlen + df - 1) // df
+        new_seqlen = num_groups * df
+
+        if new_seqlen > seqlen:
+            pad_len = new_seqlen - seqlen
+            tok_idx = torch.cat([tok_idx, tok_idx.new_zeros(bsz, pad_len, r)], dim=1)
+
+            print(f"WARNING: new_seqlen {new_seqlen} is greater than seqlen {seqlen} - {pad_len=} - this will introduce rounding error bug.")
+
+
+
+
+
+        tok_idx = tok_idx.reshape(bsz, num_groups, df, r)
+
+        if self.register_tok_idx == "zero_all":
+            reg = tok_idx.new_zeros(bsz, num_groups, 1, r)
+
+        elif self.register_tok_idx == "mean_all":
+            reg = tok_idx.float().mean(dim=2).unsqueeze(2).to(tok_idx.dtype)
+
+        elif self.register_tok_idx == "mean_t":
+            reg = tok_idx.float().mean(dim=2).unsqueeze(2).to(tok_idx.dtype) # mean for t-coordinate
+            reg[:,:,:,0] = 0 # set x to 0
+            reg[:,:,:,1] = 0 # set y to 0
+            reg[:,:,:,2] = 0 # set z to 0
+            if reg.shape[3]>4:
+                reg[:,:,:,4] = 0 # set ch to 0
+
+        else:
+            raise ValueError(f"Invalid register_tok_idx: {self.register_tok_idx}")
+
+        out = torch.cat([reg, tok_idx], dim=2).reshape(bsz, -1, r)
+        return out.contiguous()
+
+
 
     def _extract_registers_and_non_registers(
         self,
@@ -769,7 +1059,7 @@ class EncoderTransformer(BaseTransformer):
                 non_registers: [B, original_seqlen, D]
         """
         bsz, seq_len, dim = h.shape
-        df = self.downsample_factor
+        df = self.df
         # seq_len should be num_groups*(df+1)
         h = h.reshape(bsz, num_groups, df + 1, dim)
 
@@ -791,6 +1081,45 @@ class EncoderTransformer(BaseTransformer):
         
 
 
+    def _extract_registers_and_non_registers_tok_idx(
+        self,
+        tok_idx: torch.Tensor,
+        num_groups: int,
+        original_seqlen: int = None,
+        return_non_registers: bool = False,
+    ) -> Union[Tuple[torch.Tensor, None], Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Same grouping as `_extract_registers_and_non_registers`, for interleaved
+        `tok_idx` (layout from `_interleave_register_tok_idx`).
+
+        Args:
+            tok_idx: [B, num_groups * (df + 1), R]
+            num_groups: Number of groups from interleaving.
+            original_seqlen: Length before pad + interleave; trims non-register stream.
+            return_non_registers: If True, return both register and non-register slices.
+
+        Returns:
+            tok_idx_reg: [B, num_groups, R]
+            tok_idx_non_regs: [B, original_seqlen, R] or None
+        """
+
+
+        bsz, seq_len, r = tok_idx.shape
+        df = self.df
+        tok_idx = tok_idx.reshape(bsz, num_groups, df + 1, r)
+        tok_idx_reg = tok_idx[:, :, 0, :]
+
+        if not return_non_registers:
+            return tok_idx_reg.contiguous(), None
+
+        tok_idx_non_regs = tok_idx[:, :, 1:, :]
+        padded_seqlen = num_groups * df
+        tok_idx_non_regs = tok_idx_non_regs.reshape(bsz, padded_seqlen, r)
+        tok_idx_non_regs = tok_idx_non_regs[:, :original_seqlen, :]
+
+        return tok_idx_reg.contiguous(), tok_idx_non_regs.contiguous()
+
+
     def forward(
         self,
         token_values: torch.Tensor,
@@ -801,35 +1130,66 @@ class EncoderTransformer(BaseTransformer):
         attn_impl: str = "flex_attention",
         repa_target: Optional[torch.Tensor] = None,
         do_idx: Optional[torch.Tensor] = None,
+        pad_mask: Optional[torch.Tensor] = None,   # [N,1] token-space, 1=real 0=pad
         print_layerwise_activation_stats: bool = False,
-    ): 
-        
+    ):
+
+
         _, orig_seqlen, _ = token_values.shape
 
         if self.use_compression_free_conv_stem:
             token_values = self.compression_free_conv_stem_input(token_values)
 
+
+
         token_values, num_groups = self._interleave_registers(token_values)
         bsz, seqlen, _ = token_values.shape
 
-        if do_idx is not None: # (CW)
+        # map token-space pad_mask [N,1] -> latent-space [num_groups,1]. The encoder
+        #        emits one register per group of df tokens, and the bottleneck MMD runs on
+        #        those registers. Pad is contiguous at the end and n_pad % df == 0, so pad
+        #        latents are exactly the trailing registers; .amax over each df-group is robust.
+        latent_pad_mask = None
+        if pad_mask is not None:
+            assert orig_seqlen % self.df == 0, (
+                f"target_packed_seqlen ({orig_seqlen}) must be divisible by "
+                f"encoder_latent_downsample_factor df ({self.df}) for padding.")
+            latent_pad_mask = pad_mask.reshape(num_groups, self.df, -1).amax(dim=1)  # [num_groups,1]
+
+
+
+
+        if do_idx is not None: # 
             do_idx_pre_reg = do_idx                             # indices of dropped-out channels without registers interleaved       
             do_idx = (token_values.sum(axis=2)==0).squeeze(0)   # recompute do_idx after interleaving registers
 
 
         # Now if using Learable Dropout, replace dropped-out channels with a learned but fixed parameter vector.
         if self.dropout_vec is not None:
-            token_values[:,do_idx,:] = self.dropout_vec
+            ## When channel has been dropped out (all-zeros), replace it with a learned but fixed parameter vector. 
+            # I.e. initialize them to torch.randn but set them as nn.Parameter() so they are backpropped to. 
+            # Have it be the same learned embedding for every dropped out channel in the encoder. 
+            # This way the model learns that this fixed vector means 'no information'. 
+            # Ideally it would have roughly the same norm as real data so we don't have the diminishing norm issue of zeros
+            token_values[:,do_idx,:] = self.dropout_vec # Not sure if this is being learned tho actually...
+            # Note: self.registers are a learned vector too, different from self.dropout_vec.
+            # Note: Must do this after interleaving registers using do_idx, not do_idx_pre_reg.
+            #       If we do it before interleaving registers, then do_idx after registers will be (incorrectly) all false!
+
 
         h = self.tok_embeddings(token_values)
-
-        # (CW) - COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK 
+        
+        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK
         SLIDING_WINDOW = self.sliding_window
         def sliding_window_func(b, h, q_idx, kv_idx):
             # Self-attention case
             return (q_idx - kv_idx).abs() <= SLIDING_WINDOW
         mask_mod_slide = sliding_window_func
-        mask = create_document_mask(seq_lens*2, base_mask_mod=mask_mod_slide) # Hardcoding for CR=1 with interleave_registers thing.
+
+
+
+        mask = create_document_mask((seq_lens*(1+1/self.df)).int(), base_mask_mod=mask_mod_slide)
+
 
         visualize_attention_masks = False
         if visualize_attention_masks:
@@ -839,48 +1199,73 @@ class EncoderTransformer(BaseTransformer):
             torch._dynamo.config.disable = False
             
         if tok_idx is not None:
-            tok_idx = tok_idx.repeat_interleave(repeats=2,dim=1)
+            interleaved = self._interleave_register_tok_idx(tok_idx, seq_lens)
+            tok_idx = interleaved         
+
+
             tok_idx = tok_idx.squeeze().squeeze() # make it the right size for RoPE.
 
 
-        # if print_layerwise_activation_stats and do_idx is not None: # (CW)
-        #     print(f"{do_idx.sum()=} and {(~do_idx).sum()=}")
-        #     print(f"{token_values.shape=}")
+
+        if self.ape_dim == 1:
+            h += self.ape_embedding(tok_idx[:,4]) # add sinusoidal position embeddings for channel-id index into token embeddings.
 
 
+        # Note: for dropped-out channels, the token_values will be all zeros, 
+        # but the embeddings h will not be all zeros because of token embedding linear layer (bias in there?).
+        if print_layerwise_activation_stats and do_idx is not None: # 
+            print(f"{do_idx.sum()=} and {(~do_idx).sum()=}")
+            print(f"{token_values.shape=}")
+
+
+
+
+
+
+
+        # Note: torch.compile graph breaks previously caused inference failures in this block.
         h, repa_loss = super().forward(h,                   # BaseTransformer.forward
                                        tok_idx=tok_idx, 
-                                       mask=mask,
+                                       mask=mask, # works if mask set to None.  NOT SURE WHY!
                                        attn_impl=attn_impl, 
                                        repa_target=repa_target, 
                                        num_groups=num_groups, 
                                        original_seqlen=orig_seqlen, 
-                                       downsample_factor=self.downsample_factor,
+                                       downsample_factor=self.df,
                                        do_idx=do_idx,
         )
 
         h, non_regs = self._extract_registers_and_non_registers(h, num_groups, original_seqlen=orig_seqlen, return_non_registers=distill_target is not None)
 
-
-        # if print_layerwise_activation_stats and do_idx is not None: # (CW)
-        #     h_normed = self.norm(h) # (CW)
-        #     print(f"\nEncoder output norm (drop-out): mean={h[:, do_idx_pre_reg, :].mean().item():.6f}, std={h[:, do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
-        #     print(f"mean={h_normed[:, do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, do_idx_pre_reg, :].std().item():.6f}") # (CW)
-        #     print(f"Encoder output norm (non-drop): mean={h[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h[:, ~do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # (CW)
-        #     print(f"mean={h_normed[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, ~do_idx_pre_reg, :].std().item():.6f}") # (CW)
-        #     logits = self.output(h_normed) # (CW)
-        logits = self.output(self.norm(h))
+        if tok_idx is not None:
+            tok_idx_reg, tok_idx_non_regs = self._extract_registers_and_non_registers_tok_idx(tok_idx.unsqueeze(0), num_groups, original_seqlen=orig_seqlen, return_non_registers=distill_target is not None)
 
 
-        logits, losses = self.bottleneck(logits)
+
+        if print_layerwise_activation_stats and do_idx is not None: # 
+            print(f"FIX UP FLOATS HERE IN EncoderTransformer.forward")
+            h_normed = self.norm(h) # 
+            print(f"\nEncoder output norm (drop-out): mean={h[:, do_idx_pre_reg, :].mean().item():.6f}, std={h[:, do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, do_idx_pre_reg, :].std().item():.6f}") # 
+            
+            print(f"Encoder output norm (non-drop): mean={h[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h[:, ~do_idx_pre_reg, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, ~do_idx_pre_reg, :].mean().item():.6f}, std={h_normed[:, ~do_idx_pre_reg, :].std().item():.6f}") # 
+            logits = self.output(h_normed) # 
+        else:
+
+            logits = self.output(self.norm(h).to(dtype=self.output.weight.dtype))
+
+
+        logits, losses = self.bottleneck(logits, latent_pad_mask=latent_pad_mask)
         if distill_target is not None:
+            # do cosine similarity instead
             losses['encoder_distill'] = (1 - F.cosine_similarity(self.distill_output(self.distill_norm(non_regs)), distill_target, dim=-1).mean()) * 0.1 
 
         if repa_target is not None:
             losses["encoder_repa_loss"] = repa_loss#.mean()
-        return logits, losses
+        return logits, tok_idx_reg, losses
 
-    def bottleneck(self, h,):
+    def bottleneck(self, h, latent_pad_mask=None):
         losses = {}
         latent = h
         b, l, d = h.shape
@@ -893,7 +1278,11 @@ class EncoderTransformer(BaseTransformer):
             losses["kl"] = kl_div_loss.mean()
 
         if "mmd" in self.bottleneck_type and self.training:
-            losses["mmd"] = mmd_imq(latent.view(b*l, d).float(), torch.randn((b*l,d), dtype=torch.float32, device=latent.device,), 10.0) 
+            X = latent.view(b*l, d).float()
+            if latent_pad_mask is not None:                                  # OPTION A
+                pm = latent_pad_mask.reshape(b*l, 1).to(X.dtype)             # 1=real, 0=pad
+                X = X * pm + torch.randn_like(X) * (1.0 - pm)                # pad -> prior samples
+            losses["mmd"] = mmd_imq(X, torch.randn((b*l,d), dtype=torch.float32, device=latent.device,), 10.0)
 
         if "sim" in self.bottleneck_type:
             latent, codes, simvq_loss = self.quantizer(h)
@@ -947,6 +1336,9 @@ class EncoderTransformer(BaseTransformer):
         if self.use_compression_free_conv_stem:
             self.compression_free_conv_stem_input.reset_parameters(init_std)
 
+        if hasattr(self, 'ape_embedding'):
+            self.ape_embedding.reset_parameters()
+
     def init_weights(self):
         super().init_weights()
         self.reset_parameters()
@@ -954,6 +1346,7 @@ class EncoderTransformer(BaseTransformer):
 class EncoderDecoder(nn.Module):
     def __init__(self, args: DecoderTransformerArgs):
         super().__init__()
+
 
         self.encoder = EncoderTransformer(args)
         self.decoder = DecoderTransformer(args)
@@ -965,7 +1358,10 @@ class EncoderDecoder(nn.Module):
         self.num_fine_time_pts = args.num_fine_time_pts
         self.dont_noise_chan_xyz = args.dont_noise_chan_xyz
         self.rope_dim = args.rope_dim
+        self.ape_dim = args.ape_dim
         self.tok_idx_type = args.tok_idx_type
+        self.df = args.encoder_latent_downsample_factor
+        self.zero_spatial = args.zero_spatial
 
 
 
@@ -985,7 +1381,8 @@ class EncoderDecoder(nn.Module):
             channel_loss_weighting: Optional[torch.Tensor] = None, # [1, 1, input_dim*2]
             encoder_repa_target: Optional[torch.Tensor] = None,
             decoder_repa_target: Optional[torch.Tensor] = None,
-            freq_masks: Optional[torch.Tensor] = None, # 0s where to not compute loss, 1s where to compute loss [B, 1, C]               
+            freq_masks: Optional[torch.Tensor] = None, # 0s where to not compute loss, 1s where to compute loss [B, 1, C]
+            pad_mask: Optional[torch.Tensor] = None,   # [N,1] 1=real 0=pad
     ):
 
 
@@ -995,8 +1392,12 @@ class EncoderDecoder(nn.Module):
             chan_pos = chan_pos.unsqueeze(0)
             chan_pos_discrete = chan_pos_discrete.unsqueeze(0)
             chan_id = chan_id.unsqueeze(0)
-            t_coarse = t_coarse.unsqueeze(0)
+            t_coarse = t_coarse.unsqueeze(0) # We are just undoing this later...
 
+
+
+
+        
 
         ## Options for tok_idx.  Choose 1.
         if self.tok_idx_type is None:
@@ -1007,122 +1408,167 @@ class EncoderDecoder(nn.Module):
             tok_idx = chan_id       # this uses channel id in 1D-RoPE                             # this is same as hstack(arange(seq_lens)) below when seq_len = num_chans, ie chop_signals_only
         elif self.tok_idx_type == "stack_arange_seqlen" and self.rope_dim==1:
             tok_idx = torch.hstack([torch.arange(sl) for sl in seq_lens]).unsqueeze(0).unsqueeze(-1) # This has a different tok_id value for each element in sequence (chan or tc).
-        elif self.tok_idx_type == "{x,y,z,tc}" and self.rope_dim==4: 
+        elif self.tok_idx_type == "{x,y,z,tc}" and self.rope_dim==4: # 4D-RoPE on {x,y,z,tc}
             tok_idx = torch.cat((chan_pos_discrete,t_coarse), dim=2)
+        elif self.tok_idx_type == "{x,y,z,tc,ch}" and self.rope_dim==4 and self.ape_dim==1: # 4D-RoPE on {x,y,z,tc} + 1D-APE on chan_id
+            tok_idx = torch.cat((chan_pos_discrete,t_coarse,chan_id), dim=2)
         else:
-            raise ValueError(f"Dont understand {self.tok_idx_type=} and {self.rope_dim}")
+            print(f"Dont understand {self.tok_idx_type=} and {self.rope_dim}")
+            die
+
+        # If zero_spatial is True, zero out the spatial dimensions of tok_idx to mimic data with no channel {x,y,z} position information.
+        if self.zero_spatial and tok_idx is not None:
+            tok_idx[:, :, :3] = 0
 
 
-        do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
-        # do_idx = None # [Set do_idx to None to disable printing of activation stats comparing channel drop-out]
 
-        enc_out, enc_losses = self.encoder(encoder_input, 
-                                           distill_target=distill_target,       # (CW) - None
-                                           repa_target=encoder_repa_target,     # (CW) - None
+        do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels 
+
+
+        enc_out, tok_idx_reg, enc_losses = self.encoder(encoder_input, 
+                                           distill_target=distill_target,       # None
+                                           repa_target=encoder_repa_target,     # None
                                            mask=None,
-                                           seq_lens=seq_lens,                   # (CW) - for document masking
-                                           tok_idx=tok_idx,                    # (CW) - pass in coarse time index for 1D RoPE
-                                           do_idx=do_idx,                      # indices of dropped-out channels (CW)
+                                           seq_lens=seq_lens,                   # for document masking
+                                           tok_idx=tok_idx,                     # pass in coarse time index for 1D RoPE
+                                           do_idx=do_idx,                       # indices of dropped-out channels 
+                                           pad_mask=pad_mask,
         )
+
+
+
+
+        assert not (seq_lens/self.df%1).any(), f"seq_lens {seq_lens} is not divisible by df {self.df} - this will introduce rounding error bug."
 
         dec_out, dec_losses = self.decoder(tokens=decoder_input,
-                                           cross_attended=enc_out,
+                                           cross_attended=enc_out, #self.dropout_encoder_outputs(enc_out), - NOT USING THIS DROPOUT! DOING IT IN DATASET NOW.
                                            timeD=t, 
                                            target=target, 
-                                           time_masks=time_masks,                               # (CW) - None
-                                           channel_loss_weighting=channel_loss_weighting,       # (CW) - None
-                                           repa_target=decoder_repa_target,                     # (CW) - None
-                                           freq_masks = freq_masks,                             # (CW) - masks out bad (all-zero) channels [B, 1, C]  
+                                           time_masks=time_masks,                               # None
+                                           channel_loss_weighting=channel_loss_weighting,       # None
+                                           repa_target=decoder_repa_target,                     # None
+                                           freq_masks = freq_masks,                             # masks out bad (all-zero) channels [B, 1, C]  
                                            mask=None,
                                            cross_attn_mask=None,
-                                           seq_lens=seq_lens,                   # (CW) - for document masking in self-attention
-                                           cross_seq_lens=seq_lens,             # (CW) - for document masking in cross-attention (with CR=1)
-                                           tok_idx=tok_idx,                     # (CW) - pass in coarse time index for 1D RoPE
-                                           cross_tok_idx=tok_idx,               # (CW) - pass in coarse time index for 1D RoPE (with CR=1)
-                                           do_idx=do_idx, #.squeeze(0) if do_idx is not None else None,  # indices of dropped-out channels (CW)
+                                           seq_lens=seq_lens,                   # for document masking in self-attention
+                                           cross_seq_lens=(seq_lens//self.df).int(),    # NOTE! - This may introduce rounding error bug if seq_lens is not divisible by df.
+                                           tok_idx=tok_idx,                     # pass in coarse time index for 1D RoPE
+                                           cross_tok_idx=tok_idx_reg,               # pass in coarse time index for 1D RoPE (with CR=1)
+                                           do_idx=do_idx, #.squeeze(0) if do_idx is not None else None,  # indices of dropped-out channels 
+                                           pad_mask=pad_mask,
         )
 
+
+
+        
+
         return dec_out, enc_losses, dec_losses
+
+    def dropout_encoder_outputs(self, enc_out: torch.Tensor):
+        """
+        This was the dropout scheme handed down from Audio.
+        NOT USING CURRENTLY - Doing dropout at encoder_inputs.
+        Drop entire batch elements or entire sequence elements
+        """
+
+
+        # (1). This zeros out entire batch in encoder output 
+        bsz, seqlen, dim = enc_out.shape
+        mask = torch.rand(bsz, 1, 1, device=enc_out.device) > self.encoder_dropout
+        enc_out = enc_out * mask if self.training else enc_out
+
+        # (2). This zeros out entire channels in encoder output 
+        dout = F.dropout1d(enc_out, p=self.decoder_timestep_dropout, training=self.training)
+
+        # (3). We are NOT dropping out specific time points across all channels. This is good. Dont think we want to. 
+
+               
+        return dout
 
 
     @torch.no_grad()
     def sample(self, encoder_input: torch.Tensor, seq_lens: torch.Tensor, tok_idx: torch.Tensor, sample_steps: int = 50, cfg: float = 1.0):
 
-        device = encoder_input.device
-        dtype = torch.bfloat16 # if device.type == "cuda" else torch.float16 # torch.float32
-        # CPU Autocast only supports dtypes of torch.bfloat16, torch.float16 currently.
-        with torch.autocast(device.type, dtype=dtype):
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        ## Trying to do inference with Learned Dropout Vector (not zeros for dropout).
+        do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels
 
-            do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels (CW) 
 
-            # do_idx = None # [Set do_idx to None to disable printing of activation stats comparing channel drop-out]
-            enc_out, _ = self.encoder(
-                            token_values=encoder_input, 
-                            seq_lens=seq_lens,
-                            tok_idx=tok_idx,
-                            do_idx=do_idx,
+        enc_out, tok_idx_reg, _ = self.encoder(
+                        token_values=encoder_input, 
+                        seq_lens=seq_lens,
+                        tok_idx=tok_idx,
+                        do_idx=do_idx,
+        )
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+
+
+        bsz, seqlen, dim = enc_out.shape
+        dt_time = torch.tensor([1.0 / sample_steps] * bsz, device=enc_out.device).view(-1)
+
+
+        z = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device) # was init to rand
+
+
+        # Do not noise channel {x,y,z}-position in eeg_signal
+        if self.dont_noise_chan_xyz:
+            if dim==131 or dim==35:
+                z[:,:,:3] = encoder_input[:,:,:3]
+            else:
+                print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
+
+
+        dt = dt_time.unsqueeze(-1).unsqueeze(-1) # added dbl unsqueeze(-1)
+
+        outputs = []
+        for i in range(sample_steps, 0, -1):
+            t = dt_time * i
+            t_model = t.unsqueeze(1).unsqueeze(1)
+
+
+            vc, _ = self.decoder(tokens=z.unsqueeze(1),
+                                    cross_attended=enc_out, 
+                                    timeD=t_model, 
+                                    seq_lens=seq_lens,                   # for document masking in self-attention
+                                    cross_seq_lens=seq_lens,             # for document masking in cross-attention (with CR=1)
+                                    tok_idx=tok_idx,                     # pass in coarse time index for 1D RoPE
+                                    cross_tok_idx=tok_idx,               # pass in coarse time index for 1D RoPE (with CR=1)               
             )
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-            bsz, seqlen, dim = enc_out.shape
-            dt_time = torch.tensor([1.0 / sample_steps] * bsz, device=enc_out.device).view(-1)
 
 
-            z = self.global_sigma*torch.randn_like(encoder_input).to(enc_out.device) # init to rand
-            # z = torch.zeros_like(encoder_input).to(enc_out.device) # init to zeros
+            #   Special case:
+            #       cfg = 1.0 means use exactly conditioned vc.
+            #   Otherwise:
+            #       low cfg = 1.1 means use mostly unconditioned vc_uncond
+            #       high cfg 10.0 means use mostly conditioned vc 
+            #       cfg < 1.0 would work here (wouldnt error) and means something a little weird - closer to uncond.
+
+            if cfg != 1.0:
+                vc_uncond, _ = self.decoder(tokens=z.unsqueeze(1),
+                                            cross_attended=torch.zeros_like(enc_out), 
+                                            timeD=t_model, 
+                                            seq_lens=seq_lens,                          # for document masking in self-attention
+                                            cross_seq_lens=seq_lens,                    # for document masking in cross-attention (with CR=1)
+                                            tok_idx=tok_idx,                            # pass in coarse time index for 1D RoPE
+                                            cross_tok_idx=tok_idx,                      # pass in coarse time index for 1D RoPE (with CR=1)                
+                )
+
+                vc = vc_uncond + cfg * (vc - vc_uncond) # starts at unconditioned, moves toward conditioned as cfg increases
+                
+            z = z - dt * vc # <-- should this be t or t_model or dt?
 
             # Do not noise channel {x,y,z}-position in eeg_signal
             if self.dont_noise_chan_xyz:
                 if dim==131 or dim==35:
                     z[:,:,:3] = encoder_input[:,:,:3]
                 else:
-                    pass
-                    # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
-                    # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
+                    print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
 
+            outputs.append(z)
 
-            dt = dt_time.unsqueeze(-1).unsqueeze(-1)
-
-            outputs = []
-            for i in range(sample_steps, 0, -1):
-                t = dt_time * i
-                t_model = t.unsqueeze(1).unsqueeze(1)
-
-                vc, _ = self.decoder(tokens=z.unsqueeze(1),
-                                     cross_attended=enc_out, 
-                                     timeD=t_model, 
-                                     seq_lens=seq_lens,                   # for document masking in self-attention
-                                     cross_seq_lens=seq_lens,             # for document masking in cross-attention (with CR=1)
-                                     tok_idx=tok_idx,                     
-                                     cross_tok_idx=tok_idx,                        
-                )
-
-                if cfg != 1.0:
-                    vc_uncond, _ = self.decoder(tokens=z.unsqueeze(1),
-                                                cross_attended=torch.zeros_like(enc_out), 
-                                                timeD=t_model, 
-                                                seq_lens=seq_lens,                          # for document masking in self-attention
-                                                cross_seq_lens=seq_lens,                    # for document masking in cross-attention (with CR=1)
-                                                tok_idx=tok_idx,                           
-                                                cross_tok_idx=tok_idx,                                
-                    )
-
-                    vc = vc_uncond + cfg * (vc - vc_uncond) # starts at unconditioned, moves toward conditioned as cfg increases
-                    
-                z = z - dt * vc
-
-                # Do not noise channel {x,y,z}-position in eeg_signal
-                if self.dont_noise_chan_xyz:
-                    if dim==131 or dim==35:
-                        z[:,:,:3] = encoder_input[:,:,:3]
-                    else:
-                        # print("NOTE: EEG channel {x,y,z}-position was never concatenated into signal.")
-                        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
-                        pass
-
-                outputs.append(z)
-            
-            return z, outputs
+        
+        return z, outputs
 
 
 
@@ -1154,16 +1600,46 @@ def build_fsdp_grouping_plan(model_args: DecoderTransformerArgs) -> List[Tuple[s
     if model_args.encoder_repa_index != inf:
         group_plan.append(("encoder.repa_proj", False))
 
+
     # 2. Encoder Transformer Blocks
     for i in range(model_args.n_layers):
         group_plan.append((f"encoder.layers.{i}", False))
 
-    # 3. Decoder Transformer Blocks
+    # 3. Encoder Output Block - crucial change here
+    # Wrap norm first, keep its output sharded
+    # Wrap the linear output projection. Gather its output (reshard=True)
+    # because it feeds into the bottleneck/loss calculations (MMD, KL)
+    # which likely require the full tensor. This gathered tensor is then
+    # also passed to the decoder, which FSDP will handle.
+
+    # Add distill layers if they exist. Assume they operate on outputs
+    # potentially *before* the final 'encoder.output'. If they operate *after*,
+    # they should also be gathered or handled carefully. Let's assume for now
+    # they use internal states or sharded outputs where possible. If issues arise,
+    # these might need `True` as well depending on their implementation.
+
+    # --- Decoder ---
+    # # 4. Decoder Input Layers
+
+    # 5. Decoder Transformer Blocks
     for i in range(model_args.n_layers):
         group_plan.append((f"decoder.layers.{i}", False))
 
-    # 4. Add Decoder and Encoder themselves
+    # 6. Decoder Output Block
+
+    # --- REPA if they exist ---
+    # 7. REPA layers
+
+
+
+    # 8. Add Decoder and Encoder themselves
     group_plan.append(("encoder", False))
     group_plan.append(("decoder", False))
 
+
+
     return group_plan
+
+
+
+

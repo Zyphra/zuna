@@ -1,156 +1,73 @@
 #!/usr/bin/env python3
 """
-Zuna Pipeline
+Zuna pipeline — direct .fif reconstruction (the standard model).
 
-Runs the complete EEG reconstruction pipeline:
-1. Preprocessing: .fif → .pt (filtered, epoched, normalized)
-2. Inference: .pt → .pt (reconstructed by model)
-3. Reconstruction: .pt → .fif (denormalized, continuous)
-4. Visualization: comparison plots (optional)
+Reads .fif files, reconstructs the "bad"/selected cells with the model, and writes .fif back out
+(no .fif -> .pt -> .fif round-trip). Edit the constants below and run:
 
-Edit the paths and options below, then run:
-    python run_zuna_pipeline.py
+    python run_zuna_pipeline_fif.py
 
-For documentation on each function, run:
-    help(zuna.preprocessing)
-    help(zuna.inference)
-    help(zuna.pt_to_fif)
-    help(zuna.compare_plot_pipeline)
+Outputs under OUTPUT_DIR:
+    full_reconstruction/<name>_raw.fif   model output everywhere
+    hybrid/<name>_raw.fif                original input, model output ONLY on the inferred cells
+    hybrid/<name>_mask.npz               per (channel, sample) mask of what was inferred
+plus a full-duration input-vs-reconstruction overlay per file in FIGURES_DIR.
 """
 
-import shutil
+import os
+import sys
 from pathlib import Path
-from zuna import preprocessing, inference, pt_to_fif, compare_plot_pipeline
 
-# =============================================================================
-# PATHS
-# =============================================================================
+# Run under the repo venv (compatible scipy/numpy) + make the `zuna` package importable.
+_REPO = Path(__file__).resolve().parent.parent
+_VENV_PY = _REPO / "venv" / "bin" / "python3"
+if _VENV_PY.exists() and Path(sys.executable) != _VENV_PY:
+    os.execv(str(_VENV_PY), [str(_VENV_PY), *sys.argv])
+sys.path.insert(0, str(_REPO / "src"))
 
-TUTORIAL_DIR = Path(__file__).parent.resolve()
-INPUT_DIR = str(TUTORIAL_DIR / "data" / "1_fif_input")  ### original: raw .fif input
-WORKING_DIR = str(TUTORIAL_DIR / "data" / "working")    ### replace with your path
+from zuna import reconstruct_fif
 
-# Derived paths (pipeline directory structure)
-WORKING_PATH = Path(WORKING_DIR)
-PREPROCESSED_FIF_DIR = str(WORKING_PATH / "1_fif_filter")
-PT_INPUT_DIR = str(WORKING_PATH / "2_pt_input")
-PT_OUTPUT_DIR = str(WORKING_PATH / "3_pt_output")
-FIF_OUTPUT_DIR = str(WORKING_PATH / "4_fif_output")
-FIGURES_DIR = str(WORKING_PATH / "FIGURES")
+# ============================================================================= PATHS
+DATA        = Path(__file__).parent / "data"
+INPUT_DIR   = DATA / "1_fif_input"     # input .fif files
+OUTPUT_DIR  = DATA / "2_fif_output"    # reconstructed .fif (full_reconstruction/ + hybrid/)
+FIGURES_DIR = DATA / "figures"         # comparison figures
+TMP_DIR     = DATA / "tmp"             # logs/metrics (throwaway)
 
-INPUT_TYPE = "auto"  # "raw", "epochs", or "auto" (auto-detect)
-# =============================================================================
-# PREPROCESSING OPTIONS
-# =============================================================================
+# ============================================================================= OPTIONS
+GPU_DEVICE  = 2            # GPU id (check `nvidia-smi`), or "" for CPU
+SEGMENT_SEC = 5.0          # model segment window length (seconds)
+HIGHPASS_HZ = 0.5          # highpass applied to each .fif before the model (None to skip)
+MONTAGE     = "standard_1020"   # used only to add positions when a .fif lacks them
+WINDOW_SEC  = 60           # seconds shown in each overlay figure (None = full recording)
 
-EPOCH_DURATION = 5.0               # Epoch duration in seconds (only used for raw input)
-APPLY_NOTCH_FILTER = True          # Automatic notch filter for line noise
-APPLY_HIGHPASS_FILTER = True       # 0.5 Hz highpass filter
-APPLY_AVERAGE_REFERENCE = True     # Average reference
+# ============================================================================= WHAT GETS RECONSTRUCTED
+IMPORT_FIF_BAD_SEGMENTS = True                # use the .fif's own BAD_ annotations (whole-channel bads always used)
+REPAIR_CHANNELS         = ["Cz"]                # existing channel(s) to reconstruct completely
+ADD_CHANNELS            = ["Fz", "Pz"]          # NEW channels to add + infer at their montage location
+TARGET_CHANNEL_COUNT    = None                  # OR auto-add up to N total channels (far apart), e.g. 40
+BAD_SEGMENTS            = [(5, 6),              # 5-6 s bad on ALL channels
+                           (10, 11, "C3"),       # 10-11 s bad on C3 only
+                           (10, 11, "C4")]       # 10-11 s bad on C4 only   (-> "just for some" channels)
+MASK_DIR                = None                  # dir of per-file "<base>_mask.npz" (channel x sample bool)
 
-# Channel options
-# TARGET_CHANNEL_COUNT = None   # No upsampling (keep original channels)
-TARGET_CHANNEL_COUNT = 40     # Upsample to N channels (greedy selection)
-# TARGET_CHANNEL_COUNT = ['AF3', 'AF4', 'F1', 'F2', 'FC1', 'FC2', 'CP1', 'CP2', 'PO3', 'PO4']
-
-BAD_CHANNELS = ["Fz", "Cz", "Pz"]
-
-# Artifact removal (disabled by default)
-DROP_BAD_CHANNELS = False       # Detect and remove bad channels
-DROP_BAD_EPOCHS = False         # Detect and remove bad epochs
-ZERO_OUT_ARTIFACTS = False      # Zero out artifact samples
-
-# =============================================================================
-# INFERENCE OPTIONS
-# =============================================================================
-
-GPU_DEVICE = 7                  # GPU ID (default: 0) or "" for CPU
-TOKENS_PER_BATCH = 100000       # Number of tokens per batch - Increase this number for higher GPU utilization.
-DATA_NORM = 10.0                # Data normalization factor denominator to rescale eeg data to have std = 0.1
-                                # NOTE: ZUNA was trained on and expects eeg data to have std = 0.1
-
-DIFFUSION_CFG = 1.0             # Diffusion process in .sample - Default is 1.0 (i.e., no cfg)
-DIFFUSION_SAMPLE_STEPS = 50     # Number of steps in the diffusion process - Default is 50
-
-PLOT_EEG_SIGNAL_SAMPLES = False  # Plot raw eeg for data and model reconstruction for single samples inside inference code.
-                                # NOTE: Will use GPU very inefficiently if True. Set to False when running at scale
-
-# =============================================================================
-# OUTPUT OPTIONS
-# =============================================================================
-
-PLOT_PT_COMPARISON = True       # Plot .pt file comparisons
-PLOT_FIF_COMPARISON = True      # Plot .fif file comparisons
-KEEP_INTERMEDIATE_FILES = True  # If False, deletes .pt files after reconstruction
-NUM_SAMPLES = 2                 # Number of samples to plot for .pt and .fif comparisons
-
-# =============================================================================
-# RUN PIPELINE
-# =============================================================================
-
+# ============================================================================= RUN
 if __name__ == "__main__":
-    # Create working directories
-    for d in [PREPROCESSED_FIF_DIR, PT_INPUT_DIR, PT_OUTPUT_DIR, FIF_OUTPUT_DIR]:
-        Path(d).mkdir(parents=True, exist_ok=True)
-
-    # Step 1: Preprocessing (.fif → .pt)
-    print("[1/4] Preprocessing...", flush=True)
-    preprocessing(
+    reconstruct_fif(
         input_dir=INPUT_DIR,
-        output_dir=PT_INPUT_DIR,
-        input_type=INPUT_TYPE,
-        epoch_duration=EPOCH_DURATION,
-        apply_notch_filter=APPLY_NOTCH_FILTER,
-        apply_highpass_filter=APPLY_HIGHPASS_FILTER,
-        apply_average_reference=APPLY_AVERAGE_REFERENCE,
-        preprocessed_fif_dir=PREPROCESSED_FIF_DIR,
-        drop_bad_channels=DROP_BAD_CHANNELS,
-        drop_bad_epochs=DROP_BAD_EPOCHS,
-        zero_out_artifacts=ZERO_OUT_ARTIFACTS,
-        target_channel_count=TARGET_CHANNEL_COUNT,
-        bad_channels=BAD_CHANNELS,
-    )
-
-    # Step 2: Model Inference (.pt → .pt)
-    print("[2/4] Model inference...", flush=True)
-    inference(
-        input_dir=PT_INPUT_DIR,
-        output_dir=PT_OUTPUT_DIR,
+        output_dir=OUTPUT_DIR,
+        figures_dir=FIGURES_DIR,
+        tmp_dir=TMP_DIR,
         gpu_device=GPU_DEVICE,
-        tokens_per_batch=TOKENS_PER_BATCH,
-        data_norm=DATA_NORM,
-        diffusion_cfg=DIFFUSION_CFG,
-        diffusion_sample_steps=DIFFUSION_SAMPLE_STEPS,
-        plot_eeg_signal_samples=PLOT_EEG_SIGNAL_SAMPLES,
-        inference_figures_dir=FIGURES_DIR,
+        segment_sec=SEGMENT_SEC,
+        highpass_hz=HIGHPASS_HZ,
+        montage=MONTAGE,
+        window_sec=WINDOW_SEC,
+        repair_channels=REPAIR_CHANNELS,
+        # ADD_CHANNELS (specific names) and TARGET_CHANNEL_COUNT (auto N) drive the same upsampling;
+        # a name-list adds those exact channels, an int auto-adds far-apart ones.
+        target_channel_count=(ADD_CHANNELS if ADD_CHANNELS else TARGET_CHANNEL_COUNT),
+        bad_segments=BAD_SEGMENTS,
+        mask_dir=MASK_DIR,
+        use_fif_annotations=IMPORT_FIF_BAD_SEGMENTS,
     )
-
-    # Step 3: Reconstruction (.pt → .fif)
-    print("[3/4] Reconstructing FIF files...", flush=True)
-    pt_to_fif(
-        input_dir=PT_OUTPUT_DIR,
-        output_dir=FIF_OUTPUT_DIR,
-    )
-
-    # Step 4: Visualization (optional)
-    if PLOT_PT_COMPARISON or PLOT_FIF_COMPARISON:
-        print("[4/4] Visualizing pipeline outputs...", flush=True)
-        compare_plot_pipeline(
-            input_dir=INPUT_DIR,
-            fif_input_dir=PREPROCESSED_FIF_DIR,
-            fif_output_dir=FIF_OUTPUT_DIR,
-            pt_input_dir=PT_INPUT_DIR,
-            pt_output_dir=PT_OUTPUT_DIR,
-            output_dir=FIGURES_DIR,
-            plot_pt=PLOT_PT_COMPARISON,
-            plot_fif=PLOT_FIF_COMPARISON,
-            num_samples=NUM_SAMPLES,
-        )
-
-    # Cleanup intermediate files if requested
-    if not KEEP_INTERMEDIATE_FILES:
-        shutil.rmtree(PT_INPUT_DIR)
-        shutil.rmtree(PT_OUTPUT_DIR)
-        print("Removed intermediate PT files.")
-
-    print("Pipeline complete. Output:", FIF_OUTPUT_DIR)

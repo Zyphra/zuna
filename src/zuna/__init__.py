@@ -14,12 +14,14 @@ Use help(zuna.preprocessing) etc. for detailed documentation.
 __version__ = "0.1.1"
 
 from .preprocessing.batch import preprocessing
-from .pipeline import inference, pt_to_fif
+from .pipeline import inference, pt_to_fif, reconstruct_fif, write_bad_mask
 from .visualization.compare import compare_plot_pipeline
 
 __all__ = [
     'preprocessing',
     'inference',
     'pt_to_fif',
+    'reconstruct_fif',
+    'write_bad_mask',
     'compare_plot_pipeline',
 ]

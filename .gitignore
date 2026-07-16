@@ -37,7 +37,9 @@ Thumbs.db
 figures/
 wandb
 
-tutorials/data/working/
+tutorials/data/2_fif_output/
+tutorials/data/figures/
+tutorials/data/tmp/
 
 *.pt
 *.png

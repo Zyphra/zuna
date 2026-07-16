@@ -1,0 +1,140 @@
+# fixed-eval: MUST match the training run's top-level `seed` (config_bci.yaml
+# seed: 333). The frozen-pool cache file is keyed by (data_dir, seed, N), so this is
+# what makes eeg_eval load the SAME pool the training curve was computed on. If this
+# drifts from the training seed, eeg_eval rebuilds its own (incoherent) pool.
+seed: 333
+
+model:
+  dim: 1024
+  n_layers: 16
+  head_dim: 64
+  seqlen_t: false
+  huber_c: null # was 0.1 [null uses MSE]
+  input_dim: 32
+  encoder_input_dim: 32 #128 #131 #
+  encoder_output_dim: 32 #128 #131 # # input_dim*2  #  - "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
+  encoder_latent_downsample_factor: 1   #  - effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
+
+  encoder_sliding_window: 65536 # default is 128 (2x decoder sliding windows for CR=1)
+  sliding_window: 65536 # default is 128
+  xattn_sliding_window: 65536 # default is 32
+  max_seqlen: 256 #1100 #16384                 #  - trying to allow ROPE to work with longer seqs when encoder_latent_downsample_factor=1. 
+  max_chans: 512                                              #  - Max number of channels in the dataset - used for APE sinusoidal position embeddings
+
+  model_dtype: bf16 # fp32 #  -  was bf16 # needed for APE sinusoidal position embeddings. Must match distributed.model_dtype.
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for z initialization in model.sample
+
+  adaptive_loss_weighting: false 
+  
+  num_fine_time_pts: 32
+  rope_dim: 4 # 0 = NoPE, 1 = 1D-RoPE in seq-dim, 4 = 4D-RoPE in {x,y,z,tc}.
+  rope_theta: 10000.0 #10000.0 # Default = 10000.0 - too big when max_seqlen=40.
+
+  ape_dim: 0 # 0 = No-APE, 1 = 1D-APE on ch_id,
+  ape_theta: 10000.0 
+  ape_embedding_type: "scaled_dim_sinusoidal" # {"scaled_1d_sinusoidal", "scaled_dim_sinusoidal", "full_learned_sinusoidal"} - Type of APE embedding to use.
+
+  tok_idx_type: "{x,y,z,tc}" # null, "t_coarse", "chan_id", "stack_arange_seqlen", "{x,y,z,tc}", "{x,y,z,tc,ch}"
+
+  dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EncoderDecoder.sample (use in tandem with NoPE)
+  zero_spatial: false  # If true, zero out x,y,z in tok_idx, keeping only tc and ch
+  dropout_vec_type: "zeros" # {"zero", "learnable"}
+  register_tok_idx: "mean_all" # {"zero_all", "mean_all", "mean_t"} - If "zero_all", then each register has {x,y,z,t,(ch)} = {0,0,0,0,(0)}. 
+                           # If "mean_all", then each register has {x,y,z,t,(ch)} = {mean(x),mean(y),mean(z),mean(t),mean(ch)}.
+                           # If "mean_t", then each register has {x,y,z,t,(ch)} = {0,0,0,mean(t),(0)}.
+
+optim:
+  use_ema: true                           
+
+data:
+  use_b2: false # If true, use Backblaze B2 for dataset loading, otherwise use local filesystem.
+  use_v3: false
+  use_v4: true # V4: load .fif files DIRECTLY (sequential inference loader), bypassing the .pt/mmap path
+  filter_version: # "v2_notch" # options: {"v1_hpf",  "v2_notch",  "v3_bandpass"}
+    - "v2_notch"
+    - "v3_bandpass"
+  min_quality_any: 0.1 # Default is 0.1
+  min_quality_mean: 0.3 # Default is 0.3 - Higher will bias samples towards higher quality AND FEWER CHANNELS.
+  sample_duration_str: "30_seconds" # {"5_seconds", "10_seconds", "30_seconds", "5_sec_wt_short_third", "5_sec_wt_short_half", "10_to_30_sec_half", "10_to_30_sec_third", "30_seconds_fifths"}
+  do_avg_ref: true # If true, do average reference before data normalization.
+  z_score_type: "across_channel" # {"across_channel", "across_sample", "none"}
+  data_dir: ./tutorials/data/1_fif_input/   # directory of .fif files (overridden by run_zuna_pipeline_fif.py)
+  glob_filter:
+    - "**/*.fif"
+
+
+  mmap_sample_start: null #4096 #1024 # If not null, only sample from between this and stop in the mmap.
+  mmap_sample_stop: null #42496 #5376 # If not null, only sample from between this and start in the mmap.
+  skip_preepoched_data: false # If true, skip pre-epoched data.
+
+  chan_num_filter: null # null or integer number of channels we want in each sample
+  sample_rate: 256 #512 #256
+  seq_len: 1280 # NOT REALLY USED ANYMORE. 
+  num_fine_time_pts: 32 #128
+  use_coarse_time: "A" # How to chop signals in to coarse-time, fine-time & channels using chop_and_reshape_signals.
+  cat_chan_xyz_and_eeg: false #false #
+  dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
+  randomly_permute_sequence: false #true
+  token_dropout_prob: -1.0 # V4: NO random dropout — interpolation is driven only by bad channels + BAD_ annotations + upsampled/v4_drop_channels
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for stft noise schedule.
+
+  # fixed-eval: load the SAME frozen pool the training run built and plot/score
+  # a subset. num_batches + fixed_eval + eval_noise_seed MUST match config_bci.yaml's
+  # eval2 block (data_dir=v7_evalB, num_batches=480, eval_noise_seed=0) or the cache
+  # key won't line up. plot_num_batches is eeg_eval-only: how many frozen samples to
+  # actually reconstruct/plot/score (a subset of the 480; runs on 1 GPU).
+  num_batches: 480         # pool size — MUST equal training eval2 num_batches (cache key)
+  fixed_eval: false   # V4: stream directly from the .fif files (no frozen v7_evalB1 pool)
+  eval_noise_seed: 0       # MUST equal training eval2 eval_noise_seed (byte-identical reconstructions)
+  plot_num_batches: 5      # plot + score the first 5 frozen samples
+  dropout_scheme: "train-2"  # V4 uses no random dropout (prob<0); train-2 is safe with prob<0 # {"train-1", "train-2", "eval-1", "no-dropout", "random-uniform-dropout", "full-channel-random-dropout-train", 
+                                                 #  "full-time-pt-random-dropout", "correlated-channel-time-dropout", 
+                                                 #  "mix-4-dropouts-train", "mix-8-dropouts-train", "mix-3-dropouts-train"
+                                                 #  "consumer-eeg-channel-dropout", "standard-montage-channel-dropout", "random-montage-channel-dropout", "brain-region-channel-dropout",
+                                                 #  "consumer-eeg-channel-dropout-by-name", "standard-montage-channel-dropout-by-name", "brain-region-channel-dropout-by-name"}
+  # masked_in_decoder: false # (SHOULD NOT MATTER IN EVAL.) - If true, mask out channels in decoder input when channel is dropped.
+
+  num_bins_discretize_xyz_chan_pos: 100 # Number of bins to discretize channel positions to use in 4d-RoPE. # 40 with "old" xyz_extremes, 100 with "thirteens" xyz_extremes
+  chan_pos_xyz_extremes_type: "twelves" # "old" for v4 dataset or "thirteens" or "twelves" for v5 dataset
+
+  batch_size: 1 #64 #1024 # 32              #  - editted this for debug. KEEP AT 1 NOW. PACKING IN DATALOADER!
+  target_packed_seqlen: 15000 #50000 #4 # 32768              #  - Target seqlen for packed samples. This is essentially batch size.
+  pad_packed_seqlen: false   # CLODE: do NOT pad in eval; fwd_eval metrics are pad-unaware.
+  data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
+  data_clip: 1.0  # Clip data to this value after normalization.  
+  #
+  num_workers: 0              #  - editted this for debug.
+  prefetch_factor: null          #  - editted this for debug.
+  persistent_workers: false    #  - added this. defaults to true
+  pin_memory: false            #  - added this. defaults to true
+  diffusion_forcing: false
+  shuffle: true              #  - trying to pin down is bad data is causing GradNorm explosion.
+  seed: 316                   #  - seed for data shuffling (int or null)
+
+  # ---- V4 .fif loader: inline preprocessing + repair controls ----
+  v4_segment_sec: 10.0         # segment window length (seconds); overridden by runner
+  v4_highpass_hz: 0.5          # highpass (Hz); null to skip
+  v4_lowpass_hz: null
+  v4_notch_hz: null            # e.g. [60]; null to skip
+  v4_montage: standard_1020    # used ONLY if a .fif lacks channel positions
+  v4_require_positions: true
+  v4_drop_channels: null       # e.g. ["Cz","Pz"] — repair these even if not marked bad in the .fif
+  v4_filter_method: fir
+  v4_target_channel_count: null   # int (e.g. 40) or list of names to upsample; null = off
+  v4_upsample_montage: standard_1005
+  v4_profile: false
+  # .fif save-out via FifReconstructor: stitches chunks -> continuous .fif, into
+  # <v4_recon_out_dir>/full_reconstruction/ and <v4_recon_out_dir>/hybrid/.
+  v4_recon_save_fif: true
+  v4_recon_fill_only_masked: true
+  v4_recon_unmasked_from_original: false  # hybrid unmasked cells = model-domain (highpass-filtered) original, so kept cells match the plotted input exactly; set true to keep the raw unfiltered volts instead
+  v4_recon_out_dir: ./tutorials/data/2_fif_output/   # overridden by run_zuna_pipeline_fif.py
+  v4_recon_seam_correct: true   # re-anchor hybrid infills to the neighbouring original (remove boundary jumps)
+  v4_mask_dir: null   # dir of per-file <base>_mask.npz (channel x sample bool); UNIONed into the reconstruction mask (set by reconstruct_fif for UI / manual bad_segments)
+  v4_use_fif_annotations: true   # import BAD_ time-segment annotations from the .fif (whole-channel info['bads'] are always used)
+
+checkpoint:
+  init_ckpt_path: /data/groups/bci/checkpoints/bci/ZUNA2_5e-4_noALW2/checkpoints/0000548000
+
+dump_dir: ./tutorials/data/working/v4_dump/   # overridden by run_zuna_pipeline_fif.py; also future .fif save-out dir
+name: bci_AY2l_eval
