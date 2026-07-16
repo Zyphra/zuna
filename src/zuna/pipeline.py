@@ -86,24 +86,74 @@ def inference(
     print(f"✓ Inference complete")
 
 
+# Masks are stored at TOKEN resolution: one column per NUM_FINE_TIME_PTS samples. The model only
+# ever drops/keeps whole coarse-time tokens (tf = num_fine_time_pts samples ≈ 0.125 s at 256 Hz), so
+# a per-sample mask carries tf× more columns than it can act on. Keep this in sync with the model's
+# `num_fine_time_pts` (config_infer_fif.yaml). n_times + sfreq travel in the .npz so it round-trips.
+NUM_FINE_TIME_PTS = 32
+
+
+def mask_samples_to_tokens(mask_samples, tf: int = NUM_FINE_TIME_PTS):
+    """(C, N) per-sample bool -> (C, ceil(N/tf)) per-token bool; a token is bad if ANY of its samples is."""
+    import numpy as np
+    m = np.asarray(mask_samples, dtype=bool)
+    C, N = m.shape
+    n_tok = (N + tf - 1) // tf
+    pad = n_tok * tf - N
+    if pad:
+        m = np.concatenate([m, np.zeros((C, pad), dtype=bool)], axis=1)
+    return m.reshape(C, n_tok, tf).any(axis=2)
+
+
+def mask_tokens_to_samples(mask_tokens, tf: int, n_times: int):
+    """(C, n_tok) per-token bool -> (C, n_times) per-sample bool by repeating each token tf times."""
+    import numpy as np
+    return np.repeat(np.asarray(mask_tokens, dtype=bool), tf, axis=1)[:, :n_times]
+
+
+def load_mask_npz_as_samples(npz_path, target_ch_names, n_times: int):
+    """Read any mask .npz (token- or sample-resolution) -> (len(target_ch_names), n_times) bool, aligned
+    by channel name (case-insensitive). Token resolution is detected via the stored num_fine_time_pts."""
+    import numpy as np
+    z = np.load(str(npz_path), allow_pickle=True)
+    m = np.asarray(z["mask"]).astype(bool)
+    names = [str(x) for x in z["ch_names"]]
+    tf = int(z["num_fine_time_pts"]) if "num_fine_time_pts" in z.files else None
+    W = m.shape[1]
+    if tf is not None and W == (n_times + tf - 1) // tf and W != n_times:
+        idx = np.minimum(np.arange(n_times) // tf, W - 1)          # token-resolution
+    elif W == n_times:
+        idx = np.arange(n_times)                                   # sample-resolution
+    else:
+        idx = np.minimum((np.arange(n_times) * (W / n_times)).astype(int), W - 1)  # other duration
+    lower = {n.lower(): i for i, n in enumerate(names)}
+    out = np.zeros((len(target_ch_names), n_times), dtype=bool)
+    for i, c in enumerate(target_ch_names):
+        if c.lower() in lower:
+            out[i] = m[lower[c.lower()]][idx]
+    return out
+
+
 def write_bad_mask(
     fif_path: str,
     out_npz: str,
     bad_channels=None,
     bad_segments=None,
     base_mask_npz: str | None = None,
+    num_fine_time_pts: int = NUM_FINE_TIME_PTS,
 ) -> str:
-    """Build a per-file (channel x sample) bad-mask .npz for the v4 reconstruction path.
+    """Build a per-file bad-mask .npz (TOKEN resolution) for the v4 reconstruction path.
 
     The mask marks the cells the model should reconstruct. Combine any of:
       - bad_channels: list of channel names -> whole channel marked bad.
       - bad_segments: list of tuples, times in DATA-RELATIVE seconds:
             (start, stop)          -> mark that span on ALL channels
             (start, stop, "Cz")    -> mark that span on channel "Cz" only
-      - base_mask_npz: an existing mask .npz to start from (e.g. a UI-generated mask); the
-        above are UNIONed on top of it.
+      - base_mask_npz: an existing mask .npz to start from (e.g. a UI-generated mask), token- or
+        sample-resolution; the above are UNIONed on top of it.
     Output format (same as the reconstructor's output masks): npz with
-      mask (n_ch, n_times) bool, ch_names (array of str), sfreq (float).
+      mask (n_ch, n_tokens) bool, ch_names (array of str), sfreq (float),
+      num_fine_time_pts (int, samples per token), n_times (int, original sample count).
     """
     import numpy as np
 
@@ -113,15 +163,10 @@ def write_bad_mask(
     N = raw.n_times
     row = {c.lower(): i for i, c in enumerate(ch_names)}   # case-insensitive channel lookup
 
+    # Build at per-sample resolution (segment times are sample-accurate), then collapse to tokens.
     mask = np.zeros((len(ch_names), N), dtype=bool)
     if base_mask_npz is not None and Path(base_mask_npz).exists():
-        z = np.load(str(base_mask_npz), allow_pickle=True)
-        blower = {str(x).lower(): i for i, x in enumerate(z["ch_names"])}
-        bmask = np.asarray(z["mask"]).astype(bool)
-        for i, c in enumerate(ch_names):
-            if c.lower() in blower:
-                r = bmask[blower[c.lower()]]
-                mask[i, : min(N, r.shape[0])] |= r[: min(N, r.shape[0])]
+        mask |= load_mask_npz_as_samples(base_mask_npz, ch_names, N)
 
     for c in (bad_channels or []):
         if c.lower() in row:
@@ -139,8 +184,11 @@ def write_bad_mask(
         else:                                          # all channels
             mask[:, s:e] = True
 
+    tf = int(num_fine_time_pts)
+    mask_tok = mask_samples_to_tokens(mask, tf)
     Path(out_npz).parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(str(out_npz), mask=mask, ch_names=np.array(ch_names), sfreq=np.float32(sfreq))
+    np.savez_compressed(str(out_npz), mask=mask_tok, ch_names=np.array(ch_names),
+                        sfreq=np.float32(sfreq), num_fine_time_pts=np.int64(tf), n_times=np.int64(N))
     return out_npz
 
 

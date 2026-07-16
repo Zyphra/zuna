@@ -2238,28 +2238,36 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         return raw, unfiltered_data
 
     def _load_external_mask(self, fif_path, raw):
-        """Load <mask_dir>/<base>_mask.npz (channel x sample bool + ch_names + sfreq) and align it to
-        the current raw: rows matched by channel name, time nearest-resampled to raw.n_times. The
-        mask is treated as 0-based / data-relative. Returns (C, n_times) bool aligned to raw.ch_names,
-        or None if the file has no mask.  #jm v4"""
+        """Load <mask_dir>/<base>_mask.npz (bool mask + ch_names + sfreq [+ num_fine_time_pts]) and
+        align it to the current raw: rows matched by channel name, time expanded to raw.n_times. Masks
+        are stored at TOKEN resolution (one column per num_fine_time_pts samples) — detected via the
+        stored num_fine_time_pts and expanded back to per-sample here; per-sample or other-duration
+        masks are still accepted (nearest-resample). Treated as 0-based / data-relative. Returns
+        (C, n_times) bool aligned to raw.ch_names, or None if the file has no mask.  #jm v4"""
         base = Path(fif_path).stem.replace("_raw", "")
         mpath = Path(self.mask_dir) / f"{base}_mask.npz"
         if not mpath.exists():
             print(f"  [v4] no external mask for {base} in {self.mask_dir}")
             return None
         z = np.load(str(mpath), allow_pickle=True)
-        em = np.asarray(z["mask"]).astype(bool)                       # (C_ext, N_ext)
+        em = np.asarray(z["mask"]).astype(bool)                       # (C_ext, W)
         enames = [str(x) for x in z["ch_names"]]
         N = raw.n_times
-        # nearest-resample the time axis to the current n_times (mask covers the same duration)
-        idx = (np.arange(N) if em.shape[1] == N
-               else np.minimum((np.arange(N) * (em.shape[1] / N)).astype(int), em.shape[1] - 1))
+        W = em.shape[1]
+        tf = int(z["num_fine_time_pts"]) if "num_fine_time_pts" in z.files else None
+        # Map each output sample -> a source column (token-, sample-, or other-duration-resolution).
+        if tf is not None and W == (N + tf - 1) // tf and W != N:
+            idx = np.minimum(np.arange(N) // tf, W - 1); res = "token"
+        elif W == N:
+            idx = np.arange(N); res = "sample"
+        else:
+            idx = np.minimum((np.arange(N) * (W / N)).astype(int), W - 1); res = "resampled"
         row = {n: i for i, n in enumerate(enames)}
         aligned = np.zeros((len(raw.ch_names), N), dtype=bool)
         for i, ch in enumerate(raw.ch_names):
             if ch in row:
                 aligned[i] = em[row[ch]][idx]
-        print(f"  [v4] external mask {mpath.name}: {100 * aligned.mean():.1f}% cells "
+        print(f"  [v4] external mask {mpath.name} [{res}]: {100 * aligned.mean():.1f}% cells "
               f"(aligned to {len(raw.ch_names)} ch)")
         return aligned
 
@@ -2812,12 +2820,23 @@ class FifReconstructor:   #jm v4
             mne.io.RawArray(full_hybrid, info, verbose="ERROR").save(
                 str(hybrid_path), overwrite=True, verbose="ERROR")
 
-            # (3) Dropout mask (per channel x sample) so plot_compare_fif can highlight    #jm v4
-            # exactly the cells the model filled in. ch_names travel with it for alignment.
+            # (3) Dropout mask (per channel x TOKEN) so plot_compare_fif can highlight exactly the   #jm v4
+            # cells the model filled in. Stored at token resolution (one column per tf samples) — the
+            # model drops/keeps whole tokens, so this is tf× smaller with no loss. num_fine_time_pts
+            # + n_times travel with it so readers can expand back to samples; ch_names for alignment.
             mask_path = self.hybrid_dir / f"{base}_mask.npz"
-            np.savez_compressed(str(mask_path), mask=full_mask,
+            tf = self.tf
+            n_full = full_mask.shape[1]
+            n_tok = (n_full + tf - 1) // tf
+            pad = n_tok * tf - n_full
+            fm = full_mask if pad == 0 else np.concatenate(
+                [full_mask, np.zeros((full_mask.shape[0], pad), dtype=bool)], axis=1)
+            mask_tok = fm.reshape(full_mask.shape[0], n_tok, tf).any(axis=2)
+            np.savez_compressed(str(mask_path), mask=mask_tok,
                                 ch_names=np.array(info["ch_names"]),
-                                sfreq=np.float32(info["sfreq"]))
+                                sfreq=np.float32(info["sfreq"]),
+                                num_fine_time_pts=np.int64(tf),
+                                n_times=np.int64(n_full))
 
             n_dropped = int(full_mask.sum())
             print(f"[v4 recon] wrote {model_path.name}, {hybrid_path.name}, {mask_path.name}  "

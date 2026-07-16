@@ -101,15 +101,23 @@ def plot_reconstruction_overlay(
         if c in in_by:
             din[i] = din_all[in_by[c], :T]
 
-    # Load the inferred-cell mask (per channel x sample), aligned to input channel order.
+    # Load the inferred-cell mask, aligned to the (recon) channel order. Masks are stored at TOKEN
+    # resolution (one column per num_fine_time_pts samples); expand each token back to per-sample so
+    # it indexes the sample time axis. Per-sample masks (no num_fine_time_pts) are used as-is.
     mask = None
     if mask_npz is not None and Path(mask_npz).exists():
         z = np.load(str(mask_npz), allow_pickle=True)
-        m, mnames = z["mask"], [str(x) for x in z["ch_names"]]
+        m, mnames = np.asarray(z["mask"]).astype(bool), [str(x) for x in z["ch_names"]]
+        N_full = raw_rec.n_times
+        tf = int(z["num_fine_time_pts"]) if "num_fine_time_pts" in z.files else None
+        token_res = (tf is not None and m.shape[1] == (N_full + tf - 1) // tf and m.shape[1] != N_full)
         mask = np.zeros((len(ch_names), T), dtype=bool)
         for i, c in enumerate(ch_names):
             if c in mnames:
-                mask[i] = m[mnames.index(c)][:T]
+                row = m[mnames.index(c)]
+                if token_res:
+                    row = np.repeat(row, tf)[:N_full]
+                mask[i] = row[:T]
 
     n = len(ch_names) if max_channels is None else min(max_channels, len(ch_names))
     t = np.arange(T) / sfreq
