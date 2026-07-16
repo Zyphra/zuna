@@ -353,32 +353,34 @@ class BCIDatasetArgs:
     b2_local_cache_dir: Optional[str] = "/mnt/shared/datasets/bci/b2_cache"  # Local directory to cache downloaded files
     b2_cache_files: bool = False  # Whether to cache files locally or download on-demand
 
-    # v4 fields — used only by EEGDataset_v4 (.fif inference loader). Defaults are inference-friendly.
-    use_v4: bool = False
-    v4_highpass_hz: Optional[float] = None    # None = skip highpass filter
-    v4_lowpass_hz: Optional[float] = None     # None = skip lowpass filter
-    v4_notch_hz: Optional[List[float]] = None  # None = skip notch; pass [60] for single, [50,60,100] for multi
-    v4_montage: Optional[str] = None          # MNE montage name; used only if file has no positions
-    v4_segment_sec: float = 10.0              # length of each segment in seconds
-    v4_flat_thresh: Optional[float] = None    # per-(ch,coarse-time) std threshold for flat detection
-    v4_noise_thresh: Optional[float] = None   # per-(ch,coarse-time) std MAD multiplier for noisy det.
-    v4_require_positions: bool = True         # drop channels lacking 3D coords
-    v4_drop_channels: Optional[List[str]] = None  # channel names to repair (mask->interpolate) even if not flagged bad in the .fif
-    v4_recon_save_fif: bool = True            # save model-reconstructed .fif files into dump_dir
-    v4_recon_fill_only_masked: bool = True    # fill only masked cells (True) or whole signal (False)
-    v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts
-    v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir
-    v4_recon_seam_correct: bool = True  # re-anchor hybrid infills to neighbouring original (remove boundary jumps; DC/near-DC only)
-    v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"
-    # Channel upsampling: add zero-filled channels at target-montage positions and let the model
-    # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;
-    # list[str] = add these named channels; None = disabled. Mirrors the zuna release mechanism.
-    # Typed Any (not Union[int, List[str]]) because OmegaConf can't represent unions of containers.
-    v4_target_channel_count: Optional[Any] = None
-    v4_upsample_montage: str = "standard_1005"  # MNE montage used as the source of target ch positions
-    # Profiling: when True, EEGDataset_v4 accumulates per-step timing (read/filter/resample/z-score/...).
-    # Off by default so the hot per-segment loop pays nothing in production.
-    v4_profile: bool = False
+    # v4 fields — used only by EEGDataset_v4 (.fif inference loader). Defaults are inference-friendly. #jm v4
+    use_v4: bool = False                                                                              #jm v4
+    v4_highpass_hz: Optional[float] = None    # None = skip highpass filter                            #jm v4
+    v4_lowpass_hz: Optional[float] = None     # None = skip lowpass filter                             #jm v4
+    v4_notch_hz: Optional[List[float]] = None  # None = skip notch; pass [60] for single, [50,60,100] for multi  #jm v4
+    v4_montage: Optional[str] = None          # MNE montage name; used only if file has no positions   #jm v4
+    v4_segment_sec: float = 10.0              # length of each segment in seconds                      #jm v4
+    v4_flat_thresh: Optional[float] = None    # per-(ch,coarse-time) std threshold for flat detection  #jm v4
+    v4_noise_thresh: Optional[float] = None   # per-(ch,coarse-time) std MAD multiplier for noisy det. #jm v4
+    v4_require_positions: bool = True         # drop channels lacking 3D coords                        #jm v4
+    v4_drop_channels: Optional[List[str]] = None  # channel names to repair (mask->interpolate) even if not flagged bad in the .fif  #jm v4
+    v4_recon_save_fif: bool = True            # save model-reconstructed .fif files into dump_dir       #jm v4
+    v4_recon_fill_only_masked: bool = True    # fill only masked cells (True) or whole signal (False)   #jm v4
+    v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
+    v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir #jm v4
+    v4_recon_seam_correct: bool = True  # re-anchor hybrid infills to neighbouring original (remove boundary jumps; DC/near-DC only) #jm v4
+    v4_mask_dir: Optional[str] = None  # dir of per-file <base>_mask.npz (channel x sample bool, 0-based) UNIONed into the reconstruction mask (UI / manual segments) #jm v4
+    v4_use_fif_annotations: bool = True  # import BAD_ time-segment annotations from the .fif into the reconstruction mask (whole-channel info['bads'] are always used) #jm v4
+    v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
+    # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
+    # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
+    # list[str] = add these named channels; None = disabled. Mirrors the zuna release mechanism.         #jm v4
+    # Typed Any (not Union[int, List[str]]) because OmegaConf can't represent unions of containers.       #jm v4
+    v4_target_channel_count: Optional[Any] = None                                                         #jm v4
+    v4_upsample_montage: str = "standard_1005"  # MNE montage used as the source of target ch positions   #jm v4
+    # Profiling: when True, EEGDataset_v4 accumulates per-step timing (read/filter/resample/z-score/...). #jm v4
+    # Off by default so the hot per-segment loop pays nothing in production.                              #jm v4
+    v4_profile: bool = False                                                                              #jm v4
 
 
 
@@ -1582,18 +1584,21 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
         self.flat_thresh           = args.v4_flat_thresh
         self.noise_thresh          = args.v4_noise_thresh
         self.require_positions     = args.v4_require_positions
-        self.drop_channels         = getattr(args, "v4_drop_channels", None)
-        self.recon_fill_only_masked = args.v4_recon_fill_only_masked
-        self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)
-        self.filter_method         = getattr(args, "v4_filter_method", "fir")
-        self.target_channel_count  = getattr(args, "v4_target_channel_count", None)
-        self.upsample_montage      = getattr(args, "v4_upsample_montage", "standard_1005")
-        self.profile_enabled       = getattr(args, "v4_profile", False)
-        # raw_info_registry: keeps mne.Info per source file so the FifReconstructor
-        # can rebuild .fif outputs with the original metadata (channel names,
-        # sfreq, montage, etc). num_workers must be 0 for this to be visible to the
-        # main process; for num_workers>0 the registry would live in each worker only.
-        self.raw_info_registry: dict = {}
+        self.drop_channels         = getattr(args, "v4_drop_channels", None)  #jm v4
+        self.mask_dir              = getattr(args, "v4_mask_dir", None)  #jm v4 (per-file external bad-mask dir)
+        self._external_mask        = None  #jm v4 (per-file, set in _prepare_raw)
+        self.use_fif_annotations   = getattr(args, "v4_use_fif_annotations", True)  #jm v4
+        self.recon_fill_only_masked = args.v4_recon_fill_only_masked  #jm v4
+        self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)  #jm v4
+        self.filter_method         = getattr(args, "v4_filter_method", "fir")  #jm v4
+        self.target_channel_count  = getattr(args, "v4_target_channel_count", None)  #jm v4
+        self.upsample_montage      = getattr(args, "v4_upsample_montage", "standard_1005")  #jm v4
+        self.profile_enabled       = getattr(args, "v4_profile", False)  #jm v4
+        # raw_info_registry: keeps mne.Info per source file so the FifReconstructor    #jm v4
+        # can rebuild .fif outputs with the original metadata (channel names,           #jm v4
+        # sfreq, montage, etc). num_workers must be 0 for this to be visible to the     #jm v4
+        # main process; for num_workers>0 the registry would live in each worker only.  #jm v4
+        self.raw_info_registry: dict = {}                       #jm v4
 
         # Timing accumulators. _prepare_raw_time = total seconds spent loading+
         # filtering+resampling .fif files across the run. _segment_build_time =
@@ -1825,12 +1830,49 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
         # Register the (post-preprocessing) info so the FifReconstructor can use it.
         self.raw_info_registry[str(fif_path)] = raw.info.copy()
 
-        elapsed = time.perf_counter() - _t_prep_start
-        self._prepare_raw_time += elapsed
-        self._n_files_loaded += 1
-        print(f"[v4 timing] _prepare_raw {Path(fif_path).name}: {elapsed*1000:.1f} ms")
+        # Optional per-file external bad-mask (UI / manual bad_segments), aligned to this raw.  #jm v4
+        self._external_mask = self._load_external_mask(fif_path, raw) if self.mask_dir else None
+
+        elapsed = time.perf_counter() - _t_prep_start                                  #jm v4
+        self._prepare_raw_time += elapsed                                              #jm v4
+        self._n_files_loaded += 1                                                      #jm v4
+        print(f"[v4 timing] _prepare_raw {Path(fif_path).name}: {elapsed*1000:.1f} ms")  #jm v4
 
         return raw, unfiltered_data
+
+    def _load_external_mask(self, fif_path, raw):
+        """Load <mask_dir>/<base>_mask.npz (bool mask + ch_names + sfreq [+ num_fine_time_pts]) and
+        align it to the current raw: rows matched by channel name, time expanded to raw.n_times. Masks
+        are stored at TOKEN resolution (one column per num_fine_time_pts samples) — detected via the
+        stored num_fine_time_pts and expanded back to per-sample here; per-sample or other-duration
+        masks are still accepted (nearest-resample). Treated as 0-based / data-relative. Returns
+        (C, n_times) bool aligned to raw.ch_names, or None if the file has no mask.  #jm v4"""
+        base = Path(fif_path).stem.replace("_raw", "")
+        mpath = Path(self.mask_dir) / f"{base}_mask.npz"
+        if not mpath.exists():
+            print(f"  [v4] no external mask for {base} in {self.mask_dir}")
+            return None
+        z = np.load(str(mpath), allow_pickle=True)
+        em = np.asarray(z["mask"]).astype(bool)                       # (C_ext, W)
+        enames = [str(x) for x in z["ch_names"]]
+        N = raw.n_times
+        W = em.shape[1]
+        tf = int(z["num_fine_time_pts"]) if "num_fine_time_pts" in z.files else None
+        # Map each output sample -> a source column (token-, sample-, or other-duration-resolution).
+        if tf is not None and W == (N + tf - 1) // tf and W != N:
+            idx = np.minimum(np.arange(N) // tf, W - 1); res = "token"
+        elif W == N:
+            idx = np.arange(N); res = "sample"
+        else:
+            idx = np.minimum((np.arange(N) * (W / N)).astype(int), W - 1); res = "resampled"
+        row = {n: i for i, n in enumerate(enames)}
+        aligned = np.zeros((len(raw.ch_names), N), dtype=bool)
+        for i, ch in enumerate(raw.ch_names):
+            if ch in row:
+                aligned[i] = em[row[ch]][idx]
+        print(f"  [v4] external mask {mpath.name} [{res}]: {100 * aligned.mean():.1f}% cells "
+              f"(aligned to {len(raw.ch_names)} ch)")
+        return aligned
 
     # ------------------------------------------------------------------ #
     # 2D bad-mask: shape (n_channels, n_coarse_time_bins) for the segment
@@ -1854,26 +1896,37 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
             if bad_name in ch_names:
                 bad_2d[ch_names.index(bad_name), :] = True
 
-        # 2. Bad time annotations: any annotation whose description starts with 'BAD'
-        sfreq = raw.info["sfreq"]
-        # Annotation onsets are in the recording's absolute (orig_time) frame when orig_time is
-        # set, while get_data() is 0-based from first_samp. Subtract first_samp so onsets map to
-        # the correct data sample — recordings that start at t>0 (first_samp>0), e.g. a cropped
-        # file, would otherwise be off by first_samp. When orig_time is None the onsets are
-        # already data-relative, so no shift is applied.
-        ann_first_samp = raw.first_samp if raw.annotations.orig_time is not None else 0
-        for ann in raw.annotations:
-            if not str(ann["description"]).upper().startswith("BAD"):
-                continue
-            ann_start = int(round(ann["onset"] * sfreq)) - ann_first_samp
-            ann_end   = int(round((ann["onset"] + ann["duration"]) * sfreq)) - ann_first_samp
-            # Intersect with this segment
-            ovl_start = max(0, ann_start - seg_start_sample)
-            ovl_end   = min(T, ann_end   - seg_start_sample)
-            if ovl_end > ovl_start:
-                bin_s = ovl_start // tf
-                bin_e = (ovl_end + tf - 1) // tf
-                bad_2d[:, bin_s:bin_e] = True
+        # 2. Bad time annotations from the .fif (BAD_* descriptions). Toggle with
+        #    v4_use_fif_annotations. Onset->sample mapping accounts for first_samp (absolute frame
+        #    when orig_time is set, or when onset >= duration; else already 0-based).  #jm v4
+        if self.use_fif_annotations:
+            sfreq = raw.info["sfreq"]
+            first_samp = raw.first_samp
+            has_orig_time = raw.annotations.orig_time is not None
+            dur_s = raw.n_times / sfreq
+            for ann in raw.annotations:
+                if not str(ann["description"]).upper().startswith("BAD"):
+                    continue
+                onset = ann["onset"]
+                absolute = has_orig_time or (onset >= dur_s)   # onset beyond duration can't be 0-based
+                off = first_samp if absolute else 0
+                ann_start = int(round(onset * sfreq)) - off
+                ann_end   = int(round((onset + ann["duration"]) * sfreq)) - off
+                # Intersect with this segment
+                ovl_start = max(0, ann_start - seg_start_sample)
+                ovl_end   = min(T, ann_end   - seg_start_sample)
+                if ovl_end > ovl_start:
+                    bin_s = ovl_start // tf
+                    bin_e = (ovl_end + tf - 1) // tf
+                    bad_2d[:, bin_s:bin_e] = True
+
+        # 2b. External per-file mask (UI / manual bad_segments): 0-based, UNION into bad_2d.  #jm v4
+        ext = self._external_mask
+        if ext is not None and ext.shape[0] == C:
+            usable = n_coarse * tf
+            seg = ext[:, seg_start_sample:seg_start_sample + usable]   # (C, <=usable)
+            if seg.shape[1] == usable:
+                bad_2d |= seg.reshape(C, n_coarse, tf).any(axis=2)
 
         # 3. Heuristic flat / noisy detection on the z-scored segment (per-bin std)
         if self.flat_thresh is not None or self.noise_thresh is not None:
@@ -2370,12 +2423,23 @@ class FifReconstructor:
             mne.io.RawArray(full_hybrid, info, verbose="ERROR").save(
                 str(hybrid_path), overwrite=True, verbose="ERROR")
 
-            # (3) Dropout mask (per channel x sample) so plot_compare_fif can highlight
-            # exactly the cells the model filled in. ch_names travel with it for alignment.
+            # (3) Dropout mask (per channel x TOKEN) so plot_compare_fif can highlight exactly the   #jm v4
+            # cells the model filled in. Stored at token resolution (one column per tf samples) — the
+            # model drops/keeps whole tokens, so this is tf× smaller with no loss. num_fine_time_pts
+            # + n_times travel with it so readers can expand back to samples; ch_names for alignment.
             mask_path = self.hybrid_dir / f"{base}_mask.npz"
-            np.savez_compressed(str(mask_path), mask=full_mask,
+            tf = self.tf
+            n_full = full_mask.shape[1]
+            n_tok = (n_full + tf - 1) // tf
+            pad = n_tok * tf - n_full
+            fm = full_mask if pad == 0 else np.concatenate(
+                [full_mask, np.zeros((full_mask.shape[0], pad), dtype=bool)], axis=1)
+            mask_tok = fm.reshape(full_mask.shape[0], n_tok, tf).any(axis=2)
+            np.savez_compressed(str(mask_path), mask=mask_tok,
                                 ch_names=np.array(info["ch_names"]),
-                                sfreq=np.float32(info["sfreq"]))
+                                sfreq=np.float32(info["sfreq"]),
+                                num_fine_time_pts=np.int64(tf),
+                                n_times=np.int64(n_full))
 
             n_dropped = int(full_mask.sum())
             print(f"[v4 recon] wrote {model_path.name}, {hybrid_path.name}, {mask_path.name}  "

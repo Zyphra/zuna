@@ -84,31 +84,40 @@ def plot_reconstruction_overlay(
     if input_notch_hz:
         raw_in.notch_filter(input_notch_hz, verbose="ERROR")
 
-    ch_names = raw_in.ch_names
-    sfreq = raw_in.info["sfreq"]             # == rec_sfreq after resample
-    din = raw_in.get_data() * 1e6            # µV
-    drec_all = raw_rec.get_data() * 1e6
-    T = min(din.shape[1], drec_all.shape[1])
+    # Use the RECONSTRUCTION's channel list as the row set: it's what the model actually produced —
+    # the kept channels PLUS any ADDED channels that weren't in the input. Added channels have no
+    # input trace (drawn as NaN, so only the reconstruction line shows, fully shaded as inferred).
+    ch_names = raw_rec.ch_names
+    sfreq = raw_rec.info["sfreq"]
+    drec_all = raw_rec.get_data() * 1e6      # µV, (C_rec, N)
+    din_all = raw_in.get_data() * 1e6
+    T = min(drec_all.shape[1], din_all.shape[1])
     if window_sec is not None:
         T = min(T, int(round(window_sec * sfreq)))   # cap plotted window; None = full recording
-    din = din[:, :T]
-
-    # Align reconstruction rows to the input channel order (by name).
-    rec_names = raw_rec.ch_names
-    drec = np.full_like(din, np.nan)
+    drec = drec_all[:, :T]
+    in_by = {c: i for i, c in enumerate(raw_in.ch_names)}
+    din = np.full((len(ch_names), T), np.nan, dtype=float)   # NaN where a recon channel isn't in the input
     for i, c in enumerate(ch_names):
-        if c in rec_names:
-            drec[i] = drec_all[rec_names.index(c), :T]
+        if c in in_by:
+            din[i] = din_all[in_by[c], :T]
 
-    # Load the inferred-cell mask (per channel x sample), aligned to input channel order.
+    # Load the inferred-cell mask, aligned to the (recon) channel order. Masks are stored at TOKEN
+    # resolution (one column per num_fine_time_pts samples); expand each token back to per-sample so
+    # it indexes the sample time axis. Per-sample masks (no num_fine_time_pts) are used as-is.
     mask = None
     if mask_npz is not None and Path(mask_npz).exists():
         z = np.load(str(mask_npz), allow_pickle=True)
-        m, mnames = z["mask"], [str(x) for x in z["ch_names"]]
+        m, mnames = np.asarray(z["mask"]).astype(bool), [str(x) for x in z["ch_names"]]
+        N_full = raw_rec.n_times
+        tf = int(z["num_fine_time_pts"]) if "num_fine_time_pts" in z.files else None
+        token_res = (tf is not None and m.shape[1] == (N_full + tf - 1) // tf and m.shape[1] != N_full)
         mask = np.zeros((len(ch_names), T), dtype=bool)
         for i, c in enumerate(ch_names):
             if c in mnames:
-                mask[i] = m[mnames.index(c)][:T]
+                row = m[mnames.index(c)]
+                if token_res:
+                    row = np.repeat(row, tf)[:N_full]
+                mask[i] = row[:T]
 
     n = len(ch_names) if max_channels is None else min(max_channels, len(ch_names))
     t = np.arange(T) / sfreq
