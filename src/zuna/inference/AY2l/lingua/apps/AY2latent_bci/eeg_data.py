@@ -2253,17 +2253,23 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
 
         # 2. Bad time annotations: any annotation whose description starts with 'BAD'
         sfreq = raw.info["sfreq"]
-        # Annotation onsets are in the recording's absolute (orig_time) frame when orig_time is
-        # set, while get_data() is 0-based from first_samp. Subtract first_samp so onsets map to
-        # the correct data sample — recordings that start at t>0 (first_samp>0), e.g. a cropped
-        # file, would otherwise be off by first_samp. When orig_time is None the onsets are
-        # already data-relative, so no shift is applied.  #jm v4
-        ann_first_samp = raw.first_samp if raw.annotations.orig_time is not None else 0
+        # Map each annotation onset to a 0-based sample index into get_data(). Onsets live in the
+        # recording's ABSOLUTE (first_samp) frame when orig_time is set; some files carry absolute
+        # onsets even with orig_time/meas_date = None (e.g. a crop that lost its meas_date). A truly
+        # 0-based onset must fall within the recording, so an onset at/beyond the duration also signals
+        # the absolute frame. In both absolute cases subtract first_samp; otherwise it's already
+        # data-relative. (first_samp is 0 for un-cropped files, so this is a no-op there.)  #jm v4
+        first_samp = raw.first_samp
+        has_orig_time = raw.annotations.orig_time is not None
+        dur_s = raw.n_times / sfreq
         for ann in raw.annotations:
             if not str(ann["description"]).upper().startswith("BAD"):
                 continue
-            ann_start = int(round(ann["onset"] * sfreq)) - ann_first_samp
-            ann_end   = int(round((ann["onset"] + ann["duration"]) * sfreq)) - ann_first_samp
+            onset = ann["onset"]
+            absolute = has_orig_time or (onset >= dur_s)   # onset beyond duration can't be 0-based
+            off = first_samp if absolute else 0
+            ann_start = int(round(onset * sfreq)) - off
+            ann_end   = int(round((onset + ann["duration"]) * sfreq)) - off
             # Intersect with this segment
             ovl_start = max(0, ann_start - seg_start_sample)
             ovl_end   = min(T, ann_end   - seg_start_sample)

@@ -28,8 +28,8 @@ REPO_ROOT = TUTORIAL_DIR.parent
 
 INPUT_DIR   = TUTORIAL_DIR / "data" / "1_fif_input"          # directory of input .fif files
 RECON_OUT   = TUTORIAL_DIR / "data" / "2_fif_output"         # reconstructed .fif (full/ + hybrid/)
-FIGURES_DIR = TUTORIAL_DIR / "data" / "working" / "FIGURES_FIF"
-DUMP_DIR    = TUTORIAL_DIR / "data" / "working" / "v4_dump"  # eeg_eval logs/metrics
+FIGURES_DIR = TUTORIAL_DIR / "data" / "figures"             # overlay comparison figures
+TMP_DIR     = TUTORIAL_DIR / "data" / "tmp"                 # eeg_eval logs/metrics (throwaway)
 
 # Trained ZUNA checkpoint (local). config_infer_fif.yaml matches its architecture.
 CHECKPOINT = "/data/groups/bci/checkpoints/bci/ZUNA2_5e-4_noALW2/checkpoints/0000548000"
@@ -67,14 +67,14 @@ V4_TARGET_CHANNEL_COUNT = None           # e.g. 40 to upsample+infer to N channe
 def build_cmd():
     overrides = {
         "config":                     CONFIG_PATH,
-        "dump_dir":                   DUMP_DIR.absolute(),
+        "dump_dir":                   TMP_DIR.absolute(),
         "checkpoint.init_ckpt_path":  CHECKPOINT,
         "data.data_dir":              INPUT_DIR.absolute(),
         "data.target_packed_seqlen":  TOKENS_PER_BATCH,
         "data.data_norm":             DATA_NORM,
         "diffusion_cfg":              DIFFUSION_CFG,
         "diffusion_sample_steps":     DIFFUSION_SAMPLE_STEPS,
-        "inference_figures_dir":      FIGURES_DIR,
+        "inference_figures_dir":      TMP_DIR,   # eeg_eval's internal figures -> tmp (keeps data/figures clean)
         "data.v4_recon_save_fif":     "true",
         "data.v4_recon_out_dir":      RECON_OUT.absolute(),
         "data.v4_segment_sec":        V4_SEGMENT_SEC,
@@ -93,6 +93,7 @@ def build_cmd():
 def build_env():
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(GPU_DEVICE)
+    env["WANDB_MODE"] = "disabled"   # fully disable wandb: no init, no local wandb/ dir, no uploads
     env["PYTHONPATH"] = os.pathsep.join(
         [str(LINGUA_ROOT), str(APP_DIR), env.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
@@ -113,7 +114,7 @@ def make_overlay_figures():
     except Exception as e:
         print(f"  [fig] could not import plot_reconstruction_overlay ({e}); skipping figures.")
         return
-    fig_dir = FIGURES_DIR / "reconstruction_overlays"
+    fig_dir = FIGURES_DIR
     for inp in sorted(INPUT_DIR.glob("*.fif")):
         # FifReconstructor writes "{base}_raw.fif" / "{base}_mask.npz" where base drops "_raw".
         # Derive the same base so inputs NOT named "*_raw.fif" (e.g. EPCTL02_n2.fif) still match.
@@ -147,7 +148,7 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"V4 config not found at {CONFIG_PATH}")
     if not EEG_EVAL.exists():
         raise FileNotFoundError(f"eeg_eval.py not found at {EEG_EVAL}")
-    for d in (RECON_OUT, FIGURES_DIR, DUMP_DIR):
+    for d in (RECON_OUT, FIGURES_DIR, TMP_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     cmd = build_cmd()
@@ -162,4 +163,4 @@ if __name__ == "__main__":
     print("\n✓ inference + reconstruction complete.")
     print(f"  .fif: {RECON_OUT}/full_reconstruction/  and  {RECON_OUT}/hybrid/")
     make_overlay_figures()
-    print(f"  figures: {FIGURES_DIR}/reconstruction_overlays/")
+    print(f"  figures: {FIGURES_DIR}/")
