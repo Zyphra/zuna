@@ -41,7 +41,7 @@ CONFIG_PATH = APP_DIR / "configs/config_infer_fif.yaml"
 LINGUA_ROOT = APP_DIR.parent.parent                          # holds the `lingua` + `apps` packages
 
 # ============================================================================= INFERENCE
-GPU_DEVICE             = 2        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
+GPU_DEVICE             = 1        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
 TOKENS_PER_BATCH       = 100000  # data.target_packed_seqlen
 DATA_NORM              = 10.0    # rescale eeg to std ~= 0.1 (ZUNA expects this)
 DIFFUSION_CFG          = 1.0     # 1.0 = no cfg

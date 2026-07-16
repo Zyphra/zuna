@@ -35,16 +35,44 @@ git clone https://github.com/Zyphra/zuna.git && cd zuna
 pip install -e .
 ```
 
+### GPU support (PyTorch + CUDA)
+
+`zuna` runs on the GPU via PyTorch, and **PyPI cannot pick a PyTorch build that matches your GPU driver for you**. If the automatically installed `torch` is built for a newer CUDA version than your NVIDIA driver supports, PyTorch silently falls back to CPU (very slow) with a warning like `No CUDA runtime is found` / `CUDA initialization: The NVIDIA driver on your system is too old`.
+
+To avoid this, install a `torch` build that matches your driver **before** installing `zuna`. Check the CUDA version your driver supports (top-right of `nvidia-smi`), then install the matching wheel — for example, for CUDA 12.8:
+
+```bash
+# 1. Install a torch build matching your driver's CUDA version (see `nvidia-smi`).
+#    Example for CUDA 12.8 — use cu121 / cu124 / cu126 / cu128 to match yours:
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+
+# 2. Then install zuna (it will use the torch you already installed)
+pip install zuna
+```
+
+If you already installed `zuna` and it's running on CPU, fix it by reinstalling the matching torch:
+
+```bash
+pip install --force-reinstall torch --index-url https://download.pytorch.org/whl/cu128
+```
+
+Verify GPU access:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+# Expect the CUDA build (e.g. ...+cu128) and `True`.
+```
+
 ## Quick Start
 
-See `tutorials/run_zuna_pipeline.py` for a complete working example. 
+See `tutorials/run_zuna_pipeline_fif.py` for a complete working example. 
 
 Note that you can also find a version of this script [here](https://colab.research.google.com/drive/1aL3Gh4FkrWnSBRUqmQmHNz7GTHvWhuf5?usp=sharing) on Google Colaboratory for free GPU access.
 
 Edit the paths and options, then run:
 
 ```bash
-python tutorials/run_zuna_pipeline.py
+python tutorials/run_zuna_pipeline_fif.py
 ```
 
 Input `.fif` files must have a channel montage set with 3D positions (see [Setting Montages](#setting-montages) below). The pipeline runs 4 steps:
