@@ -5,9 +5,7 @@
 
 # 1st, setup tmux and docker with lingua.sh
 #   >> bash /data/groups/bci/chris/workspace/AY2l/lingua/lingua.sh 
-#   >> OR
-#   >> bash /data/home/jonas/workspace/AY2l/lingua/lingua_jonas.sh #jonas
-
+#
 # 2nd, run something like:
 #   >> CUDA_VISIBLE_DEVICES=1 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
 #   >> CUDA_VISIBLE_DEVICES=4 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
@@ -39,7 +37,7 @@ from torch.distributed.checkpoint.stateful import Stateful
 from lingua.args import dataclass_from_dict
 from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
-from utils_pt_mne import interpolate_signals_with_mne #, egi_montage_subsampling
+from utils_pt_mne import interpolate_signals_with_mne
 
 from apps.AY2latent_bci.eeg_data import (
     EEGProcessor,
@@ -73,7 +71,7 @@ from apps.AY2latent_bci.transformer import (
 )
 
 from dotenv import load_dotenv
-load_dotenv() # Load WANDB_API_KEY from .env file
+load_dotenv()
 
 logger = logging.getLogger()
 
@@ -244,8 +242,6 @@ def plot_compare_eeg_signal(data,
     dimx, dimy = best_div
     fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12))
 
-    ## old way of doing it, when we were dropping whole channels.
-
     # More general way of dropout - assumes anything that is 0.0 has been dropped.
     pct_dropout = (data==0).sum()/data.size
     where_dropout = data==0
@@ -354,121 +350,6 @@ def plot_compare_eeg_signal(data,
     plt.savefig(f"{dir_base}/eeg_signal_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-
-
-
-def plot_compare_eeg_position(data,
-                              reconst,  
-                              mse_value,
-                              batch=0, 
-                              sample=0,
-                              idx=0,
-                              fname_tag="",
-                              dir_base="figures",
-):
-    """
-    Plot EEG electrode position (data & reconst) over coarse time scale.
-    """
-    assert data.shape == reconst.shape
-
-    tc = data.shape[1]//3 # coarse time
-
-    # Split out coarse_time from {x,z,y} channels.
-    data = data.reshape(-1,tc,3)
-    reconst = reconst.reshape(-1,tc,3)
-
-    # Sanity check: channel positions in data should be same for all time points
-    #       Not true for reconst - but is desirable.
-    xxx = data[:,0,:]
-    for i in range(1,tc):
-        yyy = data[:,i,:]
-        assert (yyy == xxx).all()
-
-    if tc ==  1:
-        dimx, dimy = 1,1
-    elif tc == 10:
-        dimx, dimy = 2,5
-    elif tc == 40:
-        dimx, dimy = 5,8
-    else:
-        print(f"In plot_compare_eeg_position, tc is unexpected: {dimx=}, {dimy=}, {tc=}")
-
-    assert dimx*dimy == tc
-
-    tf_sec = 5.0/tc # fine-time window in seconds for each coarse time chunk (full signal is 5 seconds for now)
-
-    fig, axes = plt.subplots(dimx, dimy, figsize=(24, 12), subplot_kw=dict(projection="3d"))
-
-    # Get max/min for each axis, across data & reconst for subplot consistency
-    max_x = max( data[:,:,0].max(), reconst[:,:,0].max() )
-    min_x = min( data[:,:,0].min(), reconst[:,:,0].min() )
-    max_y = max( data[:,:,1].max(), reconst[:,:,1].max() )
-    min_y = min( data[:,:,1].min(), reconst[:,:,1].min() )
-    max_z = max( data[:,:,2].max(), reconst[:,:,2].max() )
-    min_z = min( data[:,:,2].min(), reconst[:,:,2].min() )
-
-
-
-    if tc == 1:
-        tc = tc-1 # just to make the indexing work.
-        # If only one coarse time point (chop_signals_only)
-        axes.view_init(elev=20, azim=120)
-        axes.set_box_aspect([1, 1, 1])
-        axes.set_xlim(min_x, max_x)
-        axes.set_ylim(min_y, max_y)
-        axes.set_zlim(min_z, max_z)
-        #
-        xd = data[:, tc, 0]
-        yd = data[:, tc, 1]
-        zd = data[:, tc, 2]
-        axes.scatter(xd, yd, zd, marker='o', s=20, facecolors='none', edgecolors='b', alpha=0.3)
-        #
-        xr = reconst[:, tc, 0]
-        yr = reconst[:, tc, 1]
-        zr = reconst[:, tc, 2]
-        axes.scatter(xr, yr, zr, marker='o', s=15, facecolors='r', edgecolors='r', alpha=0.3)
-        #
-        axes.set_xlabel('x')
-        axes.set_ylabel('y')
-        axes.set_zlabel('z')
-        axes.set_title(f"tc = {tc*tf_sec}-{(tc+1)*tf_sec} secs ")
-
-    else:
-        # Loop through each subplot and plot channel positions at that coarse time.
-        tc=-1
-        for i in range(dimx):
-            for j in range(dimy):
-                tc+=1
-                axes[i, j].view_init(elev=20, azim=120)
-                axes[i, j].set_box_aspect([1, 1, 1])
-                axes[i, j].set_xlim(min_x, max_x)
-                axes[i, j].set_ylim(min_y, max_y)
-                axes[i, j].set_zlim(min_z, max_z)
-                #
-                xd = data[:, tc, 0]
-                yd = data[:, tc, 1]
-                zd = data[:, tc, 2]
-                axes[i, j].scatter(xd, yd, zd, marker='o', s=20, facecolors='none', edgecolors='b', alpha=0.3)
-                #
-                xr = reconst[:, tc, 0]
-                yr = reconst[:, tc, 1]
-                zr = reconst[:, tc, 2]
-                axes[i, j].scatter(xr, yr, zr, marker='o', s=15, facecolors='r', edgecolors='r', alpha=0.3)
-
-                if tc==0:
-                    axes[i, j].set_xlabel('x')
-                    axes[i, j].set_ylabel('y')
-                    axes[i, j].set_zlabel('z')
-                axes[i, j].set_title(f"tc = {tc*tf_sec}-{(tc+1)*tf_sec} secs ")
-        
-    plt.tight_layout(rect=[0, 0, 1, 0.95]) # leave some space at top for suptitle
-    fig.text(0.27, 0.97, "data", ha='center', va='center', fontsize=16, fontweight='bold', color='blue')
-    fig.text(0.30, 0.97, "vs.", ha='center', va='center', fontsize=16, fontweight='bold', color='black')
-    fig.text(0.34, 0.97, "reconst", ha='center', va='center', fontsize=16, fontweight='bold', color='red')
-    plt.suptitle(f"EEG - ({batch=}, {idx=}, {sample=}) - MSE={mse_value:0.5f}", fontsize=16, fontweight='bold')
-
-    plt.savefig(f"{dir_base}/eeg_position_compare_B{batch}_S{sample}{fname_tag}.png", dpi=300, bbox_inches='tight')
-    plt.close()
 
 
 def plot_compare_fft(data, 
@@ -1398,9 +1279,6 @@ def evaluate(args: TrainArgs):
 
                 model_param_count = get_num_params(model)
 
-
-                # DO NOT NEED TO SHARD MODEL FOR INFERENCE
-
                 if device.type == "cuda":
                     model.sample = torch.compile(model.sample)  # compiled despite graph breaks from the sampling loop in .sample
                     model.encoder = torch.compile(model.encoder)
@@ -1412,9 +1290,6 @@ def evaluate(args: TrainArgs):
                 # and buffers, otherwise you will have random values in the unitialized tensors
                 # which will silently fail (give nan gradients for example)
 
-
-
-                ##(CW. Replace below with above)
                 if args.checkpoint.init_ckpt_path:
                     with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
                         torch.manual_seed(args.model.seed)

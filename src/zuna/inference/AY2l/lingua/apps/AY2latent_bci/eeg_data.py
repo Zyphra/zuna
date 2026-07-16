@@ -444,7 +444,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
         - "correlated-channel-time-dropout": correlated-channel-time-dropout
         - "mix-4-dropouts-train": mix-4-dropouts-train
         - "mix-7-dropouts-train": mix-7-dropouts-train
-        - "spatially-selective-dropout": spatially-selective-dropout
         - "consumer-eeg-channel-dropout": consumer-eeg-channel-dropout
         - "standard-montage-channel-dropout": standard-montage-channel-dropout
         - "brain-region-channel-dropout": brain-region-channel-dropout
@@ -478,13 +477,13 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
     elif dropout_scheme == "mix-8-dropouts-train":
         dropout_scheme = random.choices([
             "standard-montage-channel-dropout",
-            "random-uniform-dropout", # too easy. downweight.
+            "random-uniform-dropout",
             "full-channel-random-dropout-train", 
             "correlated-channel-time-dropout",
             "full-time-pt-random-dropout", 
             "random-montage-channel-dropout", 
             "brain-region-channel-dropout",
-            "consumer-eeg-channel-dropout"], # too hard. downweight.
+            "consumer-eeg-channel-dropout"],
             weights=[0.125, 0.075, 0.275, 0.125, 0.125, 0.125, 0.125, 0.025])[0]
 
     else:
@@ -741,137 +740,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
                 token_dropout.append([]) # No dropout for this sample.
 
 
-
-
-
-    elif dropout_scheme == "brain-region-channel-dropout-old":
-        # Assign a brain region to each channel from xyz coordinates (metres).
-        # x=right(+), y=front(+), z=up; values expected in metres (~±0.09 m).
-        def _xyz_to_region(xyz_m):
-            x, y, z = float(xyz_m[0]) * 1000, float(xyz_m[1]) * 1000, float(xyz_m[2]) * 1000
-            hemi = "left" if x < -20 else ("right" if x > 20 else "mid")
-            if y > 45 or (z < 10 and y > 15):
-                base = "frontal"
-            elif y < -60 or (z < 10 and y < -35):
-                base = "occipital"
-            elif abs(x) > 60 and abs(y) < 40:
-                base = "temporal"
-            elif y < -25 and z > 20:
-                base = "parietal"
-            elif abs(x) < 55 and abs(y) < 32 and z > 35:
-                base = "central"
-            else:
-                return None
-            if base == "frontal":
-                return "frontal_right" if hemi == "right" else "frontal_left"
-            if base == "temporal":
-                return f"temporal_{'left' if hemi == 'left' else 'right'}" if hemi != "mid" else None
-            return base
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                n_ch = mm.shape[0]
-
-                if chan_pos is None:
-                    token_dropout.append([])
-                    continue
-
-                xyz_np = np.array(chan_pos, dtype=float)
-                if np.abs(xyz_np).max() > 1.0:
-                    xyz_np = xyz_np / 1000.0
-                channel_regions = [_xyz_to_region(xyz_np[i]) for i in range(n_ch)]
-
-                present_regions = list({r for r in channel_regions if r is not None})
-                if len(present_regions) < 2:
-                    token_dropout.append([])
-                    continue
-
-                iter_count = 0
-                while True:
-                    k = random.randint(1, len(present_regions) - 1)
-                    chosen_regions = set(random.sample(present_regions, k))
-                    channels_to_drop = sorted([
-                        i for i, r in enumerate(channel_regions)
-                        if r not in chosen_regions
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-                    if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-
-    elif dropout_scheme == "brain-region-channel-dropout-by-name":
-        # Dropout channels by brain region name.
-        #
-        REGION_CHANNELS = {
-            "frontal_left":   {"fp1", "fpz", "af3", "af7", "afz","f1", "f3", "f5",
-                               "f7", "fz","fc1", "fc3", "fc5", "fcz"},
-            "frontal_right":  {"fp2", "af4", "af8", "f2", "f4", "f6", "f8",
-                               "fc2", "fc4", "fc6"},
-            "temporal_left":  {"t3", "t5", "t7", "ft7", "tp7", "tp9"},
-            "temporal_right": {"t4", "t6", "t8", "ft8", "tp8", "tp10"},
-            "central":        {"c1", "c2", "c3", "c4", "c5", "c6", "cz"},
-            "parietal":       {"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "pz",
-                               "cp1", "cp2", "cp3", "cp4", "cp5", "cp6", "cpz"},
-            "occipital":      {"o1", "o2", "oz", "po3", "po4", "po7", "po8", "poz",
-                               "i1", "i2", "iz"},
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    # Choose between 1 and n_keys - 1 regions to keep.
-                    n_keys = len(REGION_CHANNELS)
-                    k = random.randint(1, n_keys - 1)
-                    chosen_regions = random.sample(list(REGION_CHANNELS.keys()), k)
-                    channels_to_keep = set().union(*(REGION_CHANNELS[rk] for rk in chosen_regions))
-                    #
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
     elif dropout_scheme == "random-montage-channel-dropout":
         # Greedily prune nearest-neighbour pairs until a target count
         # (8, 16, 32, or 64) is reached, giving sparse but global coverage.
@@ -1062,206 +930,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
             else:
                 token_dropout.append([]) # No dropout for this sample.
 
-
-    elif dropout_scheme == "standard-montage-channel-dropout-old":
-        # Standard 10-20/10-10 xyz positions (metres) used as target locations for each standard montage.
-        # For each target position, the nearest actual channel is kept; all others are dropped.
-        _STD_XYZ = {
-            "fp1":  (-0.026,  0.083,  0.020), "fp2":  ( 0.026,  0.083,  0.020),
-            "fpz":  ( 0.000,  0.087,  0.020),
-            "af7":  (-0.068,  0.065,  0.015), "af8":  ( 0.068,  0.065,  0.015),
-            "af3":  (-0.040,  0.071,  0.048), "af4":  ( 0.040,  0.071,  0.048),
-            "afz":  ( 0.000,  0.073,  0.060),
-            "f7":   (-0.083,  0.048,  0.012), "f8":   ( 0.083,  0.048,  0.012),
-            "f5":   (-0.067,  0.050,  0.046), "f6":   ( 0.067,  0.050,  0.046),
-            "f3":   (-0.047,  0.052,  0.063), "f4":   ( 0.047,  0.052,  0.063),
-            "f1":   (-0.024,  0.054,  0.072), "f2":   ( 0.024,  0.054,  0.072),
-            "fz":   ( 0.000,  0.054,  0.074),
-            "ft7":  (-0.087,  0.025,  0.012), "ft8":  ( 0.087,  0.025,  0.012),
-            "fc5":  (-0.073,  0.026,  0.052), "fc6":  ( 0.073,  0.026,  0.052),
-            "fc3":  (-0.052,  0.026,  0.073), "fc4":  ( 0.052,  0.026,  0.073),
-            "fc1":  (-0.026,  0.026,  0.085), "fc2":  ( 0.026,  0.026,  0.085),
-            "fcz":  ( 0.000,  0.026,  0.087),
-            "t7":   (-0.090,  0.000,  0.010), "t8":   ( 0.090,  0.000,  0.010),
-            "c5":   (-0.078,  0.000,  0.046), "c6":   ( 0.078,  0.000,  0.046),
-            "c3":   (-0.054,  0.000,  0.073), "c4":   ( 0.054,  0.000,  0.073),
-            "c1":   (-0.027,  0.000,  0.087), "c2":   ( 0.027,  0.000,  0.087),
-            "cz":   ( 0.000,  0.000,  0.090),
-            "tp7":  (-0.087, -0.025,  0.012), "tp8":  ( 0.087, -0.025,  0.012),
-            "cp5":  (-0.073, -0.026,  0.052), "cp6":  ( 0.073, -0.026,  0.052),
-            "cp3":  (-0.052, -0.026,  0.073), "cp4":  ( 0.052, -0.026,  0.073),
-            "cp1":  (-0.026, -0.026,  0.085), "cp2":  ( 0.026, -0.026,  0.085),
-            "cpz":  ( 0.000, -0.026,  0.087),
-            "p7":   (-0.083, -0.048,  0.012), "p8":   ( 0.083, -0.048,  0.012),
-            "p5":   (-0.067, -0.050,  0.046), "p6":   ( 0.067, -0.050,  0.046),
-            "p3":   (-0.047, -0.052,  0.063), "p4":   ( 0.047, -0.052,  0.063),
-            "p1":   (-0.024, -0.054,  0.072), "p2":   ( 0.024, -0.054,  0.072),
-            "pz":   ( 0.000, -0.054,  0.074),
-            "po7":  (-0.068, -0.065,  0.015), "po8":  ( 0.068, -0.065,  0.015),
-            "po3":  (-0.040, -0.071,  0.048), "po4":  ( 0.040, -0.071,  0.048),
-            "poz":  ( 0.000, -0.073,  0.060),
-            "o1":   (-0.026, -0.083,  0.020), "o2":   ( 0.026, -0.083,  0.020),
-            "oz":   ( 0.000, -0.087,  0.020),
-        }
-
-        _STANDARD_MONTAGES_XYZ = {
-            "standard_8":  ["fp1", "fp2", "c3", "cz", "c4", "o1", "o2", "pz"],
-            "standard_16": ["fp1", "fp2",
-                            "f3", "fz", "f4",
-                            "c3", "cz", "c4",
-                            "t7", "t8",
-                            "p3", "pz", "p4",
-                            "o1", "oz", "o2"],
-            "standard_32": ["fp1", "fp2", "fpz",
-                            "af3", "af4",
-                            "f7", "f3", "fz", "f4", "f8",
-                            "fc5", "fc1", "fcz", "fc2", "fc6",
-                            "t7", "c3", "cz", "c4", "t8",
-                            "cp5", "cp1", "cpz", "cp2", "cp6",
-                            "p7", "p3", "pz", "p4", "p8",
-                            "o1", "oz", "o2"],
-            "standard_64": ["fp1", "fp2", "fpz",
-                            "af7", "af3", "afz", "af4", "af8",
-                            "f7", "f5", "f3", "f1", "fz", "f2", "f4", "f6", "f8",
-                            "ft7", "fc5", "fc3", "fc1", "fcz", "fc2", "fc4", "fc6", "ft8",
-                            "t7", "c5", "c3", "c1", "cz", "c2", "c4", "c6", "t8",
-                            "tp7", "cp5", "cp3", "cp1", "cpz", "cp2", "cp4", "cp6", "tp8",
-                            "p7", "p5", "p3", "p1", "pz", "p2", "p4", "p6", "p8",
-                            "po7", "po3", "poz", "po4", "po8",
-                            "o1", "oz", "o2"],
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                n_ch = mm.shape[0]
-
-                if chan_pos is None:
-                    token_dropout.append([])
-                    continue
-
-                xyz_np = np.array(chan_pos, dtype=float)
-                if np.abs(xyz_np).max() > 1.0:
-                    xyz_np = xyz_np / 1000.0
-
-                iter_count = 0
-                while True:
-                    montage_name = random.choice(list(_STANDARD_MONTAGES_XYZ))
-                    target_xyz = np.array(
-                        [_STD_XYZ[ch] for ch in _STANDARD_MONTAGES_XYZ[montage_name] if ch in _STD_XYZ],
-                        dtype=float,
-                    )
-                    # Keep the nearest actual channel to each target position
-                    channels_to_keep = {
-                        int(np.argmin(np.sqrt(((xyz_np - t) ** 2).sum(axis=1))))
-                        for t in target_xyz
-                    }
-
-                    # check that all the montage target channels map to distinct data channels
-                    if target_xyz.shape[0] == len(channels_to_keep):
-                        channels_to_drop = sorted(set(range(n_ch)) - channels_to_keep)
-                    else:
-                        channels_to_drop = {}
-
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-    elif dropout_scheme == "standard-montage-channel-dropout-by-name":
-        # Dropout channels by standard montage name.
-        #
-        MONTAGE_CHANNELS = {
-            "standard_8": {"fp1", "fp2", "c3", "cz", "c4", "o1", "o2", "pz"},
-            "standard_16": {
-                "fp1", "fp2",
-                "f3", "fz", "f4",
-                "c3", "cz", "c4",
-                "t7", "t8",
-                "p3", "pz", "p4",
-                "o1", "oz", "o2",
-            },
-            "standard_19": {
-                "fp1", "fp2",
-                "f7", "f3", "fz", "f4", "f8",
-                "t3", "c3", "cz", "c4", "t4",
-                "t5", "p3", "pz", "p4", "t6",
-                "o1", "o2",
-            },
-            "standard_32": {
-                "fp1", "fp2", "fpz",
-                "af3", "af4",
-                "f7", "f3", "fz", "f4", "f8",
-                "fc5", "fc1", "fcz", "fc2", "fc6",
-                "t7", "c3", "cz", "c4", "t8",
-                "cp5", "cp1", "cpz", "cp2", "cp6",
-                "p7", "p3", "pz", "p4", "p8",
-                "o1", "oz", "o2",
-            },
-            "standard_64": {
-                "fp1", "fp2", "fpz",
-                "af7", "af3", "afz", "af4", "af8",
-                "f7", "f5", "f3", "f1", "fz", "f2", "f4", "f6", "f8",
-                "ft7", "fc5", "fc3", "fc1", "fcz", "fc2", "fc4", "fc6", "ft8",
-                "t7", "c5", "c3", "c1", "cz", "c2", "c4", "c6", "t8",
-                "tp7", "cp5", "cp3", "cp1", "cpz", "cp2", "cp4", "cp6", "tp8",
-                "p7", "p5", "p3", "p1", "pz", "p2", "p4", "p6", "p8",
-                "po7", "po3", "poz", "po4", "po8",
-                "o1", "oz", "o2",
-            },
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    headset = random.choice(list(MONTAGE_CHANNELS))
-                    channels_to_keep = MONTAGE_CHANNELS[headset]
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
-                        break
-                
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
     elif dropout_scheme == "consumer-eeg-channel-dropout":
         # Standard 10-20 xyz positions (metres) used as target locations for each headset.
         # For each target position, the nearest actual channel is kept; all others are dropped.
@@ -1348,61 +1016,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
                         break
 
                     if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-
-    elif dropout_scheme == "consumer-eeg-channel-dropout-by-name":
-        #
-        #
-        CONSUMER_HEADSETS = {
-            "muse":           {"tp9", "af7", "af8", "tp10"},
-            "crown":          {"cp3", "c3", "f5", "po3", "po4", "f6", "c4", "cp4"},
-            "emotiv_epoc":    {"af3", "f7", "f3", "fc5", "t7", "p7", "o1",
-                               "o2", "p8", "t8", "fc6", "f4", "f8", "af4"},
-            "emotiv_insight": {"af3", "af4", "t7", "t8", "pz"},
-            "unicorn":        {"fz", "c3", "cz", "c4", "pz", "po7", "oz", "po8"},
-            "openbci_8":      {"fp1", "fp2", "c3", "c4", "p7", "p8", "o1", "o2"},
-            "dreem":          {"fp1", "fp2", "o1", "o2", "cz"},
-            "emotiv_flex32":  {"af3", "af4", "f7", "f3", "fz", "f4", "f8",
-                               "fc5", "fc1", "fcz", "fc2", "fc6",
-                               "t7", "c3", "cz", "c4", "t8",
-                               "cp5", "cp1", "cpz", "cp2", "cp6",
-                               "p7", "p3", "pz", "p4", "p8",
-                               "po7", "po8", "o1", "oz", "o2"},
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    headset = random.choice(list(CONSUMER_HEADSETS))
-                    channels_to_keep = CONSUMER_HEADSETS[headset]
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
                         break
 
                 N,T = mm.shape
@@ -1547,12 +1160,7 @@ class EEGDataset_v3(IterableDataset): # loads from v7 mmap format (JSON sidecar 
             raise ValueError(f"Invalid value for args.sample_duration_str: {args.sample_duration_str}")
 
         # xyz_extremes — same values and logic as EEGDataset_v2
-        if args.chan_pos_xyz_extremes_type == "old":
-            self.xyz_extremes = 1.10*torch.tensor([
-                [-0.0861, -0.1124, -0.0680],
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([
                 [-0.15, -0.15, -0.15],
                 [ 0.15,  0.15,  0.15]
@@ -2014,12 +1622,7 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
         self._upsampled_ch_mask = None
 
         # xyz_extremes — identical to V3
-        if args.chan_pos_xyz_extremes_type == "old":
-            self.xyz_extremes = 1.10*torch.tensor([
-                [-0.0861, -0.1124, -0.0680],
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([
                 [-0.15, -0.15, -0.15],
                 [ 0.15,  0.15,  0.15]
@@ -2810,14 +2413,7 @@ class EEGDataset_v2(IterableDataset):
         self.dropout_scheme = args.dropout_scheme
         self.num_bins = args.num_bins_discretize_xyz_chan_pos
 
-        if args.chan_pos_xyz_extremes_type == "old":
-            ## OLD TEST VALUES: (CW - WHAT I WAS USING PRIOR TO TEST104 and new v5 dataset)
-            self.xyz_extremes = 1.10*torch.tensor([ 
-                [-0.0861, -0.1124, -0.0680], 
-                [0.0858, 0.0849, 0.1002]
-            ])
-
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             ## For new dataset with variable temporal length 
             self.xyz_extremes = torch.tensor([ 
                 [-0.15, -0.15, -0.15], 
@@ -2948,42 +2544,6 @@ class EEGDataset_v2(IterableDataset):
 
             chan_pos_discrete = [discretize_chan_pos(cp, self.xyz_extremes, self.num_bins) for cp in chan_pos]
 
-
-
-
-
-            # Sanity check 3: 3D scatter plot of channel positions and discretized positions
-            plot_chan_pos_comparison = False
-            if plot_chan_pos_comparison:
-                fig = plt.figure(figsize=(16, 7))
-
-                # Left plot: Original continuous positions
-                ax1 = fig.add_subplot(121, projection='3d')
-                cp = chan_pos[0].cpu().numpy()
-                ax1.scatter(cp[:, 0], cp[:, 1], cp[:, 2], c='blue', marker='o', s=50, alpha=0.4)
-                for i in range(cp.shape[0]):
-                    ax1.text(cp[i, 0], cp[i, 1], cp[i, 2], str(i), fontsize=8)
-                ax1.set_xlabel('X')
-                ax1.set_ylabel('Y')
-                ax1.set_zlabel('Z')
-                ax1.set_title('Original Channel Positions')
-
-                # Right plot: Discretized positions
-                ax2 = fig.add_subplot(122, projection='3d')
-                cpd = chan_pos_discrete[0].cpu().numpy()
-                ax2.scatter(cpd[:, 0], cpd[:, 1], cpd[:, 2], c='red', marker='s', s=50, alpha=0.4)
-                for i in range(cpd.shape[0]):
-                    ax2.text(cpd[i, 0], cpd[i, 1], cpd[i, 2], str(i), fontsize=8)
-                ax2.set_xlabel('X')
-                ax2.set_ylabel('Y')
-                ax2.set_zlabel('Z')
-                ax2.set_title('Discretized Channel Positions')
-
-                plt.tight_layout()
-                plt.savefig('figures/chan_pos_comparison.png', dpi=150, bbox_inches='tight')
-                plt.close()
-                print(f"Saved channel position comparison plot to figures/chan_pos_comparison.png")
-
             # Filter out samples that do not have self.chan_num_filter channels. This is pretty quick - not the source of data_t slowdown
             if self.chan_num_filter is not None:
                 mmap_filt = []
@@ -3016,9 +2576,6 @@ class EEGDataset_v2(IterableDataset):
                 chan_pos_discrete = chan_pos_discrete_shuf
 
 
-
-
-
             token_dropout = perform_token_dropout(dropout_scheme=self.dropout_scheme, 
                                                   token_dropout_prob=self.token_dropout_prob, 
                                                   num_fine_time_pts=self.num_fine_time_pts, 
@@ -3033,24 +2590,6 @@ class EEGDataset_v2(IterableDataset):
             if self.shuffle:
                 random.shuffle(indx)
 
-            check_reshape_plots = False # Plot signals before and after reshaping to verify its working.
-                                         # THIS IS NOT EXPECTED TO WORK WITH self.use_coarse_time=="D
-            if check_reshape_plots:
-                # Create a sample signal to demonstrate reshape and unreshape is working.
-                tf = self.num_fine_time_pts
-                tc = 10
-                indx0 = indx[0]
-                num_chans = mmap[indx0].shape[0]
-                for i in range(num_chans):
-                    signal = mmap[indx0][i,:]
-                    if self.use_coarse_time=="C": # plot only the first tf part of signal it "C"
-                        signal = signal[:tf]
-                    fig, ax = plt.subplots(1, 1, figsize=(20, 4))
-                    ax.plot(signal)
-                    if self.use_coarse_time!="C": 
-                        ax.scatter(tf*np.arange(tc), signal[::tf], color='red')
-                    plt.savefig(f"figures/inspect_reshape_and_invert/test0_ch{i}_before.png", dpi=300, bbox_inches='tight')
-                    plt.close()
 
             if self.use_coarse_time=="A" or self.use_coarse_time=="B" or self.use_coarse_time=="C" or self.use_coarse_time=="D":
                 reshaped = [chop_and_reshape_signals(m, c, cd, self.num_fine_time_pts, self.use_coarse_time) for m,c,cd in zip(mmap, chan_pos, chan_pos_discrete)]
@@ -3200,7 +2739,7 @@ class EEGDataset_v2(IterableDataset):
 class EEGDataset_b2(IterableDataset):
     """
 
-    NOTE: THIS IS BECOMING DEPRECATED. USE EEGDataset_v2 INSTEAD. BEREN SAID WE CAN JUST STREAM DATASET LOCALLY.
+    NOTE: THIS IS DEPRECATED. USE EEGDataset_v2 INSTEAD. FOR NOW, WE CAN JUST STREAM DATASET LOCALLY.
     Iterable dataset that pulls .pt files from Backblaze B2 bucket using boto3 S3-compatible API.
     Modeled after EEGDataset_v2 but with cloud storage integration.
     """
@@ -3248,13 +2787,7 @@ class EEGDataset_b2(IterableDataset):
         self.dropout_scheme = args.dropout_scheme
         self.num_bins = args.num_bins_discretize_xyz_chan_pos
 
-        if args.chan_pos_xyz_extremes_type == "old":
-            ## OLD TEST VALUES: (CW - WHAT I WAS USING PRIOR TO TEST104 and new v5 dataset)
-            self.xyz_extremes = 1.10*torch.tensor([ 
-                [-0.0861, -0.1124, -0.0680], 
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([ 
                 [-0.15, -0.15, -0.15], 
                 [ 0.15,  0.15,  0.15]
@@ -3666,82 +3199,6 @@ class EEGProcessor:
             decoder_input = (1 - t) * eeg_signal + t * noise # non dropped outnoised signals sent into decoder input.
 
         decoder_targets = noise - eeg_signal
-
-
-        # Print out mean and std of noise and signals and combinations of them. (Check sigma) Data_sig = 0.2 & Noise_sig = 1.0
-        print_sample_noising_process = False
-        if print_sample_noising_process:
-
-            # Loop over 10 values of t between 0 and 1
-            print("\n" + "="*80)
-            print("Statistics for dropout_chan vs ~dropout_chan subsets")
-            print("="*80)
-
-            dropout_mask = token_dropout.squeeze(-1)
-
-            decoder_targets_test = noise - eeg_signal
-
-            # These should be same for all t values. So only print once.
-            # eeg_signal stats
-            sig_do = eeg_signal[dropout_mask]
-            sig_nodo = eeg_signal[~dropout_mask]
-            print(f"\n  eeg_signal [dropout]:     mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  eeg_signal [~dropout]:    mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # eeg_signal_masked stats
-            sig_do = eeg_signal_masked[dropout_mask]
-            sig_nodo = eeg_signal_masked[~dropout_mask]
-            print(f"\n  eeg_signal_masked [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  eeg_signal_masked [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # noise stats
-            sig_do = noise[dropout_mask]
-            sig_nodo = noise[~dropout_mask]
-            print(f"\n  noise [dropout]:          mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  noise [~dropout]:         mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # decoder_targets_test stats
-            sig_do = decoder_targets_test[dropout_mask]
-            sig_nodo = decoder_targets_test[~dropout_mask]
-            print(f"\n  decoder_targets [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  decoder_targets [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            for i, t_val in enumerate(torch.linspace(0, 1, 10)):
-                # Compute noisy signal for this t value
-                t_test = t_val * torch.ones_like(t)
-                noisy_test = ((1 - t_test) * eeg_signal_masked + t_test * noise).squeeze(0)
-                
-                print(f"\n--- t = {t_val:.3f} sigma = {sigma} ---")
-
-                # noisy_test stats
-                sig_do = noisy_test[dropout_mask]
-                sig_nodo = noisy_test[~dropout_mask]
-                print(f"  noisy_eeg_signal_masked [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-                print(f"  noisy_eeg_signal_masked [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-
-            print("\n" + "="*80 + "\n")
-
-
-            print(f"INside EEGProcessor.process, plotting sample of noisy and clean signals.")
-
-            print(
-                eeg_signal, 
-                chan_pos, 
-                chan_pos_discrete, 
-                chan_id, 
-                t_coarse, 
-                seq_lens, 
-                token_dropout,
-                sigma,
-                eeg_signal_masked,
-                noise,
-                decoder_input,
-                decoder_targets,
-                t,
-            )
-
-
 
         out_dict = {
             "encoder_input": eeg_signal_masked, # dropout signals into encoder input.

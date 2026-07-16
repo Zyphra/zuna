@@ -619,7 +619,7 @@ class DecoderTransformer(BaseTransformerDecoder):
         cross_attended = cross_attended.to(dtype=self.encoder_proj.weight.dtype)
 
 
-        tokens = tokens.squeeze(1)                # this was causing error when num channels was 1. Do I need it?
+        tokens = tokens.squeeze(1)              
 
         bsz, seqlen, dim = tokens.shape
         _, cross_seqlen, _ = cross_attended.shape
@@ -941,7 +941,7 @@ class EncoderTransformer(BaseTransformer):
         tok_idx = tok_idx.reshape(bsz, num_groups, df, r)
 
         # Expand the single register => [B, num_groups, 1, D]
-        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2) ##  This .expand errors cryptically. Fix with above. But that errors later. Ugh!
+        regs = self.registers.expand(bsz, num_groups, -1).unsqueeze(2)
 
         # Cat the register in front of each group => [B, num_groups, df+1, D]
         x = torch.cat([regs, x], dim=2)
@@ -1179,7 +1179,7 @@ class EncoderTransformer(BaseTransformer):
 
         h = self.tok_embeddings(token_values)
         
-        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK - I THINK THIS WORKS!!
+        # COMBINE SLIDING WINDOW MASK AND DOCUMENT MASK
         SLIDING_WINDOW = self.sliding_window
         def sliding_window_func(b, h, q_idx, kv_idx):
             # Self-attention case
@@ -1188,7 +1188,7 @@ class EncoderTransformer(BaseTransformer):
 
 
 
-        mask = create_document_mask((seq_lens*(1+1/self.df)).int(), base_mask_mod=mask_mod_slide) # THIS MAY BECOME A BUG!! Hardcoding for CR=1 with interleave_registers thing.
+        mask = create_document_mask((seq_lens*(1+1/self.df)).int(), base_mask_mod=mask_mod_slide)
 
 
         visualize_attention_masks = False
@@ -1207,18 +1207,8 @@ class EncoderTransformer(BaseTransformer):
 
 
 
-        # TO DO: Add APE sinusoidal position embeddings for channel id.
         if self.ape_dim == 1:
-
             h += self.ape_embedding(tok_idx[:,4]) # add sinusoidal position embeddings for channel-id index into token embeddings.
-
-
-
-        # TO DO: Things to shape after interleave_registers: Need to change for CR != 1.
-        #   (1). mask
-        #   (2). tok_idx
-
-
 
 
         # Note: for dropped-out channels, the token_values will be all zeros, 
@@ -1396,12 +1386,6 @@ class EncoderDecoder(nn.Module):
     ):
 
 
-
-
-
-
-
-        # Reintroduce the batch dimension. Come back to: I forget, Do I actually need to do this in the first place? Is it needed for something in Encoder?
         if encoder_input.ndim==2:
             encoder_input = encoder_input.unsqueeze(0)
             target = target.unsqueeze(0) # doing to get rid of broadcast warning from DecoderTransformer.compute_losses
@@ -1505,16 +1489,9 @@ class EncoderDecoder(nn.Module):
     @torch.no_grad()
     def sample(self, encoder_input: torch.Tensor, seq_lens: torch.Tensor, tok_idx: torch.Tensor, sample_steps: int = 50, cfg: float = 1.0):
 
-        ## THIS AUTOCAST IS NO GOOD WHEN CASTING NORMS AND RESIDUALS INTO FP32.
-
-
-
-
-
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         ## Trying to do inference with Learned Dropout Vector (not zeros for dropout).
-        do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels 
-        ## To DO: replace encoder_input at do_idx with self.dropout_vec ... happening inside EncoderTransformer()
+        do_idx = (encoder_input.sum(axis=2)==0).squeeze(0) # indices of dropped-out channels
 
 
         enc_out, tok_idx_reg, _ = self.encoder(
@@ -1560,9 +1537,6 @@ class EncoderDecoder(nn.Module):
             )
 
 
-
-
-            # NOTE: cfg scale (as implemented) is kinda weird. Why?
             #   Special case:
             #       cfg = 1.0 means use exactly conditioned vc.
             #   Otherwise:

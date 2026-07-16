@@ -132,9 +132,6 @@ class CrossAttention(nn.Module):
         xk = xk.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
 
-
-
-        # DO QK_NORM HERE
         if self.do_QK_norm:
             xq = self.q_norm(xq)
             xk = self.k_norm(xk)
@@ -422,7 +419,6 @@ class DecoderBlock(nn.Module):
         if print_layerwise_activation_stats and do_idx is not None:
 
             print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN DecoderBlock.forward")
-
             x_normed = self.attention_norm(x, c) # 
 
             print(f"\n\tDecoder self attn_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # 
