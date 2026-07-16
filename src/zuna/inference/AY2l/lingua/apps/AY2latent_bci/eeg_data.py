@@ -4,7 +4,7 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset
 import numpy as np
 import mne
 import math
-import json  #jm
+import json
 from dataclasses import dataclass, field
 from typing import Union, List, Optional, Any
 from torch.utils.data.distributed import DistributedSampler
@@ -290,7 +290,7 @@ class BCIDatasetArgs:
 
     num_batches: Union[int, None] = None
 
-    # CLODE fixed-eval harness (see eval_harness_clode.md)
+    # fixed-eval harness (see eval_harness.py)
     fixed_eval: bool = False                       # replay a frozen, sharded pool instead of streaming random draws
     eval_noise_seed: int = 0                       # base seed; per-sample seed = eval_noise_seed + global_pool_idx
     fixed_eval_cache_dir: Union[str, None] = None  # override where frozen_eval_*.pt is stored (default: sibling of data_dir)
@@ -317,7 +317,7 @@ class BCIDatasetArgs:
     logit_normal_mean: float = 0.0   # if diffusion_noise_schedule==logit, centre of hump = sigmoid(mean); 0 -> t=0.5
     logit_normal_std:  float = 1.0   # if diffusion_noise_schedule==logit, width; ~1 unimodal hump (SD3), >=2 -> U-shaped
 
-    pad_packed_seqlen: bool = False  # CLODE: if True, pad each packed seq with one all-zero document up to EXACTLY
+    pad_packed_seqlen: bool = False  # if True, pad each packed seq with one all-zero document up to EXACTLY
                                      # target_packed_seqlen (fixed shapes -> no torch.compile recompiles / frag).
                                      # Requires target_packed_seqlen % encoder_latent_downsample_factor == 0.
 
@@ -331,12 +331,12 @@ class BCIDatasetArgs:
     num_bins_discretize_xyz_chan_pos: int = 100 # Number of bins to discretize channel positions to use in 4d-RoPE. # 40 with "old" xyz_extremes, 100 with "thirteens" xyz_extremes
     chan_pos_xyz_extremes_type: str = "thirteens" # "old" for v4 dataset or "thirteens" for v5 dataset
 
-    # v3 mmap fields — ignored by EEGDataset_v2/b2, used only when use_v3=True  #jm
-    use_v3: bool = False                                  #jm
-    filter_version: List[str] = field(default_factory=lambda: ["v3_bandpass"]) # WAS str = "v3_bandpass"                   #jm  (use_v3: reads mmap from data_dir)
-    min_quality_any: float = 0.1                          #jm
-    min_quality_mean: float = 0.3                         #jm
-    dataset_id: int = 7                                   #jm    
+    # v3 mmap fields — ignored by EEGDataset_v2/b2, used only when use_v3=True
+    use_v3: bool = False
+    filter_version: List[str] = field(default_factory=lambda: ["v3_bandpass"]) # WAS str = "v3_bandpass"                   # (use_v3: reads mmap from data_dir)
+    min_quality_any: float = 0.1
+    min_quality_mean: float = 0.3
+    dataset_id: int = 7
     sample_duration_str: str = "5_seconds" # {"5_seconds", "10_seconds", "30_seconds"}
     do_avg_ref: bool = True # If true, do average reference before data normalization.
     z_score_type: str = "across_sample" # {"across_channel", "across_sample", "none"}
@@ -446,7 +446,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
         - "correlated-channel-time-dropout": correlated-channel-time-dropout
         - "mix-4-dropouts-train": mix-4-dropouts-train
         - "mix-7-dropouts-train": mix-7-dropouts-train
-        - "spatially-selective-dropout": spatially-selective-dropout
         - "consumer-eeg-channel-dropout": consumer-eeg-channel-dropout
         - "standard-montage-channel-dropout": standard-montage-channel-dropout
         - "brain-region-channel-dropout": brain-region-channel-dropout
@@ -480,13 +479,13 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
     elif dropout_scheme == "mix-8-dropouts-train":
         dropout_scheme = random.choices([
             "standard-montage-channel-dropout",
-            "random-uniform-dropout", # too easy. downweight.
+            "random-uniform-dropout",
             "full-channel-random-dropout-train", 
             "correlated-channel-time-dropout",
             "full-time-pt-random-dropout", 
             "random-montage-channel-dropout", 
             "brain-region-channel-dropout",
-            "consumer-eeg-channel-dropout"], # too hard. downweight.
+            "consumer-eeg-channel-dropout"],
             weights=[0.125, 0.075, 0.275, 0.125, 0.125, 0.125, 0.125, 0.025])[0]
 
     else:
@@ -512,10 +511,10 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
     elif dropout_scheme == "full-channel-random-dropout-train" or dropout_scheme == "train-2":
         ## NOTE: USING THIS IMPROVED DROPOUT SCHEME USED FOR TRAINING - STARTING WITH TEST84 - TRYING OUT THERE.
         # Apply NEW channel dropout right here to get list of all tokens (ch,tc) to drop
-        #   a. self.token_dropout_prob determines whether we do channel dropout for this sample.
-        #   If we do channel dropout, 
-        #       b. with p=0.8, we drop between 1 and N/2 chans with uniform probability.
-        #       c. with p=0.2, we drop between N/2 and N-1 chans with uniform probability.
+        # a. self.token_dropout_prob determines whether we do channel dropout for this sample.
+        # If we do channel dropout, 
+        # b. with p=0.8, we drop between 1 and N/2 chans with uniform probability.
+        # c. with p=0.2, we drop between N/2 and N-1 chans with uniform probability.
         token_dropout = []
         for mm in mmap:
             if random.random() < token_dropout_prob:
@@ -562,10 +561,10 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
         
     elif dropout_scheme == "full-time-pt-random-dropout":
         # Apply time-point dropout right here to get list of all tokens (ch,tc) to drop
-        #   a. self.token_dropout_prob determines whether we do time-point dropout for this sample.
-        #   If we do time-point dropout, 
-        #       b. Draw tc_width from a triangle distribution defined by low, mode, high.  High is constrained to be no more than 80% of sample
-        #       c. Draw tc_begin randomly between 0 and out a section of tc_width width centered at a random tc index.
+        # a. self.token_dropout_prob determines whether we do time-point dropout for this sample.
+        # If we do time-point dropout, 
+        # b. Draw tc_width from a triangle distribution defined by low, mode, high.  High is constrained to be no more than 80% of sample
+        # c. Draw tc_begin randomly between 0 and out a section of tc_width width centered at a random tc index.
 
         token_dropout = []
         for mm in mmap:
@@ -615,12 +614,12 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
     elif dropout_scheme == "correlated-channel-time-dropout":
         # Apply correlated channel + time-point dropout right here to get list of all tokens (ch,tc) to drop
         # THIS BASICALLY COMBINES THE FULL-TIME-PT-RANDOM-DROPOUT SCHEME WITH THE FULL-CHANNEL-RANDOM-DROPOUT SCHEME.
-        #   a. self.token_dropout_prob determines whether we do time-point dropout for this sample.
-        #   If we do correlated channel + time-point dropout, 
-        #       b. Draw tc_width from a triangle distribution defined by low, mode, high.  High is constrained to be no more than 80% of sample
-        #       c. Draw tc_begin randomly between 0 and out a section of tc_width width centered at a random tc index.
-        #       d. with p=0.8, we drop between 1 and N/2 chans with uniform probability.
-        #       e. with p=0.2, we drop between N/2 and N-1 chans with uniform probability.
+        # a. self.token_dropout_prob determines whether we do time-point dropout for this sample.
+        # If we do correlated channel + time-point dropout, 
+        # b. Draw tc_width from a triangle distribution defined by low, mode, high.  High is constrained to be no more than 80% of sample
+        # c. Draw tc_begin randomly between 0 and out a section of tc_width width centered at a random tc index.
+        # d. with p=0.8, we drop between 1 and N/2 chans with uniform probability.
+        # e. with p=0.2, we drop between N/2 and N-1 chans with uniform probability.
 
         token_dropout = []
         for mm in mmap:
@@ -727,137 +726,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
                         channels_to_drop = []
                         break
                     if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-
-
-
-    elif dropout_scheme == "brain-region-channel-dropout-old":
-        # Assign a brain region to each channel from xyz coordinates (metres).
-        # x=right(+), y=front(+), z=up; values expected in metres (~±0.09 m).
-        def _xyz_to_region(xyz_m):
-            x, y, z = float(xyz_m[0]) * 1000, float(xyz_m[1]) * 1000, float(xyz_m[2]) * 1000
-            hemi = "left" if x < -20 else ("right" if x > 20 else "mid")
-            if y > 45 or (z < 10 and y > 15):
-                base = "frontal"
-            elif y < -60 or (z < 10 and y < -35):
-                base = "occipital"
-            elif abs(x) > 60 and abs(y) < 40:
-                base = "temporal"
-            elif y < -25 and z > 20:
-                base = "parietal"
-            elif abs(x) < 55 and abs(y) < 32 and z > 35:
-                base = "central"
-            else:
-                return None
-            if base == "frontal":
-                return "frontal_right" if hemi == "right" else "frontal_left"
-            if base == "temporal":
-                return f"temporal_{'left' if hemi == 'left' else 'right'}" if hemi != "mid" else None
-            return base
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                n_ch = mm.shape[0]
-
-                if chan_pos is None:
-                    token_dropout.append([])
-                    continue
-
-                xyz_np = np.array(chan_pos, dtype=float)
-                if np.abs(xyz_np).max() > 1.0:
-                    xyz_np = xyz_np / 1000.0
-                channel_regions = [_xyz_to_region(xyz_np[i]) for i in range(n_ch)]
-
-                present_regions = list({r for r in channel_regions if r is not None})
-                if len(present_regions) < 2:
-                    token_dropout.append([])
-                    continue
-
-                iter_count = 0
-                while True:
-                    k = random.randint(1, len(present_regions) - 1)
-                    chosen_regions = set(random.sample(present_regions, k))
-                    channels_to_drop = sorted([
-                        i for i, r in enumerate(channel_regions)
-                        if r not in chosen_regions
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-                    if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-
-    elif dropout_scheme == "brain-region-channel-dropout-by-name":
-        # Dropout channels by brain region name.
-        #
-        REGION_CHANNELS = {
-            "frontal_left":   {"fp1", "fpz", "af3", "af7", "afz","f1", "f3", "f5",
-                               "f7", "fz","fc1", "fc3", "fc5", "fcz"},
-            "frontal_right":  {"fp2", "af4", "af8", "f2", "f4", "f6", "f8",
-                               "fc2", "fc4", "fc6"},
-            "temporal_left":  {"t3", "t5", "t7", "ft7", "tp7", "tp9"},
-            "temporal_right": {"t4", "t6", "t8", "ft8", "tp8", "tp10"},
-            "central":        {"c1", "c2", "c3", "c4", "c5", "c6", "cz"},
-            "parietal":       {"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "pz",
-                               "cp1", "cp2", "cp3", "cp4", "cp5", "cp6", "cpz"},
-            "occipital":      {"o1", "o2", "oz", "po3", "po4", "po7", "po8", "poz",
-                               "i1", "i2", "iz"},
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    # Choose between 1 and n_keys - 1 regions to keep.
-                    n_keys = len(REGION_CHANNELS)
-                    k = random.randint(1, n_keys - 1)
-                    chosen_regions = random.sample(list(REGION_CHANNELS.keys()), k)
-                    channels_to_keep = set().union(*(REGION_CHANNELS[rk] for rk in chosen_regions))
-                    #
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
                         break
 
                 N,T = mm.shape
@@ -1064,206 +932,6 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
             else:
                 token_dropout.append([]) # No dropout for this sample.
 
-
-    elif dropout_scheme == "standard-montage-channel-dropout-old":
-        # Standard 10-20/10-10 xyz positions (metres) used as target locations for each standard montage.
-        # For each target position, the nearest actual channel is kept; all others are dropped.
-        _STD_XYZ = {
-            "fp1":  (-0.026,  0.083,  0.020), "fp2":  ( 0.026,  0.083,  0.020),
-            "fpz":  ( 0.000,  0.087,  0.020),
-            "af7":  (-0.068,  0.065,  0.015), "af8":  ( 0.068,  0.065,  0.015),
-            "af3":  (-0.040,  0.071,  0.048), "af4":  ( 0.040,  0.071,  0.048),
-            "afz":  ( 0.000,  0.073,  0.060),
-            "f7":   (-0.083,  0.048,  0.012), "f8":   ( 0.083,  0.048,  0.012),
-            "f5":   (-0.067,  0.050,  0.046), "f6":   ( 0.067,  0.050,  0.046),
-            "f3":   (-0.047,  0.052,  0.063), "f4":   ( 0.047,  0.052,  0.063),
-            "f1":   (-0.024,  0.054,  0.072), "f2":   ( 0.024,  0.054,  0.072),
-            "fz":   ( 0.000,  0.054,  0.074),
-            "ft7":  (-0.087,  0.025,  0.012), "ft8":  ( 0.087,  0.025,  0.012),
-            "fc5":  (-0.073,  0.026,  0.052), "fc6":  ( 0.073,  0.026,  0.052),
-            "fc3":  (-0.052,  0.026,  0.073), "fc4":  ( 0.052,  0.026,  0.073),
-            "fc1":  (-0.026,  0.026,  0.085), "fc2":  ( 0.026,  0.026,  0.085),
-            "fcz":  ( 0.000,  0.026,  0.087),
-            "t7":   (-0.090,  0.000,  0.010), "t8":   ( 0.090,  0.000,  0.010),
-            "c5":   (-0.078,  0.000,  0.046), "c6":   ( 0.078,  0.000,  0.046),
-            "c3":   (-0.054,  0.000,  0.073), "c4":   ( 0.054,  0.000,  0.073),
-            "c1":   (-0.027,  0.000,  0.087), "c2":   ( 0.027,  0.000,  0.087),
-            "cz":   ( 0.000,  0.000,  0.090),
-            "tp7":  (-0.087, -0.025,  0.012), "tp8":  ( 0.087, -0.025,  0.012),
-            "cp5":  (-0.073, -0.026,  0.052), "cp6":  ( 0.073, -0.026,  0.052),
-            "cp3":  (-0.052, -0.026,  0.073), "cp4":  ( 0.052, -0.026,  0.073),
-            "cp1":  (-0.026, -0.026,  0.085), "cp2":  ( 0.026, -0.026,  0.085),
-            "cpz":  ( 0.000, -0.026,  0.087),
-            "p7":   (-0.083, -0.048,  0.012), "p8":   ( 0.083, -0.048,  0.012),
-            "p5":   (-0.067, -0.050,  0.046), "p6":   ( 0.067, -0.050,  0.046),
-            "p3":   (-0.047, -0.052,  0.063), "p4":   ( 0.047, -0.052,  0.063),
-            "p1":   (-0.024, -0.054,  0.072), "p2":   ( 0.024, -0.054,  0.072),
-            "pz":   ( 0.000, -0.054,  0.074),
-            "po7":  (-0.068, -0.065,  0.015), "po8":  ( 0.068, -0.065,  0.015),
-            "po3":  (-0.040, -0.071,  0.048), "po4":  ( 0.040, -0.071,  0.048),
-            "poz":  ( 0.000, -0.073,  0.060),
-            "o1":   (-0.026, -0.083,  0.020), "o2":   ( 0.026, -0.083,  0.020),
-            "oz":   ( 0.000, -0.087,  0.020),
-        }
-
-        _STANDARD_MONTAGES_XYZ = {
-            "standard_8":  ["fp1", "fp2", "c3", "cz", "c4", "o1", "o2", "pz"],
-            "standard_16": ["fp1", "fp2",
-                            "f3", "fz", "f4",
-                            "c3", "cz", "c4",
-                            "t7", "t8",
-                            "p3", "pz", "p4",
-                            "o1", "oz", "o2"],
-            "standard_32": ["fp1", "fp2", "fpz",
-                            "af3", "af4",
-                            "f7", "f3", "fz", "f4", "f8",
-                            "fc5", "fc1", "fcz", "fc2", "fc6",
-                            "t7", "c3", "cz", "c4", "t8",
-                            "cp5", "cp1", "cpz", "cp2", "cp6",
-                            "p7", "p3", "pz", "p4", "p8",
-                            "o1", "oz", "o2"],
-            "standard_64": ["fp1", "fp2", "fpz",
-                            "af7", "af3", "afz", "af4", "af8",
-                            "f7", "f5", "f3", "f1", "fz", "f2", "f4", "f6", "f8",
-                            "ft7", "fc5", "fc3", "fc1", "fcz", "fc2", "fc4", "fc6", "ft8",
-                            "t7", "c5", "c3", "c1", "cz", "c2", "c4", "c6", "t8",
-                            "tp7", "cp5", "cp3", "cp1", "cpz", "cp2", "cp4", "cp6", "tp8",
-                            "p7", "p5", "p3", "p1", "pz", "p2", "p4", "p6", "p8",
-                            "po7", "po3", "poz", "po4", "po8",
-                            "o1", "oz", "o2"],
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                n_ch = mm.shape[0]
-
-                if chan_pos is None:
-                    token_dropout.append([])
-                    continue
-
-                xyz_np = np.array(chan_pos, dtype=float)
-                if np.abs(xyz_np).max() > 1.0:
-                    xyz_np = xyz_np / 1000.0
-
-                iter_count = 0
-                while True:
-                    montage_name = random.choice(list(_STANDARD_MONTAGES_XYZ))
-                    target_xyz = np.array(
-                        [_STD_XYZ[ch] for ch in _STANDARD_MONTAGES_XYZ[montage_name] if ch in _STD_XYZ],
-                        dtype=float,
-                    )
-                    # Keep the nearest actual channel to each target position
-                    channels_to_keep = {
-                        int(np.argmin(np.sqrt(((xyz_np - t) ** 2).sum(axis=1))))
-                        for t in target_xyz
-                    }
-
-                    # check that all the montage target channels map to distinct data channels
-                    if target_xyz.shape[0] == len(channels_to_keep):
-                        channels_to_drop = sorted(set(range(n_ch)) - channels_to_keep)
-                    else:
-                        channels_to_drop = {}
-
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    if 3 < len(channels_to_drop) < n_ch - 3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
-    elif dropout_scheme == "standard-montage-channel-dropout-by-name":
-        # Dropout channels by standard montage name.
-        #
-        MONTAGE_CHANNELS = {
-            "standard_8": {"fp1", "fp2", "c3", "cz", "c4", "o1", "o2", "pz"},
-            "standard_16": {
-                "fp1", "fp2",
-                "f3", "fz", "f4",
-                "c3", "cz", "c4",
-                "t7", "t8",
-                "p3", "pz", "p4",
-                "o1", "oz", "o2",
-            },
-            "standard_19": {
-                "fp1", "fp2",
-                "f7", "f3", "fz", "f4", "f8",
-                "t3", "c3", "cz", "c4", "t4",
-                "t5", "p3", "pz", "p4", "t6",
-                "o1", "o2",
-            },
-            "standard_32": {
-                "fp1", "fp2", "fpz",
-                "af3", "af4",
-                "f7", "f3", "fz", "f4", "f8",
-                "fc5", "fc1", "fcz", "fc2", "fc6",
-                "t7", "c3", "cz", "c4", "t8",
-                "cp5", "cp1", "cpz", "cp2", "cp6",
-                "p7", "p3", "pz", "p4", "p8",
-                "o1", "oz", "o2",
-            },
-            "standard_64": {
-                "fp1", "fp2", "fpz",
-                "af7", "af3", "afz", "af4", "af8",
-                "f7", "f5", "f3", "f1", "fz", "f2", "f4", "f6", "f8",
-                "ft7", "fc5", "fc3", "fc1", "fcz", "fc2", "fc4", "fc6", "ft8",
-                "t7", "c5", "c3", "c1", "cz", "c2", "c4", "c6", "t8",
-                "tp7", "cp5", "cp3", "cp1", "cpz", "cp2", "cp4", "cp6", "tp8",
-                "p7", "p5", "p3", "p1", "pz", "p2", "p4", "p6", "p8",
-                "po7", "po3", "poz", "po4", "po8",
-                "o1", "oz", "o2",
-            },
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    headset = random.choice(list(MONTAGE_CHANNELS))
-                    channels_to_keep = MONTAGE_CHANNELS[headset]
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
-                        break
-                
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
     elif dropout_scheme == "consumer-eeg-channel-dropout":
         # Standard 10-20 xyz positions (metres) used as target locations for each headset.
         # For each target position, the nearest actual channel is kept; all others are dropped.
@@ -1366,64 +1034,9 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
                 token_dropout.append([]) # No dropout for this sample.
 
 
-
-    elif dropout_scheme == "consumer-eeg-channel-dropout-by-name":
-        #
-        #
-        CONSUMER_HEADSETS = {
-            "muse":           {"tp9", "af7", "af8", "tp10"},
-            "crown":          {"cp3", "c3", "f5", "po3", "po4", "f6", "c4", "cp4"},
-            "emotiv_epoc":    {"af3", "f7", "f3", "fc5", "t7", "p7", "o1",
-                               "o2", "p8", "t8", "fc6", "f4", "f8", "af4"},
-            "emotiv_insight": {"af3", "af4", "t7", "t8", "pz"},
-            "unicorn":        {"fz", "c3", "cz", "c4", "pz", "po7", "oz", "po8"},
-            "openbci_8":      {"fp1", "fp2", "c3", "c4", "p7", "p8", "o1", "o2"},
-            "dreem":          {"fp1", "fp2", "o1", "o2", "cz"},
-            "emotiv_flex32":  {"af3", "af4", "f7", "f3", "fz", "f4", "f8",
-                               "fc5", "fc1", "fcz", "fc2", "fc6",
-                               "t7", "c3", "cz", "c4", "t8",
-                               "cp5", "cp1", "cpz", "cp2", "cp6",
-                               "p7", "p3", "pz", "p4", "p8",
-                               "po7", "po8", "o1", "oz", "o2"},
-        }
-
-        token_dropout = []
-        for mm in mmap:
-            if random.random() < token_dropout_prob:
-                iter_count = 0
-                while True:
-                    headset = random.choice(list(CONSUMER_HEADSETS))
-                    channels_to_keep = CONSUMER_HEADSETS[headset]
-                    channels_to_drop = sorted([
-                        i for i, name in enumerate(channel_names)
-                        if name not in channels_to_keep
-                    ])
-                    iter_count += 1
-                    if iter_count > 30:
-                        channels_to_drop = []
-                        break
-
-                    # sample headset again if we don't have any channels to drop or we drop all channels
-                    if 3 < len(channels_to_drop) < len(channel_names)-3:
-                        break
-
-                N,T = mm.shape
-                tc = T/num_fine_time_pts
-                if tc%1 == 0:
-                    tc_list = list(range(int(tc))) # list of coarse-time indices
-                else:
-                    print(f"Inside perform_token_dropout, Dropout scheme: {dropout_scheme}, Warning: {tc=} is not an integer!")
-
-                combined_coords = [(r, t) for r in channels_to_drop for t in tc_list] # coords (chan, coarse-time) to drop
-                token_dropout.append(combined_coords)
-
-            else:
-                token_dropout.append([]) # No dropout for this sample.
-
-
     elif dropout_scheme == "eval-1" or dropout_scheme == "full-channel-random-dropout-eval":
         ## NOTE: THIS FIXED DROPOUT RATE SCHEME USED FOR EVALS. FIRST, RANDOMLY DROP p*N CHANNELS.
-        #        CAN ALSO DROP OUT CHANNELS IN AN ORGANIZED WAY FROM THE GRID.
+        # CAN ALSO DROP OUT CHANNELS IN AN ORGANIZED WAY FROM THE GRID.
         token_dropout = []
         for mm in mmap:
             N,T = mm.shape
@@ -1459,7 +1072,7 @@ def perform_token_dropout(dropout_scheme, token_dropout_prob, num_fine_time_pts,
 
 
 
-class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON sidecar + .dat files)
+class EEGDataset_v3(IterableDataset): # loads from v7 mmap format (JSON sidecar + .dat files)
     """
     Iterable dataset loading from the v7 preprocessing mmap format.
     Mirrors EEGDataset_v2 output format exactly (packed_batch list of dicts).
@@ -1472,10 +1085,10 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
     """
     def __init__(self, args: BCIDatasetArgs):
         print(f"Inside EEGDataset_v3 with {args.data_dir=}")
-        self.mmap_dir               = Path(args.data_dir)  #jm — reuses data_dir as mmap root
+        self.mmap_dir               = Path(args.data_dir)  # reuses data_dir as mmap root
         self.filter_version         = args.filter_version
-        self.min_quality_any        = args.min_quality_any   #jm
-        self.min_quality_mean       = args.min_quality_mean  #jm
+        self.min_quality_any        = args.min_quality_any
+        self.min_quality_mean       = args.min_quality_mean
         self.dataset_id             = args.dataset_id
         self.shuffle                = args.shuffle
         self.seed                   = args.seed
@@ -1486,7 +1099,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
         self.use_coarse_time        = args.use_coarse_time
         self.cat_chan_xyz_and_eeg   = args.cat_chan_xyz_and_eeg
         self.target_packed_seqlen   = args.target_packed_seqlen
-        self.pad_packed_seqlen      = args.pad_packed_seqlen   # CLODE
+        self.pad_packed_seqlen      = args.pad_packed_seqlen
         self.token_dropout_prob     = args.token_dropout_prob
         self.dropout_scheme         = args.dropout_scheme
         self.num_bins               = args.num_bins_discretize_xyz_chan_pos
@@ -1499,7 +1112,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
         self.skip_preepoched_data   = args.skip_preepoched_data
 
 
-        #jm | Duration window sampling config for EEGDataset_v3.
+        # Duration window sampling config for EEGDataset_v3.
         # Each entry: (min_sec, max_sec, relative_weight). Windows are snapped to tf-sample multiples.
         if args.sample_duration_str == "30_seconds":
             self.V3_DURATION_RANGES = [
@@ -1549,12 +1162,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
             raise ValueError(f"Invalid value for args.sample_duration_str: {args.sample_duration_str}")
 
         # xyz_extremes — same values and logic as EEGDataset_v2
-        if args.chan_pos_xyz_extremes_type == "old":
-            self.xyz_extremes = 1.10*torch.tensor([
-                [-0.0861, -0.1124, -0.0680],
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([
                 [-0.15, -0.15, -0.15],
                 [ 0.15,  0.15,  0.15]
@@ -1573,7 +1181,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
             raise ValueError(f"Invalid value for args.chan_pos_xyz_extremes_type: {args.chan_pos_xyz_extremes_type}")
 
 
-        #jm | Build file index from v7 metadata JSONs
+        # Build file index from v7 metadata JSONs
         meta_dir = self.mmap_dir / "metadata"
         self.file_index = []
 
@@ -1616,7 +1224,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                         "dat_file":          m["data_files"][filter_v],
                         "xyz":               xyz,
                         "channel_names":     m["channel_names"],
-                        "samples_per_seg":   int(round(float(m.get("quality_segment_sec", 1.0)) * int(m["fs"]))),  #jm
+                        "samples_per_seg":   int(round(float(m.get("quality_segment_sec", 1.0)) * int(m["fs"]))),
                     })
             except Exception as e:
                 print(f"Warning: skipping {json_path.name}: {e}")
@@ -1627,7 +1235,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
             self.file_index = [r for r in self.file_index if r["is_epoched"]==False]
 
 
-        #jm | Duration-weighted sampling probabilities (longer files sampled more often)
+        # Duration-weighted sampling probabilities (longer files sampled more often)
         if self.mmap_sample_start is not None or self.mmap_sample_stop is not None:
             # Figure out the duration for each file between mmap_sample_start and mmap_sample_stop.
             start_samp = self.mmap_sample_start
@@ -1659,7 +1267,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         global_worker_id = rank * num_workers_per_rank + worker_id
 
-        #jm | Soft sharding: each worker uses an independent numpy RNG seeded by rank+worker+epoch.
+        # Soft sharding: each worker uses an independent numpy RNG seeded by rank+worker+epoch.
         if self.seed is not None:
             worker_seed = int(self.seed + (1e3 * rank) + (1e6 * worker_id) + (1e9 * self._current_epoch))
         else:
@@ -1672,14 +1280,14 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
         packed_batch  = []
 
         while True:
-            file_idx = -1  #jm — ensure defined even if exception fires before assignment
+            file_idx = -1  # ensure defined even if exception fires before assignment
             try:
-                #jm | 1. Sample a file proportional to its duration
+                # 1. Sample a file proportional to its duration
                 file_idx = int(rng.choice(len(self.file_index), p=self.file_weights))
                 rec = self.file_index[file_idx]
                 tf  = self.num_fine_time_pts
 
-                #jm | 2. Sample a window duration from V3_DURATION_RANGES
+                # 2. Sample a window duration from V3_DURATION_RANGES
                 range_weights = np.array([w for _, _, w in self.V3_DURATION_RANGES])
                 range_weights = range_weights / range_weights.sum()
                 chosen_range  = int(rng.choice(len(self.V3_DURATION_RANGES), p=range_weights))
@@ -1691,7 +1299,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                     continue
 
 
-                #jm | 3. Load window from mmap (continuous or epoched)
+                # 3. Load window from mmap (continuous or epoched)
                 dat_path = self.mmap_dir / rec["dat_file"]
                 if rec["is_epoched"]:
 
@@ -1742,13 +1350,13 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                     data_np = np.array(mm[:, start:start + win_samples])
                     del mm
 
-                    # (CW) - Debugging: Print the extracted sample bounds and shape.
+                    # Debugging: Print the extracted sample bounds and shape.
                     assert bound_start <= start <= start + win_samples <= bound_stop, f"Invalid sample bounds: {bound_start=} {start=} {start + win_samples=} {bound_stop=}"
                     assert data_np.shape[1] == win_samples, f"Invalid sample shape: {data_np.shape[1]=} {win_samples=}"
 
                 # print(f"In EEGDataset_v3.__iter__, just before Quality-based channel filter...")
 
-                #jm | 4. Quality-based channel filter — window-specific, two thresholds
+                # 4. Quality-based channel filter — window-specific, two thresholds
                 q_path = self.mmap_dir / rec["quality_file"]
                 q_mm   = np.memmap(str(q_path), dtype="float32", mode="r",
                                    shape=(rec["n_channels"], rec["n_segments"]))
@@ -1800,14 +1408,14 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
 
 
 
-                #jm | 5. Convert to torch; build channel positions (same as EEGDataset_v2)
+                # 5. Convert to torch; build channel positions (same as EEGDataset_v2)
 
                 eeg_t              = torch.from_numpy(data_np).float()
                 chan_pos           = torch.tensor(xyz_good, dtype=torch.float32)
                 chan_pos_discrete  = discretize_chan_pos(chan_pos, self.xyz_extremes, self.num_bins)
                 
 
-                #jm | 6. Channel dropout (mirrors EEGDataset_v2 dropout schemes exactly)
+                # 6. Channel dropout (mirrors EEGDataset_v2 dropout schemes exactly)
                 token_dropout = perform_token_dropout(dropout_scheme=self.dropout_scheme, 
                                                       token_dropout_prob=self.token_dropout_prob, 
                                                       num_fine_time_pts=self.num_fine_time_pts, 
@@ -1819,7 +1427,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
 
 
 
-                #jm | 7. Reshape signals (same call signature as EEGDataset_v2)
+                # 7. Reshape signals (same call signature as EEGDataset_v2)
                 reshaped = chop_and_reshape_signals(eeg_t, chan_pos, chan_pos_discrete, tf, self.use_coarse_time)
 
                 if self.cat_chan_xyz_and_eeg:
@@ -1827,7 +1435,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                 else:
                     eeg_cat = reshaped[0]
 
-                #jm | 8. Pack into packed_batch — yield when target_packed_seqlen is reached (mirrors EEGDataset_v2)
+                # 8. Pack into packed_batch — yield when target_packed_seqlen is reached (mirrors EEGDataset_v2)
                 seqlen_accum += reshaped[5]
                 if seqlen_accum < self.target_packed_seqlen:
                     chan_id = reshaped[3]
@@ -1848,7 +1456,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                          "seq_lens":           reshaped[5],
                          "max_tc":             reshaped[4].max().item() + 1,
                          "token_dropout":      dropout_bool,
-                         "pad_mask":           torch.ones(reshaped[5], 1, dtype=torch.float32),  # CLODE: 1=real
+                         "pad_mask":           torch.ones(reshaped[5], 1, dtype=torch.float32),  # 1=real
                          "ids":                file_idx,
                          "dataset_id":         self.dataset_id}
                     )
@@ -1884,17 +1492,17 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
                             "seq_lens":           tokens_left,
                             "max_tc":             reshaped[4][:tokens_left].max().item() + 1,
                             "token_dropout":      dropout_bool,
-                            "pad_mask":           torch.ones(tokens_left, 1, dtype=torch.float32),  # CLODE: 1=real
+                            "pad_mask":           torch.ones(tokens_left, 1, dtype=torch.float32),  # 1=real
                             "ids":                file_idx,
                             "dataset_id":         self.dataset_id}
                         )
 
-                    # CLODE: pad up to EXACTLY target_packed_seqlen as ONE extra all-zero
-                    #        document. Becomes its own block in the doc mask (isolated in
-                    #        attention) and is zeroed out of every loss via pad_mask.
+                    # pad up to EXACTLY target_packed_seqlen as ONE extra all-zero
+                    # document. Becomes its own block in the doc mask (isolated in
+                    # attention) and is zeroed out of every loss via pad_mask.
                     cur_total = sum(item["seq_lens"] for item in packed_batch)
                     n_pad = self.target_packed_seqlen - cur_total
-                    if self.pad_packed_seqlen and n_pad > 0:        # CLODE: gated by config flag
+                    if self.pad_packed_seqlen and n_pad > 0:        # gated by config flag
                         ref = packed_batch[0]
                         def _padz(key):
                             v = ref[key]
@@ -1925,7 +1533,7 @@ class EEGDataset_v3(IterableDataset): #jm | loads from v7 mmap format (JSON side
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 
-class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
+class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
     """
     Inference-time dataset that loads .fif (or any MNE-readable) files directly.
 
@@ -1992,19 +1600,19 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         # main process; for num_workers>0 the registry would live in each worker only.  #jm v4
         self.raw_info_registry: dict = {}                       #jm v4
 
-        # Timing accumulators. _prepare_raw_time = total seconds spent loading+      #jm v4
-        # filtering+resampling .fif files across the run. _segment_build_time =      #jm v4
-        # total seconds spent per-segment (z-score, bad-mask, chop). Read by the     #jm v4
-        # eeg_eval main loop to print summary lines.                                 #jm v4
-        self._prepare_raw_time = 0.0                                                  #jm v4
-        self._segment_build_time = 0.0                                                #jm v4
-        self._n_segments_yielded = 0                                                  #jm v4
-        self._n_files_loaded = 0                                                      #jm v4
+        # Timing accumulators. _prepare_raw_time = total seconds spent loading+
+        # filtering+resampling .fif files across the run. _segment_build_time =
+        # total seconds spent per-segment (z-score, bad-mask, chop). Read by the
+        # eeg_eval main loop to print summary lines.
+        self._prepare_raw_time = 0.0
+        self._segment_build_time = 0.0
+        self._n_segments_yielded = 0
+        self._n_files_loaded = 0
 
-        # Per-step timing (only populated when v4_profile=True). Keys cover both the   #jm v4
-        # per-file _prepare_raw sub-steps and the per-segment __iter__ sub-steps.      #jm v4
-        # Surfaced to the main process via the batch dict (see __iter__), since with   #jm v4
-        # num_workers>0 these live in worker processes only.                           #jm v4
+        # Per-step timing (only populated when v4_profile=True). Keys cover both the
+        # per-file _prepare_raw sub-steps and the per-segment __iter__ sub-steps.
+        # Surfaced to the main process via the batch dict (see __iter__), since with
+        # num_workers>0 these live in worker processes only.
         self._step_times = {
             # _prepare_raw sub-steps
             "read": 0.0, "pick": 0.0, "montage": 0.0, "drop_nopos": 0.0,
@@ -2013,18 +1621,13 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
             # per-segment sub-steps
             "slice": 0.0, "avg_ref": 0.0, "z_score": 0.0, "bad_mask": 0.0,
             "to_torch": 0.0, "token_dropout": 0.0, "chop_reshape": 0.0, "pack": 0.0,
-        }                                                                              #jm v4
-        # Tracks which channel indices were added by upsampling (zero-filled, masked). #jm v4
-        # Reset per file in _prepare_raw; consumed by the avg-ref step in __iter__.    #jm v4
-        self._upsampled_ch_mask = None                                                #jm v4
+        }
+        # Tracks which channel indices were added by upsampling (zero-filled, masked).
+        # Reset per file in _prepare_raw; consumed by the avg-ref step in __iter__.
+        self._upsampled_ch_mask = None
 
         # xyz_extremes — identical to V3
-        if args.chan_pos_xyz_extremes_type == "old":
-            self.xyz_extremes = 1.10*torch.tensor([
-                [-0.0861, -0.1124, -0.0680],
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([
                 [-0.15, -0.15, -0.15],
                 [ 0.15,  0.15,  0.15]
@@ -2066,21 +1669,21 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
     # File preparation: load + pick EEG + montage + filter + resample
     # ------------------------------------------------------------------ #
     # ------------------------------------------------------------------ #
-    # Profiling helper: accumulate elapsed into _step_times[key], return  #jm v4
-    # a fresh perf_counter cursor so calls can be chained.                #jm v4
+    # Profiling helper: accumulate elapsed into _step_times[key], return
+    # a fresh perf_counter cursor so calls can be chained.
     # ------------------------------------------------------------------ #
-    def _tick(self, key, t0):                                                          #jm v4
-        now = time.perf_counter()                                                      #jm v4
-        self._step_times[key] += now - t0                                              #jm v4
-        return now                                                                     #jm v4
+    def _tick(self, key, t0):
+        now = time.perf_counter()
+        self._step_times[key] += now - t0
+        return now
 
     # ------------------------------------------------------------------ #
-    # Channel upsampling: append zero-filled channels at target-montage   #jm v4
-    # positions and mark them bad, so the model interpolates them. Mirrors#jm v4
-    # zuna/src/zuna/preprocessing/interpolation.py (greedy + named modes). #jm v4
-    # Sets self._upsampled_ch_mask (bool over the FINAL channel list).     #jm v4
+    # Channel upsampling: append zero-filled channels at target-montage
+    # positions and mark them bad, so the model interpolates them. Mirrors
+    # zuna/src/zuna/preprocessing/interpolation.py (greedy + named modes).
+    # Sets self._upsampled_ch_mask (bool over the FINAL channel list).
     # ------------------------------------------------------------------ #
-    def _maybe_upsample_channels(self, raw):                                           #jm v4
+    def _maybe_upsample_channels(self, raw):
         n_orig = len(raw.ch_names)
         self._upsampled_ch_mask = np.zeros(n_orig, dtype=bool)
         target = self.target_channel_count
@@ -2144,15 +1747,15 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         return raw
 
     def _prepare_raw(self, fif_path):
-        _t_prep_start = time.perf_counter()                                           #jm v4
-        _t = _t_prep_start                                                            #jm v4
-        prof = self.profile_enabled                                                   #jm v4
+        _t_prep_start = time.perf_counter()
+        _t = _t_prep_start
+        prof = self.profile_enabled
         raw = mne.io.read_raw(str(fif_path), preload=True, verbose="ERROR")
-        if prof: _t = self._tick("read", _t)                                          #jm v4
+        if prof: _t = self._tick("read", _t)
         raw.pick("eeg")
         if prof: _t = self._tick("pick", _t)
 
-        # Apply named montage only as a FALLBACK when the file lacks positions.   #jm v4
+        # Apply named montage only as a FALLBACK when the file lacks positions.
         if self.montage is not None:
             _pre_locs = np.array([ch["loc"][:3] for ch in raw.info["chs"]])
             _has_pos  = ~np.all(_pre_locs == 0, axis=1) & ~np.isnan(_pre_locs).any(axis=1)
@@ -2160,11 +1763,11 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                 raw.set_montage(self.montage, on_missing="warn", match_case=False)
             else:
                 print(f"  [v4] all {len(raw.ch_names)} ch have file-provided positions; skipping montage '{self.montage}'")
-        if prof: _t = self._tick("montage", _t)                                       #jm v4
+        if prof: _t = self._tick("montage", _t)
 
-        # Force-mark user-requested channels as bad (case-insensitive) so the model     #jm v4
-        # interpolates them even if the .fif didn't flag them in info['bads']. Reuses    #jm v4
-        # the same whole-channel bad path as file-marked bads (_compute_bad_mask_2d).    #jm v4
+        # Force-mark user-requested channels as bad (case-insensitive) so the model
+        # interpolates them even if the .fif didn't flag them in info['bads']. Reuses
+        # the same whole-channel bad path as file-marked bads (_compute_bad_mask_2d).
         if self.drop_channels:
             _name_by_lower = {c.lower(): c for c in raw.ch_names}
             _to_bad  = [_name_by_lower[n.lower()] for n in self.drop_channels if n.lower() in _name_by_lower]
@@ -2184,48 +1787,48 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
             raw.pick([raw.ch_names[i] for i, ok in enumerate(valid_pos) if ok])
             if len(raw.ch_names) < 3:
                 raise RuntimeError(f"{fif_path}: <3 channels with valid 3D coords")
-        if prof: _t = self._tick("drop_nopos", _t)                                    #jm v4
+        if prof: _t = self._tick("drop_nopos", _t)
 
-        # Resample FIRST. MNE's resample() includes its own anti-alias lowpass so      #jm v4
-        # this is safe; running the user filter AFTER resample is much faster (the     #jm v4
-        # 0.01 Hz FIR is ~4× shorter at 256 Hz than at 1000 Hz). Has no meaningful     #jm v4
-        # effect on signal content vs the old filter-then-resample order.              #jm v4
+        # Resample FIRST. MNE's resample() includes its own anti-alias lowpass so
+        # this is safe; running the user filter AFTER resample is much faster (the
+        # 0.01 Hz FIR is ~4× shorter at 256 Hz than at 1000 Hz). Has no meaningful
+        # effect on signal content vs the old filter-then-resample order.
         if int(round(raw.info["sfreq"])) != self.sample_rate:
             raw.resample(self.sample_rate, verbose="ERROR")
-        if prof: _t = self._tick("resample", _t)                                      #jm v4
+        if prof: _t = self._tick("resample", _t)
 
-        # Snapshot the resampled-but-unfiltered data BEFORE applying highpass/notch.   #jm v4
-        # Used by FifReconstructor when v4_recon_unmasked_from_original=True so the    #jm v4
-        # unmasked cells of the recon come straight from the file rather than from the #jm v4
-        # filtered-then-inverse-zscored model input path.                              #jm v4
+        # Snapshot the resampled-but-unfiltered data BEFORE applying highpass/notch.
+        # Used by FifReconstructor when v4_recon_unmasked_from_original=True so the
+        # unmasked cells of the recon come straight from the file rather than from the
+        # filtered-then-inverse-zscored model input path.
         unfiltered_data = None
         if self.recon_unmasked_from_original:
             unfiltered_data = raw.get_data().astype(np.float32, copy=True)
-        if prof: _t = self._tick("unfiltered_snapshot", _t)                           #jm v4
+        if prof: _t = self._tick("unfiltered_snapshot", _t)
 
         # Apply user filter(s).
         filter_method = self.filter_method if self.filter_method in ("fir", "iir") else "fir"
         if self.highpass_hz is not None or self.lowpass_hz is not None:
             raw.filter(l_freq=self.highpass_hz, h_freq=self.lowpass_hz,
                        method=filter_method, verbose="ERROR")
-        if prof: _t = self._tick("filter", _t)                                        #jm v4
+        if prof: _t = self._tick("filter", _t)
         if self.notch_hz is not None:
             raw.notch_filter(self.notch_hz, method=filter_method, verbose="ERROR")
-        if prof: _t = self._tick("notch", _t)                                         #jm v4
+        if prof: _t = self._tick("notch", _t)
 
-        # Channel upsampling (adds zero-filled, masked channels at montage positions). #jm v4
-        # If recon_unmasked_from_original snapshot was taken above, extend it with     #jm v4
-        # zero rows for the added channels so shapes stay aligned downstream.          #jm v4
+        # Channel upsampling (adds zero-filled, masked channels at montage positions).
+        # If recon_unmasked_from_original snapshot was taken above, extend it with
+        # zero rows for the added channels so shapes stay aligned downstream.
         n_before_upsample = len(raw.ch_names)
         raw = self._maybe_upsample_channels(raw)
         if unfiltered_data is not None and len(raw.ch_names) > n_before_upsample:
             pad = np.zeros((len(raw.ch_names) - n_before_upsample, unfiltered_data.shape[1]),
                            dtype=unfiltered_data.dtype)
             unfiltered_data = np.concatenate([unfiltered_data, pad], axis=0)
-        if prof: _t = self._tick("upsample", _t)                                      #jm v4
+        if prof: _t = self._tick("upsample", _t)
 
-        # Register the (post-preprocessing) info so the FifReconstructor can use it.  #jm v4
-        self.raw_info_registry[str(fif_path)] = raw.info.copy()                       #jm v4
+        # Register the (post-preprocessing) info so the FifReconstructor can use it.
+        self.raw_info_registry[str(fif_path)] = raw.info.copy()
 
         # Optional per-file external bad-mask (UI / manual bad_segments), aligned to this raw.  #jm v4
         self._external_mask = self._load_external_mask(fif_path, raw) if self.mask_dir else None
@@ -2364,7 +1967,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         seqlen_accum = 0
         packed_batch = []
         tf = self.num_fine_time_pts
-        prof = self.profile_enabled                                                   #jm v4
+        prof = self.profile_enabled
 
         for file_idx_global, fif_path in enumerate(my_files):
             try:
@@ -2390,8 +1993,8 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
             seg_starts = list(range(0, n_total, target_seg_samples))
 
             for seg_start in seg_starts:
-                _t_seg_start = time.perf_counter()                                     #jm v4
-                _t = _t_seg_start                                                      #jm v4
+                _t_seg_start = time.perf_counter()
+                _t = _t_seg_start
                 seg_end = min(seg_start + target_seg_samples, n_total)
                 seg_samples = seg_end - seg_start
                 # Snap segment length down to a multiple of tf (allows shorter final segment)
@@ -2402,22 +2005,22 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
 
                 # 1. Slice
                 data_np = data_full[:, seg_start:seg_end].copy()
-                if prof: _t = self._tick("slice", _t)                                  #jm v4
+                if prof: _t = self._tick("slice", _t)
 
-                # 2. Average reference (per-segment) — buffer the offset so the    #jm v4
-                # reconstructor can add it back when inverting the normalization.   #jm v4
-                # Upsampled channels are zero-filled; exclude them from the mean so #jm v4
-                # the reference isn't diluted by the added zero rows.               #jm v4
+                # 2. Average reference (per-segment) — buffer the offset so the
+                # reconstructor can add it back when inverting the normalization.
+                # Upsampled channels are zero-filled; exclude them from the mean so
+                # the reference isn't diluted by the added zero rows.
                 if self.do_avg_ref:
                     if self._upsampled_ch_mask is not None and self._upsampled_ch_mask.any():
-                        _real = ~self._upsampled_ch_mask                            #jm v4
-                        avg_ref_offset = data_np[_real].mean(axis=0)               #jm v4
-                    else:                                                           #jm v4
-                        avg_ref_offset = data_np.mean(axis=0)         # (T_seg,)    #jm v4
-                    data_np = data_np - avg_ref_offset[None, :]                     #jm v4
-                else:                                                               #jm v4
-                    avg_ref_offset = np.zeros(data_np.shape[1], dtype=np.float32)   #jm v4
-                if prof: _t = self._tick("avg_ref", _t)                                #jm v4
+                        _real = ~self._upsampled_ch_mask
+                        avg_ref_offset = data_np[_real].mean(axis=0)
+                    else:
+                        avg_ref_offset = data_np.mean(axis=0)         # (T_seg,)
+                    data_np = data_np - avg_ref_offset[None, :]
+                else:
+                    avg_ref_offset = np.zeros(data_np.shape[1], dtype=np.float32)
+                if prof: _t = self._tick("avg_ref", _t)
 
                 # 3. Per-segment z-score (matches V3 contract — model sees ~unit-variance input)
                 if self.z_score_type == "across_channel":
@@ -2435,19 +2038,19 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                     seg_std  = np.ones((n_channels, 1),  dtype=np.float32)
                 else:
                     raise ValueError(f"Invalid z_score_type: {self.z_score_type}")
-                if prof: _t = self._tick("z_score", _t)                                #jm v4
+                if prof: _t = self._tick("z_score", _t)
 
                 # 4. Bad-mask: MNE bads + annotations + (optional) heuristic detection
                 n_coarse = seg_samples // tf
                 bad_2d = self._compute_bad_mask_2d(data_np, raw, seg_start, n_coarse)  # (C, n_coarse)
-                if prof: _t = self._tick("bad_mask", _t)                               #jm v4
+                if prof: _t = self._tick("bad_mask", _t)
 
                 # 5. To torch
                 eeg_t             = torch.from_numpy(data_np).float()
                 chan_pos          = torch.from_numpy(positions).float()
                 chan_pos_discrete = discretize_chan_pos(chan_pos, self.xyz_extremes, self.num_bins)
                 channel_names     = channel_names_all   # unchanged this segment (no per-segment drops in v4)
-                if prof: _t = self._tick("to_torch", _t)                               #jm v4
+                if prof: _t = self._tick("to_torch", _t)
 
                 # 6. Random token dropout (matches V3 hook; typically off in inference via token_dropout_prob < 0)
                 token_dropout = perform_token_dropout(
@@ -2459,7 +2062,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                     chan_pos=chan_pos,
                 )
                 assert len(token_dropout) == 1
-                if prof: _t = self._tick("token_dropout", _t)                          #jm v4
+                if prof: _t = self._tick("token_dropout", _t)
 
                 # 7. Chop + reshape (identical to V3)
                 reshaped = chop_and_reshape_signals(eeg_t, chan_pos, chan_pos_discrete, tf, self.use_coarse_time)
@@ -2467,7 +2070,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                     eeg_cat = torch.cat((reshaped[1], reshaped[0]), dim=1)
                 else:
                     eeg_cat = reshaped[0]
-                if prof: _t = self._tick("chop_reshape", _t)                           #jm v4
+                if prof: _t = self._tick("chop_reshape", _t)
 
                 # 8. Build per-token dropout_bool from (a) random dropout + (b) bad-mask
                 chan_id_r    = reshaped[3]
@@ -2495,7 +2098,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                     # v4 reconstruction metadata
                     "seg_mean":           torch.from_numpy(seg_mean.squeeze(1)),         # (C,)
                     "seg_std":            torch.from_numpy(seg_std.squeeze(1)),          # (C,)
-                    "avg_ref_offset":     torch.from_numpy(avg_ref_offset.astype(np.float32)),  # (T_seg,)  #jm v4
+                    "avg_ref_offset":     torch.from_numpy(avg_ref_offset.astype(np.float32)),  # (T_seg,)
                     "file_mean":          torch.from_numpy(file_mean),                   # (C,)
                     "file_std":           torch.from_numpy(file_std),                    # (C,)
                     "channel_names":      channel_names,
@@ -2503,30 +2106,30 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
                     "seg_start":          int(seg_start),
                     "seg_end":            int(seg_end),
                     "sfreq":              float(self.sample_rate),
-                    # mne.Info travels with every segment so FifReconstructor can       #jm v4
-                    # work when num_workers > 0 (the dataset's raw_info_registry isn't  #jm v4
-                    # shared across worker processes; the batch queue is).              #jm v4
+                    # mne.Info travels with every segment so FifReconstructor can
+                    # work when num_workers > 0 (the dataset's raw_info_registry isn't
+                    # shared across worker processes; the batch queue is).
                     "raw_info":           raw.info,
                 }
 
-                # If recon_unmasked_from_original is on, ship the resampled-but-       #jm v4
-                # unfiltered volts for this segment so FifReconstructor can use them   #jm v4
-                # for unmasked cells in place of the inverse-zscored model input.      #jm v4
+                # If recon_unmasked_from_original is on, ship the resampled-but-
+                # unfiltered volts for this segment so FifReconstructor can use them
+                # for unmasked cells in place of the inverse-zscored model input.
                 if unfiltered_full is not None:
                     seg_dict["unfiltered_volts"] = torch.from_numpy(
                         unfiltered_full[:, seg_start:seg_end].copy()
                     )
 
-                if prof: _t = self._tick("pack", _t)                                   #jm v4
-                self._segment_build_time += time.perf_counter() - _t_seg_start   #jm v4
-                self._n_segments_yielded += 1                                     #jm v4
+                if prof: _t = self._tick("pack", _t)
+                self._segment_build_time += time.perf_counter() - _t_seg_start
+                self._n_segments_yielded += 1
 
-                # Ship a cumulative per-worker timing snapshot so the main process can  #jm v4
-                # aggregate per-step timings even with num_workers>0 (the dataset's     #jm v4
-                # own counters live in worker processes). Mirrors the raw_info /        #jm v4
-                # unfiltered_volts batch-dict-shipping pattern. One dict per segment;   #jm v4
-                # the collate fn keeps only the last (largest) snapshot per batch.      #jm v4
-                if prof:                                                               #jm v4
+                # Ship a cumulative per-worker timing snapshot so the main process can
+                # aggregate per-step timings even with num_workers>0 (the dataset's
+                # own counters live in worker processes). Mirrors the raw_info /
+                # unfiltered_volts batch-dict-shipping pattern. One dict per segment;
+                # the collate fn keeps only the last (largest) snapshot per batch.
+                if prof:
                     seg_dict["v4_step_times"] = {
                         "worker_id": int(global_worker_id),
                         "n_segments": int(self._n_segments_yielded),
@@ -2556,7 +2159,7 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 
-class FifReconstructor:   #jm v4
+class FifReconstructor:
     """
     Buffers per-segment model reconstructions during an inference run and writes
     them out as continuous .fif files at the end.
@@ -2593,7 +2196,7 @@ class FifReconstructor:   #jm v4
         segments (if any) stay NaN in the signals and False in the mask.
     """
     def __init__(self, output_dir, raw_info_registry, fill_only_masked, num_fine_time_pts,
-                 data_norm=1.0, unmasked_from_original=False, seam_correct=True):  #jm v4
+                 data_norm=1.0, unmasked_from_original=False, seam_correct=True):
         from pathlib import Path
         self.output_dir = Path(output_dir)
         # Two output subfolders (jonas): full model reconstruction, and hybrid
@@ -2606,16 +2209,16 @@ class FifReconstructor:   #jm v4
         self.fill_only_masked = fill_only_masked
         self.tf = int(num_fine_time_pts)
         self.data_norm = float(data_norm) if data_norm else 1.0
-        # When True, unmasked cells of the recon come straight from the resampled-but-  #jm v4
-        # unfiltered file data shipped in batch['v4_unfiltered_volts']. Only masked     #jm v4
-        # cells go through the inverse-zscore + model-output path. fill_only_masked     #jm v4
-        # is implied to be True in this mode.                                           #jm v4
+        # When True, unmasked cells of the recon come straight from the resampled-but-
+        # unfiltered file data shipped in batch['v4_unfiltered_volts']. Only masked
+        # cells go through the inverse-zscore + model-output path. fill_only_masked
+        # is implied to be True in this mode.
         self.unmasked_from_original = bool(unmasked_from_original)
-        # Seam correction for the hybrid: the model is trained on high-pass / per-segment      #jm v4
-        # z-scored data, so an infilled span carries no slow drift and can sit at a different  #jm v4
-        # DC/level than the surrounding original -> a visible jump at the boundary. When on,    #jm v4
-        # each infilled span in the hybrid is re-anchored (linear deramp) so its ends meet the  #jm v4
-        # neighbouring original samples. Only affects DC/near-DC; the PSD bands are untouched.  #jm v4
+        # Seam correction for the hybrid: the model is trained on high-pass / per-segment
+        # z-scored data, so an infilled span carries no slow drift and can sit at a different
+        # DC/level than the surrounding original -> a visible jump at the boundary. When on,
+        # each infilled span in the hybrid is re-anchored (linear deramp) so its ends meet the
+        # neighbouring original samples. Only affects DC/near-DC; the PSD bands are untouched.
         self.seam_correct = bool(seam_correct)
         # buffer: { fif_path : list of (seg_start, seg_end, signal_array (C_seg, T_seg), channel_names) }
         self.buffer: dict = {}
@@ -2625,17 +2228,17 @@ class FifReconstructor:   #jm v4
         # Only proceed for V4 batches (which carry the per-segment metadata).
         if 'v4_fif_path' not in batch:
             return
-        # Lazily register raw_info from incoming batches. Needed when num_workers>0    #jm v4
-        # because the dataset's raw_info_registry lives in worker processes and is     #jm v4
-        # invisible to the main process. With num_workers=0 this is a no-op since the  #jm v4
-        # dataset already populated the same dict.                                     #jm v4
+        # Lazily register raw_info from incoming batches. Needed when num_workers>0
+        # because the dataset's raw_info_registry lives in worker processes and is
+        # invisible to the main process. With num_workers=0 this is a no-op since the
+        # dataset already populated the same dict.
         if 'v4_raw_info' in batch:
             for i, p in enumerate(batch['v4_fif_path']):
                 if p not in self.raw_info_registry:
                     self.raw_info_registry[p] = batch['v4_raw_info'][i]
         n_samples = len(model_signal_output_unwrapped)
         for i in range(n_samples):
-            # invert_reshape_signals returns 2D (C, T_seg) where T_seg = tc * tf.   #jm v4
+            # invert_reshape_signals returns 2D (C, T_seg) where T_seg = tc * tf.
             mod_in  = model_signal_input_unwrapped[i]        # (C, T_seg)
             mod_out = model_signal_output_unwrapped[i]       # (C, T_seg)
             C, T_seg = mod_out.shape
@@ -2647,9 +2250,9 @@ class FifReconstructor:   #jm v4
             seqlen_accum = int(sum(seq_lens[:i]))
             seqlen       = int(seq_lens[i])
             tok_drop_flat = batch['token_dropout'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(bool)
-            # Use the PACKED chan_id/t_coarse (same token order as token_dropout) so the      #jm v4
-            # (channel, coarse-time) attribution is correct. The *_unwrapped copies are in     #jm v4
-            # grid order (invert_reshape_signals reorders them) and would scramble the mask.    #jm v4
+            # Use the PACKED chan_id/t_coarse (same token order as token_dropout) so the
+            # (channel, coarse-time) attribution is correct. The *_unwrapped copies are in
+            # grid order (invert_reshape_signals reorders them) and would scramble the mask.
             chan_id_flat  = batch['chan_id'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(np.int64)
             t_coarse_flat = batch['t_coarse'][seqlen_accum:seqlen_accum + seqlen].cpu().numpy().reshape(-1).astype(np.int64)
 
@@ -2661,9 +2264,9 @@ class FifReconstructor:   #jm v4
             # Expand (C, tc) -> (C, T_seg) by repeating each coarse bin tf times.
             mask_full = np.repeat(mask_ct, self.tf, axis=1)   # (C, T_seg)
 
-            # Invert the per-segment normalization back to volts. We build TWO signals  #jm v4
-            # per segment — the pure model output (model everywhere) and the hybrid      #jm v4
-            # (original on kept cells, model on dropped cells) — plus the dropout mask.   #jm v4
+            # Invert the per-segment normalization back to volts. We build TWO signals
+            # per segment — the pure model output (model everywhere) and the hybrid
+            # (original on kept cells, model on dropped cells) — plus the dropout mask.
             seg_mean = batch['v4_seg_mean'][i].cpu().numpy().astype(np.float32)    # (C_full,)
             seg_std  = batch['v4_seg_std'][i].cpu().numpy().astype(np.float32)
             if seg_mean.shape[0] != C:
@@ -2685,9 +2288,9 @@ class FifReconstructor:   #jm v4
             )
 
             # (2) "Original" signal used for the unmasked cells of the hybrid. Prefer the
-            #     raw (resampled, unfiltered) file volts so the hybrid matches the input
-            #     .fif exactly outside dropped regions; fall back to the model-input
-            #     (filtered) signal when unfiltered volts weren't shipped.
+            # raw (resampled, unfiltered) file volts so the hybrid matches the input
+            # .fif exactly outside dropped regions; fall back to the model-input
+            # (filtered) signal when unfiltered volts weren't shipped.
             if 'v4_unfiltered_volts' in batch:
                 orig_volts = batch['v4_unfiltered_volts'][i].cpu().numpy().astype(np.float32)
                 if orig_volts.shape[1] >= T_actual:
@@ -2717,7 +2320,7 @@ class FifReconstructor:   #jm v4
 
     @staticmethod
     def _seam_correct_hybrid(hybrid, mask):
-        """Re-anchor each infilled (masked) span so it connects to the neighbouring original.  #jm v4
+        """Re-anchor each infilled (masked) span so it connects to the neighbouring original.
 
         Per contiguous masked run in a channel:
           - original on BOTH sides -> subtract a linear ramp so the run's ends meet the left/right
@@ -2764,8 +2367,8 @@ class FifReconstructor:   #jm v4
             return
 
         for fif_path, segs in self.buffer.items():
-            # Dedup by seg_start (later passes overwrite earlier). Necessary when    #jm v4
-            # eeg_eval's make_batch_iterator does multiple epochs over the V4 data.   #jm v4
+            # Dedup by seg_start (later passes overwrite earlier). Necessary when
+            # eeg_eval's make_batch_iterator does multiple epochs over the V4 data.
             seg_by_start = {}
             for s in segs:
                 seg_by_start[s[0]] = s
@@ -2811,7 +2414,7 @@ class FifReconstructor:   #jm v4
             mne.io.RawArray(full_model, info, verbose="ERROR").save(
                 str(model_path), overwrite=True, verbose="ERROR")
 
-            # Seam-correct the hybrid so infilled spans connect to the surrounding original.  #jm v4
+            # Seam-correct the hybrid so infilled spans connect to the surrounding original.
             if self.seam_correct:
                 self._seam_correct_hybrid(full_hybrid, full_mask)
 
@@ -2874,14 +2477,7 @@ class EEGDataset_v2(IterableDataset):
         self.dropout_scheme = args.dropout_scheme
         self.num_bins = args.num_bins_discretize_xyz_chan_pos
 
-        if args.chan_pos_xyz_extremes_type == "old":
-            ## OLD TEST VALUES: (CW - WHAT I WAS USING PRIOR TO TEST104 and new v5 dataset)
-            self.xyz_extremes = 1.10*torch.tensor([ 
-                [-0.0861, -0.1124, -0.0680], 
-                [0.0858, 0.0849, 0.1002]
-            ])
-
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             ## For new dataset with variable temporal length 
             self.xyz_extremes = torch.tensor([ 
                 [-0.15, -0.15, -0.15], 
@@ -2978,7 +2574,7 @@ class EEGDataset_v2(IterableDataset):
         # Loop over all the dataset files in this worker's shard.
         for ids in sharded_indices_for_this_worker:
             m_path = self.memmap_paths[int(ids)]
-            mmap = torch.load(m_path, weights_only=False) #jm | this line was needed ONLY for the Moabb eval datasets (not sure why)
+            mmap = torch.load(m_path, weights_only=False) # this line was needed ONLY for the Moabb eval datasets (not sure why)
 
 
             # Handle different dataset structures
@@ -3012,42 +2608,6 @@ class EEGDataset_v2(IterableDataset):
 
             chan_pos_discrete = [discretize_chan_pos(cp, self.xyz_extremes, self.num_bins) for cp in chan_pos]
 
-
-
-
-
-            # Sanity check 3: 3D scatter plot of channel positions and discretized positions
-            plot_chan_pos_comparison = False
-            if plot_chan_pos_comparison:
-                fig = plt.figure(figsize=(16, 7))
-
-                # Left plot: Original continuous positions
-                ax1 = fig.add_subplot(121, projection='3d')
-                cp = chan_pos[0].cpu().numpy()
-                ax1.scatter(cp[:, 0], cp[:, 1], cp[:, 2], c='blue', marker='o', s=50, alpha=0.4)
-                for i in range(cp.shape[0]):
-                    ax1.text(cp[i, 0], cp[i, 1], cp[i, 2], str(i), fontsize=8)
-                ax1.set_xlabel('X')
-                ax1.set_ylabel('Y')
-                ax1.set_zlabel('Z')
-                ax1.set_title('Original Channel Positions')
-
-                # Right plot: Discretized positions
-                ax2 = fig.add_subplot(122, projection='3d')
-                cpd = chan_pos_discrete[0].cpu().numpy()
-                ax2.scatter(cpd[:, 0], cpd[:, 1], cpd[:, 2], c='red', marker='s', s=50, alpha=0.4)
-                for i in range(cpd.shape[0]):
-                    ax2.text(cpd[i, 0], cpd[i, 1], cpd[i, 2], str(i), fontsize=8)
-                ax2.set_xlabel('X')
-                ax2.set_ylabel('Y')
-                ax2.set_zlabel('Z')
-                ax2.set_title('Discretized Channel Positions')
-
-                plt.tight_layout()
-                plt.savefig('figures/chan_pos_comparison.png', dpi=150, bbox_inches='tight')
-                plt.close()
-                print(f"Saved channel position comparison plot to figures/chan_pos_comparison.png")
-
             # Filter out samples that do not have self.chan_num_filter channels. This is pretty quick - not the source of data_t slowdown
             if self.chan_num_filter is not None:
                 mmap_filt = []
@@ -3080,9 +2640,6 @@ class EEGDataset_v2(IterableDataset):
                 chan_pos_discrete = chan_pos_discrete_shuf
 
 
-
-
-
             token_dropout = perform_token_dropout(dropout_scheme=self.dropout_scheme, 
                                                   token_dropout_prob=self.token_dropout_prob, 
                                                   num_fine_time_pts=self.num_fine_time_pts, 
@@ -3092,29 +2649,11 @@ class EEGDataset_v2(IterableDataset):
 
             # 5th. Shuffle samples within mmap/chan_pos lists.
             # NOTE: Shuffle index before reshaping signals so I can compare before and after (out in eeg_eval.py) plots.
-            #       Testing chop_and_reshape_signals() and invert_reshape_signals() functions with real signals.
+            # Testing chop_and_reshape_signals() and invert_reshape_signals() functions with real signals.
             indx = list(range(len(mmap)))
             if self.shuffle:
                 random.shuffle(indx)
 
-            check_reshape_plots = False # Plot signals before and after reshaping to verify its working.
-                                         # THIS IS NOT EXPECTED TO WORK WITH self.use_coarse_time=="D
-            if check_reshape_plots:
-                # Create a sample signal to demonstrate reshape and unreshape is working.
-                tf = self.num_fine_time_pts
-                tc = 10
-                indx0 = indx[0]
-                num_chans = mmap[indx0].shape[0]
-                for i in range(num_chans):
-                    signal = mmap[indx0][i,:]
-                    if self.use_coarse_time=="C": # plot only the first tf part of signal it "C"
-                        signal = signal[:tf]
-                    fig, ax = plt.subplots(1, 1, figsize=(20, 4))
-                    ax.plot(signal)
-                    if self.use_coarse_time!="C": 
-                        ax.scatter(tf*np.arange(tc), signal[::tf], color='red')
-                    plt.savefig(f"figures/inspect_reshape_and_invert/test0_ch{i}_before.png", dpi=300, bbox_inches='tight')
-                    plt.close()
 
             if self.use_coarse_time=="A" or self.use_coarse_time=="B" or self.use_coarse_time=="C" or self.use_coarse_time=="D":
                 reshaped = [chop_and_reshape_signals(m, c, cd, self.num_fine_time_pts, self.use_coarse_time) for m,c,cd in zip(mmap, chan_pos, chan_pos_discrete)]
@@ -3264,7 +2803,7 @@ class EEGDataset_v2(IterableDataset):
 class EEGDataset_b2(IterableDataset):
     """
 
-    NOTE: THIS IS BECOMING DEPRECATED. USE EEGDataset_v2 INSTEAD. BEREN SAID WE CAN JUST STREAM DATASET LOCALLY.
+    NOTE: THIS IS DEPRECATED. USE EEGDataset_v2 INSTEAD. FOR NOW, WE CAN JUST STREAM DATASET LOCALLY.
     Iterable dataset that pulls .pt files from Backblaze B2 bucket using boto3 S3-compatible API.
     Modeled after EEGDataset_v2 but with cloud storage integration.
     """
@@ -3312,13 +2851,7 @@ class EEGDataset_b2(IterableDataset):
         self.dropout_scheme = args.dropout_scheme
         self.num_bins = args.num_bins_discretize_xyz_chan_pos
 
-        if args.chan_pos_xyz_extremes_type == "old":
-            ## OLD TEST VALUES: (CW - WHAT I WAS USING PRIOR TO TEST104 and new v5 dataset)
-            self.xyz_extremes = 1.10*torch.tensor([ 
-                [-0.0861, -0.1124, -0.0680], 
-                [0.0858, 0.0849, 0.1002]
-            ])
-        elif args.chan_pos_xyz_extremes_type == "fifteens":
+        if args.chan_pos_xyz_extremes_type == "fifteens":
             self.xyz_extremes = torch.tensor([ 
                 [-0.15, -0.15, -0.15], 
                 [ 0.15,  0.15,  0.15]
@@ -3680,15 +3213,15 @@ class EEGProcessor:
 
 
     def to(self, device):
-        return self # (CW)
+        return self # 
         # Unlike STFTProcessor in AY2latent/data_lean.py, nothing to put on device
 
 
 
-    @torch.compile() # (CW) - REINSTATE: commented out for now while working with dropout_chans
-    def process(self, eeg_signal, chan_pos, chan_pos_discrete, chan_id, t_coarse, seq_lens, max_tc, token_dropout, pad_mask=None): # freq_masks, # CLODE: +pad_mask passthrough
+    @torch.compile() # REINSTATE: commented out for now while working with dropout_chans
+    def process(self, eeg_signal, chan_pos, chan_pos_discrete, chan_id, t_coarse, seq_lens, max_tc, token_dropout, pad_mask=None): # freq_masks, # +pad_mask passthrough
 
-        seq_len, channel = eeg_signal.shape # (CW) - multiple samples packed into single batch
+        seq_len, channel = eeg_signal.shape # multiple samples packed into single batch
         batch=1
 
         t_shape = (
@@ -3731,82 +3264,6 @@ class EEGProcessor:
 
         decoder_targets = noise - eeg_signal
 
-
-        # Print out mean and std of noise and signals and combinations of them. (Check sigma) Data_sig = 0.2 & Noise_sig = 1.0
-        print_sample_noising_process = False
-        if print_sample_noising_process:
-
-            # Loop over 10 values of t between 0 and 1
-            print("\n" + "="*80)
-            print("Statistics for dropout_chan vs ~dropout_chan subsets")
-            print("="*80)
-
-            dropout_mask = token_dropout.squeeze(-1)
-
-            decoder_targets_test = noise - eeg_signal
-
-            # These should be same for all t values. So only print once.
-            # eeg_signal stats
-            sig_do = eeg_signal[dropout_mask]
-            sig_nodo = eeg_signal[~dropout_mask]
-            print(f"\n  eeg_signal [dropout]:     mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  eeg_signal [~dropout]:    mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # eeg_signal_masked stats
-            sig_do = eeg_signal_masked[dropout_mask]
-            sig_nodo = eeg_signal_masked[~dropout_mask]
-            print(f"\n  eeg_signal_masked [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  eeg_signal_masked [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # noise stats
-            sig_do = noise[dropout_mask]
-            sig_nodo = noise[~dropout_mask]
-            print(f"\n  noise [dropout]:          mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  noise [~dropout]:         mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            # decoder_targets_test stats
-            sig_do = decoder_targets_test[dropout_mask]
-            sig_nodo = decoder_targets_test[~dropout_mask]
-            print(f"\n  decoder_targets [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-            print(f"  decoder_targets [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-            for i, t_val in enumerate(torch.linspace(0, 1, 10)):
-                # Compute noisy signal for this t value
-                t_test = t_val * torch.ones_like(t)
-                noisy_test = ((1 - t_test) * eeg_signal_masked + t_test * noise).squeeze(0)
-                
-                print(f"\n--- t = {t_val:.3f} sigma = {sigma} ---")
-
-                # noisy_test stats
-                sig_do = noisy_test[dropout_mask]
-                sig_nodo = noisy_test[~dropout_mask]
-                print(f"  noisy_eeg_signal_masked [dropout]:  mean={sig_do.mean():.6f}, std={sig_do.std():.6f}")#, min={sig_do.min():.6f}, max={sig_do.max():.6f}")
-                print(f"  noisy_eeg_signal_masked [~dropout]: mean={sig_nodo.mean():.6f}, std={sig_nodo.std():.6f}")#, min={sig_nodo.min():.6f}, max={sig_nodo.max():.6f}")
-
-
-            print("\n" + "="*80 + "\n")
-
-
-            print(f"INside EEGProcessor.process, plotting sample of noisy and clean signals.")
-
-            print(
-                eeg_signal, 
-                chan_pos, 
-                chan_pos_discrete, 
-                chan_id, 
-                t_coarse, 
-                seq_lens, 
-                token_dropout,
-                sigma,
-                eeg_signal_masked,
-                noise,
-                decoder_input,
-                decoder_targets,
-                t,
-            )
-
-
-
         out_dict = {
             "encoder_input": eeg_signal_masked, # dropout signals into encoder input.
             "decoder_input": decoder_input,     # send noised version of signal or masked signal to decoder input.
@@ -3819,7 +3276,7 @@ class EEGProcessor:
             "seq_lens": seq_lens,                       # just passing seq_lens through.
             "max_tc": max_tc,                           # just passing max_tc through.
             "t_coarse": t_coarse,                       # just passing t_coarse through.
-            "pad_mask": pad_mask,                       # CLODE: [N,1] 1=real 0=pad, rides through to the model
+            "pad_mask": pad_mask,                       # [N,1] 1=real 0=pad, rides through to the model
         }
 
         return out_dict
@@ -3854,14 +3311,14 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
             'chan_id':                  torch.vstack([item['chan_id'] for item in batch[0]]),
             't_coarse':                 torch.vstack([item['t_coarse'] for item in batch[0]]),
             'token_dropout':             torch.vstack([item['token_dropout'] for item in batch[0]]),
-            'pad_mask':                  torch.vstack([item['pad_mask'] for item in batch[0]]),  # CLODE [total,1]
+            'pad_mask':                  torch.vstack([item['pad_mask'] for item in batch[0]]),  # [total,1]
             #
             'max_tc':                   torch.tensor([item['max_tc'] for item in batch[0]]),
             'seq_lens':                 torch.tensor([item['seq_lens'] for item in batch[0]]),
             'ids':                      torch.tensor([item['ids'] for item in batch[0]]),                
             'dataset_id':               torch.tensor([item['dataset_id'] for item in batch[0]]),
         }
-        # V4-only reconstruction metadata, detected by 'fif_path' in the segment dicts.  #jm v4
+        # V4-only reconstruction metadata, detected by 'fif_path' in the segment dicts.
         # Absent for V2/V3/B2 batches, so these keys simply aren't added (backward compatible).
         if batch[0] and ('fif_path' in batch[0][0]):
             packed_batch_dict['v4_seg_mean']       = [item['seg_mean']       for item in batch[0]]
@@ -3883,9 +3340,9 @@ def create_pack_chans_collate_fn(target_packed_seqlen=1): #batch,
 
 
 def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
-    if args.use_v4:  #jm v4
+    if args.use_v4:
         dataset = EEGDataset_v4(args) # IterableDataset loading .fif files directly for inference!
-    elif args.use_v3:  #jm
+    elif args.use_v3:
         dataset = EEGDataset_v3(args) # IterableDataset pulling from v7 mmap format!
     elif args.use_b2:
         dataset = EEGDataset_b2(args) # IterableDataset pulling from B2!
@@ -3906,7 +3363,7 @@ def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
     init_fn = functools.partial(worker_init_fn, seed=seed, rank=rank)
 
     if args.num_workers==0:
-        timeout=0 # (CW) - to pass an assertion error when debugging.
+        timeout=0 # to pass an assertion error when debugging.
 
 
     # create sequence packing collator function

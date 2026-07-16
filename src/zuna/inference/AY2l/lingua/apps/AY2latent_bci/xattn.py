@@ -77,8 +77,8 @@ class CrossAttention(nn.Module):
 
         self.do_QK_norm = True
         if self.do_QK_norm:
-            self.q_norm = RMSNorm(head_dim, eps=1e-5) #(CW) - 1e-5 is the default value in BaseTransformerArgs.norm_eps
-            self.k_norm = RMSNorm(head_dim, eps=1e-5) #(CW) - 1e-5 is the default value in BaseTransformerArgs.norm_eps
+            self.q_norm = RMSNorm(head_dim, eps=1e-5) #1e-5 is the default value in BaseTransformerArgs.norm_eps
+            self.k_norm = RMSNorm(head_dim, eps=1e-5) #1e-5 is the default value in BaseTransformerArgs.norm_eps
         
         self.wq = nn.Linear(
             dim,
@@ -132,9 +132,6 @@ class CrossAttention(nn.Module):
         xk = xk.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seq_len_kv, self.n_kv_heads, self.head_dim)
 
-
-
-        # DO QK_NORM HERE
         if self.do_QK_norm:
             xq = self.q_norm(xq)
             xk = self.k_norm(xk)
@@ -368,7 +365,7 @@ class DecoderBlock(nn.Module):
         self_attn_mask: Optional[Union[BlockMask, str]] = None,
         cross_attn_mask: Optional[Union[BlockMask, str]] = None,
         attn_impl: str = "sdpa",
-        do_idx: Optional[torch.Tensor] = None, # (CW)
+        do_idx: Optional[torch.Tensor] = None, # 
         print_layerwise_activation_stats: bool = False,
     ) -> torch.Tensor:
         
@@ -376,24 +373,24 @@ class DecoderBlock(nn.Module):
 
             print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN DecoderBlock.forward")
 
-            x_normed = self.cross_attention_x_norm(x, c) # (CW)
-            y_normed = self.cross_attention_y_norm(y, c) if not self.seqlen_t else self.cross_attention_y_norm(y) # (CW)
+            x_normed = self.cross_attention_x_norm(x, c) # 
+            y_normed = self.cross_attention_y_norm(y, c) if not self.seqlen_t else self.cross_attention_y_norm(y) # 
 
-            print(f"\n\tDecoder cross_attn_x_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"\n\tDecoder cross_attn_x_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # 
                         
-            print(f"\tDecoder cross_attn_x_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
+            print(f"\tDecoder cross_attn_x_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # 
 
-            print(f"\n\tDecoder cross_attn_y_norm: (drop-out) mean={y[:, do_idx, :].mean().item():.6f}, std={y[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={y_normed[:, do_idx, :].mean().item():.6f}, std={y_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"\n\tDecoder cross_attn_y_norm: (drop-out) mean={y[:, do_idx, :].mean().item():.6f}, std={y[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={y_normed[:, do_idx, :].mean().item():.6f}, std={y_normed[:, do_idx, :].std().item():.6f}") # 
 
-            print(f"\tDecoder cross_attn_y_norm: (non-drop) mean={y[:, ~do_idx, :].mean().item():.6f}, std={y[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={y_normed[:, ~do_idx, :].mean().item():.6f}, std={y_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
+            print(f"\tDecoder cross_attn_y_norm: (non-drop) mean={y[:, ~do_idx, :].mean().item():.6f}, std={y[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={y_normed[:, ~do_idx, :].mean().item():.6f}, std={y_normed[:, ~do_idx, :].std().item():.6f}") # 
         
-            x = x + self.cross_attention( # (CW)
-                x_normed, # (CW)
-                y_normed, # (CW)
+            x = x + self.cross_attention( # 
+                x_normed, # 
+                y_normed, # 
                 freq_cis,
                 tok_idx=tok_idx,
                 cross_tok_idx=cross_tok_idx,
@@ -422,32 +419,31 @@ class DecoderBlock(nn.Module):
         if print_layerwise_activation_stats and do_idx is not None:
 
             print("DEPRECATED: FIX UP FLOATS AND INCLUDE SANDWICH NORM HERE IN DecoderBlock.forward")
+            x_normed = self.attention_norm(x, c) # 
 
-            x_normed = self.attention_norm(x, c) # (CW)
-
-            print(f"\n\tDecoder self attn_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f" mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"\n\tDecoder self attn_norm: (drop-out) mean={x[:, do_idx, :].mean().item():.6f}, std={x[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f" mean={x_normed[:, do_idx, :].mean().item():.6f}, std={x_normed[:, do_idx, :].std().item():.6f}") # 
             
-            print(f"\tDecoder self attn_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
+            print(f"\tDecoder self attn_norm: (non-drop) mean={x[:, ~do_idx, :].mean().item():.6f}, std={x[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={x_normed[:, ~do_idx, :].mean().item():.6f}, std={x_normed[:, ~do_idx, :].std().item():.6f}") # 
         
-            h = x + self.attention( # (CW)
-                x_normed, # (CW)
+            h = x + self.attention( # 
+                x_normed, # 
                 freq_cis,
                 tok_idx=tok_idx,
                 mask=self_attn_mask,
                 attn_impl=attn_impl,
             )
 
-            h_normed = self.ffn_norm(h, c) # (CW)
+            h_normed = self.ffn_norm(h, c) # 
 
-            print(f"\n\tDecoder ffn_norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # (CW)
+            print(f"\n\tDecoder ffn_norm: (drop-out) mean={h[:, do_idx, :].mean().item():.6f}, std={h[:, do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, do_idx, :].mean().item():.6f}, std={h_normed[:, do_idx, :].std().item():.6f}") # 
             
-            print(f"\tDecoder ffn_norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # (CW)
-            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # (CW)
+            print(f"\tDecoder ffn_norm: (non-drop) mean={h[:, ~do_idx, :].mean().item():.6f}, std={h[:, ~do_idx, :].std().item():.6f}", end=" --> ") # 
+            print(f"mean={h_normed[:, ~do_idx, :].mean().item():.6f}, std={h_normed[:, ~do_idx, :].std().item():.6f}") # 
 
-            out = h + self.feed_forward(h_normed) # (CW)
+            out = h + self.feed_forward(h_normed) # 
 
         else:
 

@@ -1,10 +1,10 @@
-"""Shared fixed-eval-set harness (CLODE).
+"""Shared fixed-eval-set harness.
 
 Both the in-training eval (train_compile_fwd.py) and the standalone plotter
 (eeg_eval.py) import from here so they can NEVER drift, and so the samples
 eeg_eval plots are literally the samples behind the training curve.
 
-Design (see eval_harness_clode.md):
+Design:
   * ONE ordered global pool of `num_batches` held-out samples, built ONCE and
     persisted to disk. Every rank and the 1-GPU plotter load the identical file.
   * FIXED total (world-size-invariant). Sharded across ranks with a strided

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zuna"
-version = "0.1.1"
+version = "1.1.1"
 description = "Foundation model for EEG reconstruction and interpolation"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -18,18 +18,17 @@ authors = [
 
 keywords = ["eeg", "foundation-model", "neuroscience", "preprocessing"]
 
+
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "mne>=1.0.0",
-    "torch>=1.9.0",
     "joblib>=1.0.0",
     "omegaconf",
     "sentencepiece",
     "tiktoken",
     "fsspec",
     "blobfile",
-    "wandb",
     "lm-eval",
     "nvidia-ml-py", 
     "transformers", 
@@ -38,8 +37,7 @@ dependencies = [
     "vector-quantize-pytorch", 
     "schedulefree", 
     "boto3", 
-    "python-dotenv",
-    "ipython"
+    "python-dotenv",   
 ]
 
 # Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)

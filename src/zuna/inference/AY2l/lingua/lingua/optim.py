@@ -168,7 +168,7 @@ def build_lr_fn(args: OptimArgs, n_steps: int):
     return lr_fn
 
 
-# ### CLODE ADDED: build the (decay / no_decay) parameter groups (module-type-aware).
+# ### ADDED: build the (decay / no_decay) parameter groups (module-type-aware).
 def _is_norm_module(m: nn.Module) -> bool:
     """True for any normalization layer, matched by class name containing 'norm'.
     Catches RMSNorm, AdaRMSNorm, RMSNorm_MohVersion, torch.nn.RMSNorm,
@@ -211,7 +211,7 @@ def build_param_groups(model: nn.Module, weight_decay: float):
         else:
             decay.append(p)
     logger.info(
-        f"[CLODE] weight-decay groups: {len(decay)} decayed tensors, "
+        f"weight-decay groups: {len(decay)} decayed tensors, "
         f"{len(no_decay)} no-decay tensors "
         f"({len(no_decay_ids)} via norm/embedding modules) (wd={weight_decay})"
     )
@@ -224,13 +224,13 @@ def build_param_groups(model: nn.Module, weight_decay: float):
 def build_optimizer(model: nn.Module, args: OptimArgs, n_steps: int,):
     logger.info("Starting build of optimizer...")
 
-    # ### CLODE CHANGED: was `model.parameters()` (single group, wd on everything).
+    # ### CHANGED: was `model.parameters()` (single group, wd on everything).
     params = build_param_groups(model, args.weight_decay)
 
     if args.optim_cls == "adamw":
         logger.info("Using AdamW optimizer")
         optimizer = AdamW(
-            params,                      # ### CLODE: was model.parameters()
+            params,                      # ### was model.parameters()
             lr=args.lr,
             betas=(args.beta1, args.beta2),
             weight_decay=args.weight_decay,   # default for groups; each group overrides
@@ -240,7 +240,7 @@ def build_optimizer(model: nn.Module, args: OptimArgs, n_steps: int,):
     elif args.optim_cls == "schedulefree":
         logger.info("Using AdamW ScheduleFree optimizer")
         optimizer = AdamWScheduleFree(
-            params,                      # ### CLODE: was model.parameters()
+            params,                      # ### was model.parameters()
             lr=args.lr,
             betas=(args.beta1, args.beta2),
             weight_decay=args.weight_decay,
@@ -257,7 +257,7 @@ def build_optimizer(model: nn.Module, args: OptimArgs, n_steps: int,):
         logger.info("Using Cautious AdamW ScheduleFree optimizer")
         from .cadamw import CAdamW
         optimizer = CAdamW(
-            params,                      # ### CLODE: was model.parameters()
+            params,                      # ### was model.parameters()
             lr=args.lr,
             betas=(args.beta1, args.beta2),
             weight_decay=args.weight_decay,
@@ -275,7 +275,7 @@ def build_optimizer(model: nn.Module, args: OptimArgs, n_steps: int,):
             ShampooPT2CompileConfig,
         )
         optimizer = DistributedShampoo(
-            params,                      # ### CLODE: was model.parameters()
+            params,                      # ### was model.parameters()
             lr=args.lr,
             betas=(args.beta1, args.beta2),
             weight_decay=args.weight_decay,

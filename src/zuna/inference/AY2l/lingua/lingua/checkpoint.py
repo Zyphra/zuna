@@ -60,9 +60,9 @@ class CheckpointArgs:
     path: Optional[str] = None
     init_ckpt_path: Optional[str] = None
     continue_training_from_init: bool = False
-    load_optimizer_state: bool = True           # (CW) - whether to load the optimizer state from the checkpoint
-    # reset_scheduler_last_epoch: bool = False    # (CW) - whether to reset the scheduler's last_epoch to the current step
-    # rewarmup_scheduler: bool = False            # (CW) - whether to rewarmup the scheduler
+    load_optimizer_state: bool = True           # whether to load the optimizer state from the checkpoint
+    # reset_scheduler_last_epoch: bool = False    # whether to reset the scheduler's last_epoch to the current step
+    # rewarmup_scheduler: bool = False            # whether to rewarmup the scheduler
     
 
 
@@ -215,8 +215,6 @@ class CheckpointManager:
         optimizer,
     ):
 
-        # print(f"Inside get_state_dict!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
         if not self.load_optimizer_state:
@@ -234,12 +232,11 @@ class CheckpointManager:
         
         # dcp.load(state_dict, checkpoint_id=ckpt_dir, planner=dcp.default_planner.DefaultLoadPlanner(allow_partial_load=True))
 
-        ## (CW) - was this. But replaced with load_from_checkpoint function.
+        ## was this. But replaced with load_from_checkpoint function.
         # if False:
         #     if self.load_optimizer_state:
         #         model_sd, optim_sd = get_state_dict(model, optimizer)
         #     else:
-        #         print(f"Not loading optimizer state from checkpoint!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         #         model_sd = get_model_state_dict(model)
         #         optim_sd = optimizer.state_dict()
         #         if False:
@@ -271,7 +268,7 @@ class CheckpointManager:
         logger.info("Saving...")
 
         # state_dict = self.get_state_dict(model, optimizer) # Was a BUG: wrong because didnt save optimizer states when load_optimizer_state=False.
-        state_dict = {} # (CW) - correct way to save model + optimizer states, regardless of load_optimizer_state=True/False.
+        state_dict = {} # correct way to save model + optimizer states, regardless of load_optimizer_state=True/False.
         state_dict["model"], state_dict["optim"] = get_state_dict(model, optimizer)
 
 
@@ -365,7 +362,6 @@ class CheckpointManager:
             #     print(f"***** key: {key}")
             #     print(f"***** value: {state_dict["optim"][key]}")
             # die
-            # import IPython; print('\n\nDebug:'); IPython.embed(); import time;  time.sleep(0.3)
 
 
         if not self.load_optimizer_state:
@@ -376,7 +372,7 @@ class CheckpointManager:
             train_state.scheduler.last_epoch = train_state.step
 
 
-        if True: #(CW) was - if self.load_optimizer_state:
+        if True: #was - if self.load_optimizer_state:
             set_state_dict(
                 model,
                 optimizer,

@@ -1,68 +1,68 @@
 dump_dir: /workspace/bci/checkpoints/bci/ZUNA2_5e-4_noALW2
 name: ZUNA2_5e-4_noALW2
-steps: 800_000 # (CW) was 100_000 # This controls both LR schedule and Total # of steps. [173k steps for 1 epoch on TUH w/ 4GPUs.]
-grad_acc_steps: 2 # (CW) - wasnt here. Defaults to 1. 
+steps: 800_000 #  was 100_000 # This controls both LR schedule and Total # of steps. [173k steps for 1 epoch on TUH w/ 4GPUs.]
+grad_acc_steps: 2 #  - wasnt here. Defaults to 1. 
 probe_freq: null
-seed: 333     # (CW) - This is used for something other than data shuffling. Not sure what. Used for eval harness when using fixed eval.
+seed: 333     #  - This is used for something other than data shuffling. Not sure what. Used for eval harness when using fixed eval.
 repa_into_encoder: false
 repa_into_decoder: false
 load_distillation_model: false
 
 channel_loss_weighting: false
 distill_into_encoder: false
-track_dataset_stats: false # (CW) - added this to track data stats in training loop. Defaults to false.
+track_dataset_stats: false #  - added this to track data stats in training loop. Defaults to false.
 slack_alert: false # 
 
-encoder_mmd_weight: 0 #1e-2 #1e-4 # (CW) - set to zero to try to fix GradNorm Spikes. (was 1e-4 orig) (has been 1e-2).
+encoder_mmd_weight: 0 #1e-2 #1e-4 #  - set to zero to try to fix GradNorm Spikes. (was 1e-4 orig) (has been 1e-2).
 
-optim:      # (CW) - Note: Using Cosine with Warmup == 1Cycle basically. 
-  lr: 5e-4  # (CW) - was 3e-4
-  weight_decay: 0.1 # (CW) - was 0.01 # Moh suggests 0.1
-  warmup: 1000 # (CW) is 10% of 1 epoch - was 2000 # Beren suggested lower.
+optim:      #  - Note: Using Cosine with Warmup == 1Cycle basically. 
+  lr: 5e-4  #  - was 3e-4
+  weight_decay: 0.1 #  - was 0.01 # Moh suggests 0.1
+  warmup: 1000 #  is 10% of 1 epoch - was 2000 # Beren suggested lower.
   lr_min_ratio: 2e-3 #0.000001
-  clip: 1.0 #100.0 #10.0 # 0.1 (CW) - was 1.0 orig. 0.1 for OpenNeuro
-  beta1: 0.9 # (CW) - wasnt here. Defaults to 0.9 - Moh suggestion (0.85) for stability.
-  beta2: 0.95 # (CW) - wasnt here. Defaults to 0.95 - Moh suggestion (0.9) for stability.
-  scheduler: cosine # (CW) - was trapezoidal
-  # optim_cls: cadamw # (CW) Note: This is "Cautious Adam", not CAAdamW! Dont use.
+  clip: 1.0 #100.0 #10.0 # 0.1  - was 1.0 orig. 0.1 for OpenNeuro
+  beta1: 0.9 #  - wasnt here. Defaults to 0.9 - Moh suggestion (0.85) for stability.
+  beta2: 0.95 #  - wasnt here. Defaults to 0.95 - Moh suggestion (0.9) for stability.
+  scheduler: cosine #  - was trapezoidal
+  # optim_cls: cadamw #  Note: This is "Cautious Adam", not CAAdamW! Dont use.
   use_ema: true
   ema_decay: 0.9999
 
 distributed:
   fsdp_type: no_shard 
-  compile: true # (CW) - defaults to true. Set false to Debug BF16 also @torch.compile fwd_step()
-  model_dtype: bf16 # fp32 # (CW) -  was bf16 # Note: even if BF16, norms and residual stream are done in FP32 for stability.
-  matmul_allow_tf32: true # (CW) - TRY SETTING TO TRUE. A DATATYPE LIKE BF16. SHOULD SPEED THINGS UP.
-  selective_activation_checkpointing: false # (CW) - THIS WILL NOT WORK WITH FLEX ATTENTION.
+  compile: true #  - defaults to true. Set false to Debug BF16 also @torch.compile fwd_step()
+  model_dtype: bf16 # fp32 #  -  was bf16 # Note: even if BF16, norms and residual stream are done in FP32 for stability.
+  matmul_allow_tf32: true #  - TRY SETTING TO TRUE. A DATATYPE LIKE BF16. SHOULD SPEED THINGS UP.
+  selective_activation_checkpointing: false #  - THIS WILL NOT WORK WITH FLEX ATTENTION.
   tp_size: 1
-  spawn_method: spawn # added by (CW). - Was not here and defaulted to "forkserver"
-  # dp_replicate: 1     # added by (CW). - turn off FSDP to run on 1 GPU. Comment out to run on multi-GPU
-  # dp_shard: 1         # added by (CW). - turn off FSDP to run on 1 GPU. Comment out to run on multi-GPU
+  spawn_method: spawn # added by . - Was not here and defaulted to "forkserver"
+  # dp_replicate: 1     # added by . - turn off FSDP to run on 1 GPU. Comment out to run on multi-GPU
+  # dp_shard: 1         # added by . - turn off FSDP to run on 1 GPU. Comment out to run on multi-GPU
 
 model: 
   dim: 1024
   n_layers: 16
   head_dim: 64
   seqlen_t: false
-  huber_c: null                              # (CW) - was 0.1 [null uses MSE only] (value was tuned for audio data anyway)
-  input_dim: 32 #128 #131                        # (CW) - set to num time points when not mixing chans (or |tf|+3 if mixing chans with xyz)
-  encoder_input_dim: 32 #128 #131                # (CW) - set to num time points when not mixing chans   
-  encoder_output_dim: 32 #128 #131 # input_dim*2 # (CW) - "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
-  encoder_latent_downsample_factor: 1        # (CW) - effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
+  huber_c: null                              #  - was 0.1 [null uses MSE only] (value was tuned for audio data anyway)
+  input_dim: 32 #128 #131                        #  - set to num time points when not mixing chans (or |tf|+3 if mixing chans with xyz)
+  encoder_input_dim: 32 #128 #131                #  - set to num time points when not mixing chans   
+  encoder_output_dim: 32 #128 #131 # input_dim*2 #  - "EOD" effects enc_out dim2 - the "registers" [B, T/ds, EOD]
+  encoder_latent_downsample_factor: 1        #  - effects the number / time-dimension of "registers" in the encoder and enc_out dim1 [B, T/ds, EOD]
 
-  encoder_sliding_window: 65536 #2048 #256 #512 #64 #128           # (CW) - default is 128
-  sliding_window: 65536 #2048 #256 #64 #128                   # (CW) - default is 128
-  xattn_sliding_window: 65536 #2048 #256 #64 #32              # (CW) - default is 32
-  max_seqlen: 256 #42000 #34000 #66000 #16384                 # (CW) - Max value for discretized {x,y,z} or tc - used with 4D-ROPE
-  max_chans: 512                                              # (CW) - Max number of channels in the dataset - used for APE sinusoidal position embeddings
+  encoder_sliding_window: 65536 #2048 #256 #512 #64 #128           #  - default is 128
+  sliding_window: 65536 #2048 #256 #64 #128                   #  - default is 128
+  xattn_sliding_window: 65536 #2048 #256 #64 #32              #  - default is 32
+  max_seqlen: 256 #42000 #34000 #66000 #16384                 #  - Max value for discretized {x,y,z} or tc - used with 4D-ROPE
+  max_chans: 512                                              #  - Max number of channels in the dataset - used for APE sinusoidal position embeddings
 
-  model_dtype: bf16 # fp32 # (CW) -  was bf16 # needed for APE sinusoidal position embeddings. Must match distributed.model_dtype.
-  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for z initialization in model.sample .
+  model_dtype: bf16 # fp32 #  -  was bf16 # needed for APE sinusoidal position embeddings. Must match distributed.model_dtype.
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for z initialization in model.sample .
 
-  # decoder_encoder_dropout: 0.1          # 0.1 # (CW) - prob of dropping out entire batch in encoder output going into decoder. (default is 0.1)
-  # decoder_timestep_dropout: 0.2         # 0.1 # (CW) - prob of dropping out channels from encoder output going into decoder if DONT_MIX_CHANNELS=True. (default is 0.1)
+  # decoder_encoder_dropout: 0.1          # 0.1 #  - prob of dropping out entire batch in encoder output going into decoder. (default is 0.1)
+  # decoder_timestep_dropout: 0.2         # 0.1 #  - prob of dropping out channels from encoder output going into decoder if DONT_MIX_CHANNELS=True. (default is 0.1)
 
-  adaptive_loss_weighting: false  # (CW) - set to true to try to fix GradNorm Spikes.
+  adaptive_loss_weighting: false  #  - set to true to try to fix GradNorm Spikes.
   kept_token_loss_weight: 0.1 # weight on NON-dropped tokens
                               # loss. 1.0 = current behaviour,
                               # 0.0 = MAE (dropped only), 
@@ -114,7 +114,7 @@ data:
   cat_chan_xyz_and_eeg: false
   dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
   randomly_permute_sequence: true
-  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for stft noise schedule.
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for stft noise schedule.
   masked_in_decoder: false # If true, mask out channels in decoder input when channel is dropped.
   token_dropout_prob: 0.99 # Probability of applying channel dropout to the EEG signal during training.
   dropout_scheme: "mix-4-dropouts-train" # {"train-1", "train-2", "eval-1", "no-dropout", "random-uniform-dropout", "full-channel-random-dropout-train", 
@@ -126,23 +126,23 @@ data:
   num_bins_discretize_xyz_chan_pos: 100 # Number of bins to discretize channel positions to use in 4d-RoPE. # 40 with "old" xyz_extremes, 100 with "thirteens" xyz_extremes
   chan_pos_xyz_extremes_type: "twelves" # "old" for v4 dataset or "thirteens" for v5 dataset
 
-  batch_size: 1 #64 #1024 # 32              # (CW) - editted this for debug. KEEP AT 1 NOW.
-  target_packed_seqlen: 22000 #         # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  batch_size: 1 #64 #1024 # 32              #  - editted this for debug. KEEP AT 1 NOW.
+  target_packed_seqlen: 22000 #         #  - Target seqlen for packed samples. This is essentially batch size.
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
   #
-  num_workers: 16             # (CW) - editted this for debug.
-  prefetch_factor: 8          # (CW) - editted this for debug. 
-  persistent_workers: true    # (CW) - added this. defaults to true
-  pin_memory: true            # (CW) - added this. defaults to true
+  num_workers: 16             #  - editted this for debug.
+  prefetch_factor: 8          #  - editted this for debug. 
+  persistent_workers: true    #  - added this. defaults to true
+  pin_memory: true            #  - added this. defaults to true
   diffusion_forcing: false
   diffusion_noise_schedule: "linear"   # {"linear","beta","logit"}
   logit_normal_mean: 0.0   # if diffusion_noise_schedule==logit, centre of hump = sigmoid(mean); 0 -> t=0.5
   logit_normal_std: 1.0   # if diffusion_noise_schedule==logit, width; ~1 unimodal hump (SD3), >=2 -> U-shaped
   pad_packed_seqlen: true    # CLODE: pad packed seq to fixed target_packed_seqlen (training). requires target % encoder_latent_downsample_factor == 0.
 
-  shuffle: true               # (CW) - trying to pin down is bad data is causing GradNorm explosion.
-  seed: null                   # (CW) - seed for data shuffling (int or null)
+  shuffle: true               #  - trying to pin down is bad data is causing GradNorm explosion.
+  seed: null                   #  - seed for data shuffling (int or null)
 
 checkpoint:
   dump:
@@ -151,7 +151,7 @@ checkpoint:
   eval:
     every: 2000 # 500000000000000 # How often to run eval harness.
     keep: -1
-  load_optimizer_state: true # (CW) - set to false to not load optimizer state from checkpoint, defaults to true. (CW)
+  load_optimizer_state: true #  - set to false to not load optimizer state from checkpoint, defaults to true. 
   # init_ckpt_path: /workspace/bci/checkpoints/bci/bci_AY2l_bigrun16e/checkpoints/0000150000
   # init_ckpt_path: /workspace/bci/checkpoints/bci/DSv3_exp99/checkpoints/0000050000
 
@@ -192,7 +192,7 @@ eval:
   cat_chan_xyz_and_eeg: false
   dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
   randomly_permute_sequence: false
-  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for stft noise schedule.
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for stft noise schedule.
   token_dropout_prob: 0.99 # Probability of applying channel dropout to the EEG signal during training.
   dropout_scheme: "mix-4-dropouts-train" # {"train-1", "train-2", "eval-1", "no-dropout", "random-uniform-dropout", "full-channel-random-dropout-train", 
                                                  #  "full-time-pt-random-dropout", "correlated-channel-time-dropout", 
@@ -208,19 +208,19 @@ eval:
   num_batches: 480 # CLODE fixed-eval: FIXED TOTAL, sharded across world_size + all-reduced (was 5, master-only). 480/48gpu = 10/rank.
   fixed_eval: true         # replay a frozen, sharded, disk-cached pool every eval (else legacy random-stream path)
   eval_noise_seed: 0       # per-sample sampler seed = eval_noise_seed + global_pool_idx (world-size-invariant, matches eeg_eval)
-  batch_size: 1 # 650 #32              # (CW) - editted this for debug.
-  target_packed_seqlen: 15000    # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  batch_size: 1 # 650 #32              #  - editted this for debug.
+  target_packed_seqlen: 15000    #  - Target seqlen for packed samples. This is essentially batch size.
   pad_packed_seqlen: false   # CLODE: do NOT pad in eval; fwd_eval metrics are pad-unaware.
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
   # 
-  num_workers: 8 #32             # (CW) - editted this for debug. TRY DOUBLING THIS
-  prefetch_factor: 8          # (CW) - editted this for debug. TRY DOUBLING THIS.
-  persistent_workers: true    # (CW) - added this. defaults to true
-  pin_memory: true            # (CW) - added this. defaults to true
+  num_workers: 8 #32             #  - editted this for debug. TRY DOUBLING THIS
+  prefetch_factor: 8          #  - editted this for debug. TRY DOUBLING THIS.
+  persistent_workers: true    #  - added this. defaults to true
+  pin_memory: true            #  - added this. defaults to true
   diffusion_forcing: false
-  shuffle: true               # (CW) - trying to pin down is bad data is causing GradNorm explosion.
-  seed: 316                   # (CW) - seed for data shuffling (int or null)
+  shuffle: true               #  - trying to pin down is bad data is causing GradNorm explosion.
+  seed: 316                   #  - seed for data shuffling (int or null)
 
 
 ## If you dont want to run eval2, comment out the eval2 section below.
@@ -253,7 +253,7 @@ eval2:
   cat_chan_xyz_and_eeg: false
   dont_noise_chan_xyz: false # If true, do not add noise to channel {x,y,z}-position in EEGProcessor.process (use in tandem with NoPE)
   randomly_permute_sequence: false
-  stft_global_sigma: 0.1 # defaults to 1.0 # (CW) - global sigma for stft noise schedule.
+  stft_global_sigma: 0.1 # defaults to 1.0 #  - global sigma for stft noise schedule.
   token_dropout_prob: 0.99 # Probability of applying channel dropout to the EEG signal during training.
   dropout_scheme: "mix-4-dropouts-train" # {"train-1", "train-2", "eval-1", "no-dropout", "random-uniform-dropout", "full-channel-random-dropout-train", 
                                                  #  "full-time-pt-random-dropout", "correlated-channel-time-dropout", 
@@ -269,19 +269,19 @@ eval2:
   num_batches: 480 # CLODE fixed-eval: FIXED TOTAL, sharded across world_size + all-reduced (was 5, master-only). 480/48gpu = 10/rank.
   fixed_eval: true         # replay a frozen, sharded, disk-cached pool every eval (else legacy random-stream path)
   eval_noise_seed: 0       # per-sample sampler seed = eval_noise_seed + global_pool_idx (world-size-invariant, matches eeg_eval)
-  batch_size: 1 # 650 #32              # (CW) - editted this for debug.
-  target_packed_seqlen: 15000    # (CW) - Target seqlen for packed samples. This is essentially batch size.
+  batch_size: 1 # 650 #32              #  - editted this for debug.
+  target_packed_seqlen: 15000    #  - Target seqlen for packed samples. This is essentially batch size.
   pad_packed_seqlen: false   # CLODE: do NOT pad in eval; fwd_eval metrics are pad-unaware.
   data_norm: 10.0 # this is the norm to divide the data by, to normalize it.
   data_clip: 1.0  # Clip data to this value after normalization.
   #
-  num_workers: 8 #32             # (CW) - editted this for debug. TRY DOUBLING THIS
-  prefetch_factor: 8          # (CW) - editted this for debug. TRY DOUBLING THIS.
-  persistent_workers: true    # (CW) - added this. defaults to true
-  pin_memory: true            # (CW) - added this. defaults to true
+  num_workers: 8 #32             #  - editted this for debug. TRY DOUBLING THIS
+  prefetch_factor: 8          #  - editted this for debug. TRY DOUBLING THIS.
+  persistent_workers: true    #  - added this. defaults to true
+  pin_memory: true            #  - added this. defaults to true
   diffusion_forcing: false
-  shuffle: true               # (CW) - trying to pin down is bad data is causing GradNorm explosion.
-  seed: 316                   # (CW) - seed for data shuffling (int or null)
+  shuffle: true               #  - trying to pin down is bad data is causing GradNorm explosion.
+  seed: 316                   #  - seed for data shuffling (int or null)
 
 
 
@@ -289,7 +289,7 @@ eval2:
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # 
-# profiling: # (CW) OLD. deleted to avoid pain of installing xformers
+# profiling: #  OLD. deleted to avoid pain of installing xformers
 #   run: False
 #   mem_warmup: 0
 #   mem_steps: 4
