@@ -37,7 +37,8 @@ dependencies = [
     "vector-quantize-pytorch", 
     "schedulefree", 
     "boto3", 
-    "python-dotenv",   
+    "python-dotenv",  
+    "wandb" 
 ]
 
 # Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)

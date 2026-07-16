@@ -1257,7 +1257,7 @@ def evaluate(args: TrainArgs):
                 CONFIG  = "config.json"
 
                 model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=True)
+                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=False)
                 sd_st_raw = safe_load(weights_path, device="cpu")
 
                 # Normalize: strip leading "model." if present

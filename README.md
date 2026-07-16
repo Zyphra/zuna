@@ -67,7 +67,7 @@ python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda
 
 See `tutorials/run_zuna_pipeline_new.py` for a complete working example. 
 
-Note that you can also find a version of this script [here](https://colab.research.google.com/drive/1aL3Gh4FkrWnSBRUqmQmHNz7GTHvWhuf5?usp=sharing) on Google Colaboratory for free GPU access.
+<!-- Note that you can also find a version of this script [here](https://colab.research.google.com/drive/1aL3Gh4FkrWnSBRUqmQmHNz7GTHvWhuf5?usp=sharing) on Google Colaboratory for free GPU access. -->
 
 Edit the paths and options, then run:
 

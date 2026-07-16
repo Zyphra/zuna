@@ -35,7 +35,7 @@ FIGURES_DIR = DATA / "figures"         # comparison figures
 TMP_DIR     = DATA / "tmp"             # logs/metrics (throwaway)
 
 # ============================================================================= OPTIONS
-GPU_DEVICE  = 1            # GPU id (check `nvidia-smi`), or "" for CPU
+GPU_DEVICE  = 2            # GPU id (check `nvidia-smi`), or "" for CPU
 SEGMENT_SEC = 5.0          # model segment window length (seconds)
 HIGHPASS_HZ = 0.5          # highpass applied to each .fif before the model (None to skip)
 MONTAGE     = "standard_1020"   # used only to add positions when a .fif lacks them
