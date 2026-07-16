@@ -41,7 +41,7 @@ CONFIG_PATH = APP_DIR / "configs/config_infer_fif.yaml"
 LINGUA_ROOT = APP_DIR.parent.parent                          # holds the `lingua` + `apps` packages
 
 # ============================================================================= INFERENCE
-GPU_DEVICE             = 1        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
+GPU_DEVICE             = 2        # GPU id (check `nvidia-smi` for a free one), or "" for CPU
 TOKENS_PER_BATCH       = 100000  # data.target_packed_seqlen
 DATA_NORM              = 10.0    # rescale eeg to std ~= 0.1 (ZUNA expects this)
 DIFFUSION_CFG          = 1.0     # 1.0 = no cfg
@@ -115,17 +115,23 @@ def make_overlay_figures():
         return
     fig_dir = FIGURES_DIR / "reconstruction_overlays"
     for inp in sorted(INPUT_DIR.glob("*.fif")):
-        mask_npz = RECON_OUT / "hybrid" / inp.name.replace("_raw.fif", "_mask.npz")
+        # FifReconstructor writes "{base}_raw.fif" / "{base}_mask.npz" where base drops "_raw".
+        # Derive the same base so inputs NOT named "*_raw.fif" (e.g. EPCTL02_n2.fif) still match.
+        base = inp.stem.replace("_raw", "")
+        mask_npz = RECON_OUT / "hybrid" / f"{base}_mask.npz"
         for kind in ("full_reconstruction", "hybrid"):
-            recon = RECON_OUT / kind / inp.name
+            recon = RECON_OUT / kind / f"{base}_raw.fif"
             if not recon.exists():
                 print(f"  [fig] {kind}: no reconstruction for {inp.name}; skipping")
                 continue
-            out = fig_dir / f"{inp.stem}__{kind}.png"
+            out = fig_dir / f"{base}__{kind}.png"
             plot_reconstruction_overlay(
                 input_fif=inp, recon_fif=recon, out_path=out,
-                mask_npz=mask_npz, title=f"{inp.stem}  —  {kind}",
+                mask_npz=mask_npz, title=f"{base}  —  {kind}",
                 window_sec=PLOT_WINDOW_SEC,
+                # Preprocess the plotted "input" to the model's domain (resample-to-recon-rate is
+                # automatic; apply the same highpass) so it's a fair comparison with the reconstruction.
+                input_highpass_hz=V4_HIGHPASS_HZ,
             )
             print(f"  [fig] {kind}: {inp.name} -> {out}")
 
