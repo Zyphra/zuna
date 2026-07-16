@@ -4,7 +4,7 @@
 
 # ZUNA1.1: A Flexible EEG Foundation Model
 
-[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA1.1-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA1.1) [![PyPI](https://img.shields.io/pypi/v/zuna?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/)  [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![arXiv](https://img.shields.io/badge/arXiv-2602.18478-b31b1b.svg)](https://arxiv.org/pdf/2602.18478) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA1.1-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA1.1) [![PyPI](https://img.shields.io/pypi/v/zuna?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/)  [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **ZUNA1.1** is Zyphra's open foundation model for EEG. It reconstructs noisy or missing channels, denoises recordings, and upsamples sparse electrode layouts to denser ones. Because it conditions on each electrode's **3D scalp coordinates** rather than a fixed channel list, it works on essentially any montage, from a 4-channel Muse headband to a 256-channel research cap, without retraining, and can even generate signals at electrode locations that were never recorded.
 
@@ -224,7 +224,7 @@ Any montage with known positions works — consumer-headset layouts as well as s
 
 ## Citation
 
-For more information see our [technical whitepaper](https://www.zyphra.com/zuna-technical-paper) and [blog](https://www.zyphra.com/post/zuna). If you find ZUNA useful in your work, please cite accordingly.
+A technical whitepaper is coming soon. If you find ZUNA useful in your work, please cite accordingly.
 
 Organizations or researchers interested in collaborating with Zyphra to improve future versions for specific needs or use cases should contact bci@zyphra.com.
 
