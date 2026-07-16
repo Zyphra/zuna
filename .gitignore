@@ -42,5 +42,5 @@ tutorials/data/figures/
 tutorials/data/tmp/
 
 *.pt
-
+*.png
 *.npy
