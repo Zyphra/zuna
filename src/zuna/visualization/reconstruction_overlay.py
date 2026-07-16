@@ -84,21 +84,22 @@ def plot_reconstruction_overlay(
     if input_notch_hz:
         raw_in.notch_filter(input_notch_hz, verbose="ERROR")
 
-    ch_names = raw_in.ch_names
-    sfreq = raw_in.info["sfreq"]             # == rec_sfreq after resample
-    din = raw_in.get_data() * 1e6            # µV
-    drec_all = raw_rec.get_data() * 1e6
-    T = min(din.shape[1], drec_all.shape[1])
+    # Use the RECONSTRUCTION's channel list as the row set: it's what the model actually produced —
+    # the kept channels PLUS any ADDED channels that weren't in the input. Added channels have no
+    # input trace (drawn as NaN, so only the reconstruction line shows, fully shaded as inferred).
+    ch_names = raw_rec.ch_names
+    sfreq = raw_rec.info["sfreq"]
+    drec_all = raw_rec.get_data() * 1e6      # µV, (C_rec, N)
+    din_all = raw_in.get_data() * 1e6
+    T = min(drec_all.shape[1], din_all.shape[1])
     if window_sec is not None:
         T = min(T, int(round(window_sec * sfreq)))   # cap plotted window; None = full recording
-    din = din[:, :T]
-
-    # Align reconstruction rows to the input channel order (by name).
-    rec_names = raw_rec.ch_names
-    drec = np.full_like(din, np.nan)
+    drec = drec_all[:, :T]
+    in_by = {c: i for i, c in enumerate(raw_in.ch_names)}
+    din = np.full((len(ch_names), T), np.nan, dtype=float)   # NaN where a recon channel isn't in the input
     for i, c in enumerate(ch_names):
-        if c in rec_names:
-            drec[i] = drec_all[rec_names.index(c), :T]
+        if c in in_by:
+            din[i] = din_all[in_by[c], :T]
 
     # Load the inferred-cell mask (per channel x sample), aligned to input channel order.
     mask = None

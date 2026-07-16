@@ -86,6 +86,184 @@ def inference(
     print(f"✓ Inference complete")
 
 
+def write_bad_mask(
+    fif_path: str,
+    out_npz: str,
+    bad_channels=None,
+    bad_segments=None,
+    base_mask_npz: str | None = None,
+) -> str:
+    """Build a per-file (channel x sample) bad-mask .npz for the v4 reconstruction path.
+
+    The mask marks the cells the model should reconstruct. Combine any of:
+      - bad_channels: list of channel names -> whole channel marked bad.
+      - bad_segments: list of tuples, times in DATA-RELATIVE seconds:
+            (start, stop)          -> mark that span on ALL channels
+            (start, stop, "Cz")    -> mark that span on channel "Cz" only
+      - base_mask_npz: an existing mask .npz to start from (e.g. a UI-generated mask); the
+        above are UNIONed on top of it.
+    Output format (same as the reconstructor's output masks): npz with
+      mask (n_ch, n_times) bool, ch_names (array of str), sfreq (float).
+    """
+    import numpy as np
+
+    raw = mne.io.read_raw_fif(str(fif_path), preload=False, verbose="ERROR")
+    ch_names = list(raw.ch_names)
+    sfreq = float(raw.info["sfreq"])
+    N = raw.n_times
+    row = {c.lower(): i for i, c in enumerate(ch_names)}   # case-insensitive channel lookup
+
+    mask = np.zeros((len(ch_names), N), dtype=bool)
+    if base_mask_npz is not None and Path(base_mask_npz).exists():
+        z = np.load(str(base_mask_npz), allow_pickle=True)
+        blower = {str(x).lower(): i for i, x in enumerate(z["ch_names"])}
+        bmask = np.asarray(z["mask"]).astype(bool)
+        for i, c in enumerate(ch_names):
+            if c.lower() in blower:
+                r = bmask[blower[c.lower()]]
+                mask[i, : min(N, r.shape[0])] |= r[: min(N, r.shape[0])]
+
+    for c in (bad_channels or []):
+        if c.lower() in row:
+            mask[row[c.lower()], :] = True
+
+    for seg in (bad_segments or []):
+        start, stop = float(seg[0]), float(seg[1])
+        s = max(0, int(round(start * sfreq)))
+        e = min(N, int(round(stop * sfreq)))
+        if e <= s:
+            continue
+        if len(seg) >= 3 and seg[2] is not None:      # per-channel segment
+            if seg[2].lower() in row:
+                mask[row[seg[2].lower()], s:e] = True
+        else:                                          # all channels
+            mask[:, s:e] = True
+
+    Path(out_npz).parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(str(out_npz), mask=mask, ch_names=np.array(ch_names), sfreq=np.float32(sfreq))
+    return out_npz
+
+
+def reconstruct_fif(
+    input_dir: str,
+    output_dir: str,
+    figures_dir: str,
+    tmp_dir: str | None = None,
+    gpu_device: int | str = 0,
+    segment_sec: float = 5.0,
+    highpass_hz: float | None = 0.5,
+    montage: str = "standard_1020",
+    repair_channels=None,
+    target_channel_count=None,
+    mask_dir: str | None = None,
+    bad_segments=None,
+    use_fif_annotations: bool = True,
+    window_sec: float | None = 60,
+    diffusion_cfg: float = 1.0,
+    sample_steps: int = 50,
+) -> None:
+    """Reconstruct .fif files directly with the v4 model (EEGDataset_v4), no .pt round-trip.
+
+    Reads each .fif in `input_dir`, reconstructs the "bad"/selected cells, and writes:
+      <output_dir>/full_reconstruction/<base>_raw.fif   model output everywhere
+      <output_dir>/hybrid/<base>_raw.fif                original, model only on inferred cells
+      <output_dir>/hybrid/<base>_mask.npz               per (channel, sample) inferred mask
+    plus a full-duration overlay per file in `figures_dir`.
+
+    The reconstruction mask is the UNION of: the .fif's BAD_ annotations + info['bads'] (automatic),
+    `repair_channels` (names), `target_channel_count` (upsampled channels, placed far from existing
+    electrodes), `bad_segments` (manual (start, stop[, channel]) tuples), and any per-file masks in
+    `mask_dir` (e.g. from a UI). Model weights load from HuggingFace (see eeg_eval Load_from_HF).
+    """
+    import sys
+    import subprocess
+
+    app_dir = Path(__file__).parent / "inference/AY2l/lingua/apps/AY2latent_bci"
+    eeg_eval = app_dir / "eeg_eval.py"
+    config = app_dir / "configs/config_infer_fif.yaml"
+    lingua_root = app_dir.parent.parent
+    for p in (config, eeg_eval):
+        if not p.exists():
+            raise FileNotFoundError(f"Missing required file: {p}")
+
+    input_dir = Path(input_dir); output_dir = Path(output_dir); figures_dir = Path(figures_dir)
+    tmp_dir = Path(tmp_dir) if tmp_dir is not None else output_dir.parent / "tmp"
+    for d in (output_dir, figures_dir, tmp_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Effective mask dir = UI masks and/or manual bad_segments, UNIONed per file. Built into tmp.
+    eff_mask_dir = None
+    if bad_segments:
+        eff_mask_dir = tmp_dir / "input_masks"
+        for fif in sorted(input_dir.glob("*.fif")):
+            base = fif.stem.replace("_raw", "")
+            ui = (Path(mask_dir) / f"{base}_mask.npz") if mask_dir else None
+            write_bad_mask(str(fif), str(eff_mask_dir / f"{base}_mask.npz"),
+                           bad_segments=bad_segments,
+                           base_mask_npz=str(ui) if (ui and ui.exists()) else None)
+    elif mask_dir:
+        eff_mask_dir = Path(mask_dir)
+
+    overrides = {
+        "config": config,
+        "dump_dir": tmp_dir.absolute(),
+        "inference_figures_dir": tmp_dir.absolute(),   # eeg_eval internal output -> tmp
+        "data.data_dir": input_dir.absolute(),
+        "data.v4_recon_save_fif": "true",
+        "data.v4_recon_out_dir": output_dir.absolute(),
+        "data.v4_segment_sec": segment_sec,
+        "data.v4_montage": montage,
+        "data.v4_use_fif_annotations": "true" if use_fif_annotations else "false",
+        "diffusion_cfg": diffusion_cfg,
+        "diffusion_sample_steps": sample_steps,
+    }
+    if highpass_hz is not None:
+        overrides["data.v4_highpass_hz"] = highpass_hz
+    if repair_channels:
+        overrides["data.v4_drop_channels"] = "[" + ",".join(repair_channels) + "]"
+    if target_channel_count is not None:
+        # int N  -> auto-add channels spread far from existing electrodes;
+        # list of names -> add exactly those channels at their montage positions.
+        if isinstance(target_channel_count, (list, tuple)):
+            overrides["data.v4_target_channel_count"] = "[" + ",".join(map(str, target_channel_count)) + "]"
+        else:
+            overrides["data.v4_target_channel_count"] = target_channel_count
+    if eff_mask_dir is not None:
+        overrides["data.v4_mask_dir"] = Path(eff_mask_dir).absolute()
+    cmd = [sys.executable, str(eeg_eval)] + [f"{k}={v}" for k, v in overrides.items()]
+
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_device)
+    env["WANDB_MODE"] = "disabled"
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(lingua_root), str(app_dir), env.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
+    # Run as a plain single-GPU process: this login node is inside a SLURM allocation without
+    # SLURM_NTASKS, which sends lingua's distributed helpers down the SLURM path and crashes.
+    for k in [k for k in env if k.startswith("SLURM_")]:
+        del env[k]
+
+    print(f"[v4] direct-.fif reconstruction: {input_dir} -> {output_dir}", flush=True)
+    subprocess.run(cmd, env=env, check=True)
+
+    # Full-duration input-vs-reconstruction overlays (input preprocessed to the model's domain).
+    from .visualization.reconstruction_overlay import plot_reconstruction_overlay
+    for fif in sorted(input_dir.glob("*.fif")):
+        base = fif.stem.replace("_raw", "")
+        mask_npz = output_dir / "hybrid" / f"{base}_mask.npz"
+        for kind in ("full_reconstruction", "hybrid"):
+            recon = output_dir / kind / f"{base}_raw.fif"
+            if not recon.exists():
+                print(f"  [fig] {kind}: no reconstruction for {fif.name}; skipping")
+                continue
+            plot_reconstruction_overlay(
+                input_fif=fif, recon_fif=recon, out_path=figures_dir / f"{base}__{kind}.png",
+                mask_npz=mask_npz, title=f"{base}  —  {kind}",
+                window_sec=window_sec, input_highpass_hz=highpass_hz,
+            )
+    print(f"✓ reconstruction complete: {output_dir} ; figures: {figures_dir}")
+
+
 def pt_to_fif(
     input_dir: str,
     output_dir: str,

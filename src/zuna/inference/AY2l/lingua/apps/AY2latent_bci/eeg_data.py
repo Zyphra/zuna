@@ -369,6 +369,8 @@ class BCIDatasetArgs:
     v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
     v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir #jm v4
     v4_recon_seam_correct: bool = True  # re-anchor hybrid infills to neighbouring original (remove boundary jumps; DC/near-DC only) #jm v4
+    v4_mask_dir: Optional[str] = None  # dir of per-file <base>_mask.npz (channel x sample bool, 0-based) UNIONed into the reconstruction mask (UI / manual segments) #jm v4
+    v4_use_fif_annotations: bool = True  # import BAD_ time-segment annotations from the .fif into the reconstruction mask (whole-channel info['bads'] are always used) #jm v4
     v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
     # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
     # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
@@ -1975,6 +1977,9 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         self.noise_thresh          = args.v4_noise_thresh
         self.require_positions     = args.v4_require_positions
         self.drop_channels         = getattr(args, "v4_drop_channels", None)  #jm v4
+        self.mask_dir              = getattr(args, "v4_mask_dir", None)  #jm v4 (per-file external bad-mask dir)
+        self._external_mask        = None  #jm v4 (per-file, set in _prepare_raw)
+        self.use_fif_annotations   = getattr(args, "v4_use_fif_annotations", True)  #jm v4
         self.recon_fill_only_masked = args.v4_recon_fill_only_masked  #jm v4
         self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)  #jm v4
         self.filter_method         = getattr(args, "v4_filter_method", "fir")  #jm v4
@@ -2222,12 +2227,41 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
         # Register the (post-preprocessing) info so the FifReconstructor can use it.  #jm v4
         self.raw_info_registry[str(fif_path)] = raw.info.copy()                       #jm v4
 
+        # Optional per-file external bad-mask (UI / manual bad_segments), aligned to this raw.  #jm v4
+        self._external_mask = self._load_external_mask(fif_path, raw) if self.mask_dir else None
+
         elapsed = time.perf_counter() - _t_prep_start                                  #jm v4
         self._prepare_raw_time += elapsed                                              #jm v4
         self._n_files_loaded += 1                                                      #jm v4
         print(f"[v4 timing] _prepare_raw {Path(fif_path).name}: {elapsed*1000:.1f} ms")  #jm v4
 
         return raw, unfiltered_data
+
+    def _load_external_mask(self, fif_path, raw):
+        """Load <mask_dir>/<base>_mask.npz (channel x sample bool + ch_names + sfreq) and align it to
+        the current raw: rows matched by channel name, time nearest-resampled to raw.n_times. The
+        mask is treated as 0-based / data-relative. Returns (C, n_times) bool aligned to raw.ch_names,
+        or None if the file has no mask.  #jm v4"""
+        base = Path(fif_path).stem.replace("_raw", "")
+        mpath = Path(self.mask_dir) / f"{base}_mask.npz"
+        if not mpath.exists():
+            print(f"  [v4] no external mask for {base} in {self.mask_dir}")
+            return None
+        z = np.load(str(mpath), allow_pickle=True)
+        em = np.asarray(z["mask"]).astype(bool)                       # (C_ext, N_ext)
+        enames = [str(x) for x in z["ch_names"]]
+        N = raw.n_times
+        # nearest-resample the time axis to the current n_times (mask covers the same duration)
+        idx = (np.arange(N) if em.shape[1] == N
+               else np.minimum((np.arange(N) * (em.shape[1] / N)).astype(int), em.shape[1] - 1))
+        row = {n: i for i, n in enumerate(enames)}
+        aligned = np.zeros((len(raw.ch_names), N), dtype=bool)
+        for i, ch in enumerate(raw.ch_names):
+            if ch in row:
+                aligned[i] = em[row[ch]][idx]
+        print(f"  [v4] external mask {mpath.name}: {100 * aligned.mean():.1f}% cells "
+              f"(aligned to {len(raw.ch_names)} ch)")
+        return aligned
 
     # ------------------------------------------------------------------ #
     # 2D bad-mask: shape (n_channels, n_coarse_time_bins) for the segment
@@ -2251,32 +2285,37 @@ class EEGDataset_v4(IterableDataset):  #jm v4 | sequential .fif inference loader
             if bad_name in ch_names:
                 bad_2d[ch_names.index(bad_name), :] = True
 
-        # 2. Bad time annotations: any annotation whose description starts with 'BAD'
-        sfreq = raw.info["sfreq"]
-        # Map each annotation onset to a 0-based sample index into get_data(). Onsets live in the
-        # recording's ABSOLUTE (first_samp) frame when orig_time is set; some files carry absolute
-        # onsets even with orig_time/meas_date = None (e.g. a crop that lost its meas_date). A truly
-        # 0-based onset must fall within the recording, so an onset at/beyond the duration also signals
-        # the absolute frame. In both absolute cases subtract first_samp; otherwise it's already
-        # data-relative. (first_samp is 0 for un-cropped files, so this is a no-op there.)  #jm v4
-        first_samp = raw.first_samp
-        has_orig_time = raw.annotations.orig_time is not None
-        dur_s = raw.n_times / sfreq
-        for ann in raw.annotations:
-            if not str(ann["description"]).upper().startswith("BAD"):
-                continue
-            onset = ann["onset"]
-            absolute = has_orig_time or (onset >= dur_s)   # onset beyond duration can't be 0-based
-            off = first_samp if absolute else 0
-            ann_start = int(round(onset * sfreq)) - off
-            ann_end   = int(round((onset + ann["duration"]) * sfreq)) - off
-            # Intersect with this segment
-            ovl_start = max(0, ann_start - seg_start_sample)
-            ovl_end   = min(T, ann_end   - seg_start_sample)
-            if ovl_end > ovl_start:
-                bin_s = ovl_start // tf
-                bin_e = (ovl_end + tf - 1) // tf
-                bad_2d[:, bin_s:bin_e] = True
+        # 2. Bad time annotations from the .fif (BAD_* descriptions). Toggle with
+        #    v4_use_fif_annotations. Onset->sample mapping accounts for first_samp (absolute frame
+        #    when orig_time is set, or when onset >= duration; else already 0-based).  #jm v4
+        if self.use_fif_annotations:
+            sfreq = raw.info["sfreq"]
+            first_samp = raw.first_samp
+            has_orig_time = raw.annotations.orig_time is not None
+            dur_s = raw.n_times / sfreq
+            for ann in raw.annotations:
+                if not str(ann["description"]).upper().startswith("BAD"):
+                    continue
+                onset = ann["onset"]
+                absolute = has_orig_time or (onset >= dur_s)   # onset beyond duration can't be 0-based
+                off = first_samp if absolute else 0
+                ann_start = int(round(onset * sfreq)) - off
+                ann_end   = int(round((onset + ann["duration"]) * sfreq)) - off
+                # Intersect with this segment
+                ovl_start = max(0, ann_start - seg_start_sample)
+                ovl_end   = min(T, ann_end   - seg_start_sample)
+                if ovl_end > ovl_start:
+                    bin_s = ovl_start // tf
+                    bin_e = (ovl_end + tf - 1) // tf
+                    bad_2d[:, bin_s:bin_e] = True
+
+        # 2b. External per-file mask (UI / manual bad_segments): 0-based, UNION into bad_2d.  #jm v4
+        ext = self._external_mask
+        if ext is not None and ext.shape[0] == C:
+            usable = n_coarse * tf
+            seg = ext[:, seg_start_sample:seg_start_sample + usable]   # (C, <=usable)
+            if seg.shape[1] == usable:
+                bad_2d |= seg.reshape(C, n_coarse, tf).any(axis=2)
 
         # 3. Heuristic flat / noisy detection on the z-scored segment (per-bin std)
         if self.flat_thresh is not None or self.noise_thresh is not None:

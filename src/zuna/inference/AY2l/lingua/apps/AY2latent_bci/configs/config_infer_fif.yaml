@@ -127,9 +127,11 @@ data:
   # <v4_recon_out_dir>/full_reconstruction/ and <v4_recon_out_dir>/hybrid/.
   v4_recon_save_fif: true
   v4_recon_fill_only_masked: true
-  v4_recon_unmasked_from_original: true   # hybrid unmasked cells = original (resampled) input signal
+  v4_recon_unmasked_from_original: false  # hybrid unmasked cells = model-domain (highpass-filtered) original, so kept cells match the plotted input exactly; set true to keep the raw unfiltered volts instead
   v4_recon_out_dir: ./tutorials/data/2_fif_output/   # overridden by run_zuna_pipeline_fif.py
   v4_recon_seam_correct: true   # re-anchor hybrid infills to the neighbouring original (remove boundary jumps)
+  v4_mask_dir: null   # dir of per-file <base>_mask.npz (channel x sample bool); UNIONed into the reconstruction mask (set by reconstruct_fif for UI / manual bad_segments)
+  v4_use_fif_annotations: true   # import BAD_ time-segment annotations from the .fif (whole-channel info['bads'] are always used)
 
 checkpoint:
   # init_ckpt_path: /workspace/bci/checkpoints/bci/ZUNA1.2B_5e-4_noALW3/checkpoints/0000050000
