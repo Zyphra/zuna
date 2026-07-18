@@ -596,14 +596,29 @@ def unwrap_all_the_signals(model_output, latent_data, latent_recon, batch, args)
     channel_id_unwrapped = []
     t_coarse_unwrapped = []
 
-    seq_lens = batch['seq_lens'].cpu().numpy() 
+    seq_lens = batch['seq_lens'].cpu().numpy()
     seqlen_accum=0
+
+    # token-space real/pad mask [N] (True=real). When seqlen padding is ON, the
+    # packer appends ONE trailing all-zero PAD document (eeg_data.py) whose rows are all
+    # pad_mask==0. That doc is NOT a real sample -- unwrapping/scoring/plotting/counting it
+    # would corrupt every per-sample metric and add a garbage plot. We detect it below by
+    # its all-zero pad_mask slice and skip it. When padding is OFF, pad_mask is all-ones so
+    # the skip never triggers and behaviour is byte-identical to before.
+    _pad_real = (batch['pad_mask'].reshape(-1).cpu().numpy().astype(bool)
+                 if batch.get('pad_mask', None) is not None else None)
 
     tf = args.data.num_fine_time_pts
     # tc = args.data.seq_len // tf ## THIS ASSUMES TC IS SAME FOR ALL SAMPLES !!
 
     # Loop through each sample in batch and unwrap the variable-length sequences
     for i,seqlen in enumerate(seq_lens):
+
+        # skip the trailing PAD document (all pad_mask==0 over its slice). Advance
+        # the running offset so real-token slicing stays aligned, but emit nothing for it.
+        if _pad_real is not None and not _pad_real[seqlen_accum:seqlen_accum+seqlen].any():
+            seqlen_accum += seqlen
+            continue
 
         tc = batch['max_tc'][i] ## This allows tc different for each sample
         num_chans = seqlen//tc 
