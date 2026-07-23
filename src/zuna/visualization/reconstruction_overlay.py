@@ -30,6 +30,40 @@ def _contiguous_runs(flags):
     yield from zip(starts, ends)
 
 
+def _mask_from_annotations(raw_rec, ch_names, T, sfreq, prefix="ZUNA"):
+    """Build a (len(ch_names), T) inferred-cell mask from the recon file's own annotations
+    (the 'ZUNA1.1_infilled' spans written by FifReconstructor). Returns None if there are none.
+
+    Empty ch_names on an annotation = all channels; a populated tuple = those channels only.
+    Onsets are read on MNE's clock (first_samp subtracted when the file carries an orig_time),
+    mirroring the importer so the shaded spans line up with the 0-based plot time axis.
+    """
+    anns = getattr(raw_rec, "annotations", None)
+    if anns is None or len(anns) == 0:
+        return None
+    idx = {c: i for i, c in enumerate(ch_names)}
+    first = raw_rec.first_samp
+    has_orig_time = anns.orig_time is not None
+    dur_s = raw_rec.n_times / sfreq
+    mask = np.zeros((len(ch_names), T), dtype=bool)
+    found = False
+    for ann in anns:
+        if not str(ann["description"]).upper().startswith(prefix.upper()):
+            continue
+        onset = ann["onset"]
+        off = first if (has_orig_time or onset >= dur_s) else 0
+        s = max(0, int(round(onset * sfreq)) - off)
+        e = min(T, int(round((onset + ann["duration"]) * sfreq)) - off)
+        if e <= s:
+            continue
+        chs = ann["ch_names"] if "ch_names" in ann else ()
+        rows = [idx[c] for c in chs if c in idx] if chs else range(len(ch_names))
+        for r in rows:
+            mask[r, s:e] = True
+        found = True
+    return mask if found else None
+
+
 def plot_reconstruction_overlay(
     input_fif,
     recon_fif,
@@ -50,7 +84,9 @@ def plot_reconstruction_overlay(
     ----------
     input_fif, recon_fif : path-like    original input and reconstructed .fif
     out_path             : path-like    where to write the .png
-    mask_npz             : path-like    optional <name>_mask.npz (mask, ch_names) to shade inferred cells
+    mask_npz             : path-like    optional <name>_mask.npz (mask, ch_names) to shade inferred cells;
+                                        when absent, the shaded regions are derived from the recon file's
+                                        own ZUNA1.1_infilled annotations instead
     max_channels         : int|None     cap number of channels drawn (None = all)
     window_sec           : float|None    seconds to plot from the start (None = full recording)
     demean               : bool         subtract each trace's mean for visual alignment
@@ -118,6 +154,9 @@ def plot_reconstruction_overlay(
                 if token_res:
                     row = np.repeat(row, tf)[:N_full]
                 mask[i] = row[:T]
+    if mask is None:
+        # No mask .npz — derive the shaded regions from the recon file's ZUNA1.1_infilled annotations.
+        mask = _mask_from_annotations(raw_rec, ch_names, T, sfreq)
 
     n = len(ch_names) if max_channels is None else min(max_channels, len(ch_names))
     t = np.arange(T) / sfreq

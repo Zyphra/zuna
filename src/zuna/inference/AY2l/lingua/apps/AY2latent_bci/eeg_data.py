@@ -369,8 +369,11 @@ class BCIDatasetArgs:
     v4_recon_unmasked_from_original: bool = False  # unmasked cells = raw (resampled, unfiltered) volts #jm v4
     v4_recon_out_dir: Optional[str] = None  # base dir for .fif save-out (full_reconstruction/ + hybrid/ subfolders); falls back to dump_dir #jm v4
     v4_recon_seam_correct: bool = True  # re-anchor hybrid infills to neighbouring original (remove boundary jumps; DC/near-DC only) #jm v4
+    v4_recon_annotate_infill: bool = True  # mark reconstructed cells on the output .fif with 'ZUNA1.1_infilled' annotations (per-channel); fully-infilled channels get a full-duration annotation and drop from info['bads'] #jm v4
+    v4_recon_save_preprocessed: bool = False  # also write the post-preprocessing raw (resampled+filtered+montage+bads+upsampled channels, exactly what the model ingests) to <v4_recon_out_dir>/fif_input_preprocessed/ #jm v4
     v4_mask_dir: Optional[str] = None  # dir of per-file <base>_mask.npz (channel x sample bool, 0-based) UNIONed into the reconstruction mask (UI / manual segments) #jm v4
     v4_use_fif_annotations: bool = True  # import BAD_ time-segment annotations from the .fif into the reconstruction mask (whole-channel info['bads'] are always used) #jm v4
+    v4_bad_token_overlap: float = 0.0  # a coarse token (num_fine_time_pts samples) is marked bad when the fraction of it overlapped by a BAD_ segment / manual bad_segment exceeds this; 0.0 = any overlap (widen out to whole tokens), 0.5 = only if the majority of the token is bad (rounds tight edges inward) #jm v4
     v4_filter_method: str = "fir"             # MNE filter method: "fir" (default, accurate) or "iir"   #jm v4
     # Channel upsampling: add zero-filled channels at target-montage positions and let the model        #jm v4
     # interpolate them (they are masked, like bads). int = greedy upsample to N total channels;          #jm v4
@@ -1588,8 +1591,11 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
         self.mask_dir              = getattr(args, "v4_mask_dir", None)  #jm v4 (per-file external bad-mask dir)
         self._external_mask        = None  #jm v4 (per-file, set in _prepare_raw)
         self.use_fif_annotations   = getattr(args, "v4_use_fif_annotations", True)  #jm v4
+        self.bad_token_overlap     = float(getattr(args, "v4_bad_token_overlap", 0.0))  #jm v4
         self.recon_fill_only_masked = args.v4_recon_fill_only_masked  #jm v4
         self.recon_unmasked_from_original = getattr(args, "v4_recon_unmasked_from_original", False)  #jm v4
+        self.recon_out_dir         = getattr(args, "v4_recon_out_dir", None)  #jm v4
+        self.recon_save_preprocessed = getattr(args, "v4_recon_save_preprocessed", False)  #jm v4
         self.filter_method         = getattr(args, "v4_filter_method", "fir")  #jm v4
         self.target_channel_count  = getattr(args, "v4_target_channel_count", None)  #jm v4
         self.upsample_montage      = getattr(args, "v4_upsample_montage", "standard_1005")  #jm v4
@@ -1830,6 +1836,15 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
         # Register the (post-preprocessing) info so the FifReconstructor can use it.
         self.raw_info_registry[str(fif_path)] = raw.info.copy()
 
+        # Optionally persist the fully-preprocessed continuous raw (exactly what the model
+        # ingests: resampled + filtered + montage + info['bads'] + upsampled channels) so it
+        # can be compared against the raw input and the reconstruction outputs.
+        if self.recon_save_preprocessed and self.recon_out_dir is not None:
+            pre_dir = Path(self.recon_out_dir) / "fif_input_preprocessed"
+            pre_dir.mkdir(parents=True, exist_ok=True)
+            base = Path(fif_path).stem.replace("_raw", "")
+            raw.save(str(pre_dir / f"{base}_raw.fif"), overwrite=True, verbose="ERROR")
+
         # Optional per-file external bad-mask (UI / manual bad_segments), aligned to this raw.  #jm v4
         self._external_mask = self._load_external_mask(fif_path, raw) if self.mask_dir else None
 
@@ -1877,6 +1892,22 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
     # ------------------------------------------------------------------ #
     # 2D bad-mask: shape (n_channels, n_coarse_time_bins) for the segment
     # ------------------------------------------------------------------ #
+    def _overlap_tokens(self, ovl_start, ovl_end, tf, n_coarse):
+        """Token indices in [0, n_coarse) whose overlap with the sample span
+        [ovl_start, ovl_end) exceeds self.bad_token_overlap (a fraction of the tf-sample token).
+
+        thr=0.0 -> any overlap counts (span widens out to whole tokens, the default);
+        thr=0.5 -> only tokens more than half covered (tight edges round inward).
+        """
+        first = max(0, ovl_start // tf)
+        last  = min(n_coarse - 1, (ovl_end - 1) // tf)
+        if last < first:
+            return np.empty(0, dtype=np.int64)
+        toks  = np.arange(first, last + 1)
+        tok_s = toks * tf
+        overlap = np.minimum(ovl_end, tok_s + tf) - np.maximum(ovl_start, tok_s)
+        return toks[overlap > self.bad_token_overlap * tf]
+
     def _compute_bad_mask_2d(self, data_seg, raw, seg_start_sample, n_coarse):
         """
         data_seg : (C, T_samples)  -- ALREADY z-scored for the segment, so std is ~1 by default.
@@ -1916,9 +1947,20 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
                 ovl_start = max(0, ann_start - seg_start_sample)
                 ovl_end   = min(T, ann_end   - seg_start_sample)
                 if ovl_end > ovl_start:
-                    bin_s = ovl_start // tf
-                    bin_e = (ovl_end + tf - 1) // tf
-                    bad_2d[:, bin_s:bin_e] = True
+                    # Tokens covered by this annotation, honouring the overlap threshold.
+                    toks = self._overlap_tokens(ovl_start, ovl_end, tf, n_coarse)
+                    if toks.size:
+                        # Channel-specific bad segments: MNE stores a per-annotation ch_names
+                        # tuple (MNE >= 1.0). An empty tuple means the segment applies to ALL
+                        # channels (a global bad span); a populated tuple restricts it to those
+                        # channels only. Names not present in this file are ignored.
+                        ann_chs = ann["ch_names"] if "ch_names" in ann else ()
+                        if ann_chs:
+                            rows = [ch_names.index(cn) for cn in ann_chs if cn in ch_names]
+                            if rows:
+                                bad_2d[np.ix_(rows, toks)] = True
+                        else:
+                            bad_2d[:, toks] = True
 
         # 2b. External per-file mask (UI / manual bad_segments): 0-based, UNION into bad_2d.  #jm v4
         ext = self._external_mask
@@ -1926,7 +1968,10 @@ class EEGDataset_v4(IterableDataset):  # sequential .fif inference loader
             usable = n_coarse * tf
             seg = ext[:, seg_start_sample:seg_start_sample + usable]   # (C, <=usable)
             if seg.shape[1] == usable:
-                bad_2d |= seg.reshape(C, n_coarse, tf).any(axis=2)
+                # Same overlap rule as fif annotations: a token is bad when its bad-sample
+                # fraction exceeds bad_token_overlap (0.0 -> any bad sample, the default).
+                frac = seg.reshape(C, n_coarse, tf).mean(axis=2)
+                bad_2d |= frac > self.bad_token_overlap
 
         # 3. Heuristic flat / noisy detection on the z-scored segment (per-bin std)
         if self.flat_thresh is not None or self.noise_thresh is not None:
@@ -2185,10 +2230,11 @@ class FifReconstructor:
     Notes:
       - All math runs in numpy. Model outputs are detached + .cpu().numpy() by the
         time they reach `add_batch` (via unwrap_all_the_signals).
-      - save_all() writes THREE artifacts per source file:
+      - save_all() writes TWO artifacts per source file:
           <base>_recon_raw.fif   — pure model output (model everywhere)
           <base>_hybrid_raw.fif  — original on kept cells, model output on dropped cells
-          <base>_mask.npz        — per (channel, sample) dropout mask + ch_names + sfreq
+        The infilled (channel, time) cells are recorded as ZUNA1.1_infilled annotations on
+        both files (see _infill_annotations), so no separate mask .npz is written.
         The hybrid's "original" is the raw (resampled, unfiltered) file signal when
         v4_unfiltered_volts is shipped (v4_recon_unmasked_from_original=true); otherwise
         it falls back to the filtered model-input signal.
@@ -2196,7 +2242,8 @@ class FifReconstructor:
         segments (if any) stay NaN in the signals and False in the mask.
     """
     def __init__(self, output_dir, raw_info_registry, fill_only_masked, num_fine_time_pts,
-                 data_norm=1.0, unmasked_from_original=False, seam_correct=True):
+                 data_norm=1.0, unmasked_from_original=False, seam_correct=True,
+                 annotate_infill=True):
         from pathlib import Path
         self.output_dir = Path(output_dir)
         # Two output subfolders (jonas): full model reconstruction, and hybrid
@@ -2220,6 +2267,9 @@ class FifReconstructor:
         # each infilled span in the hybrid is re-anchored (linear deramp) so its ends meet the
         # neighbouring original samples. Only affects DC/near-DC; the PSD bands are untouched.
         self.seam_correct = bool(seam_correct)
+        # When True, save_all attaches per-channel 'ZUNA1.1_infilled' annotations to the
+        # output .fif marking exactly the cells the model reconstructed (from full_mask).
+        self.annotate_infill = bool(annotate_infill)
         # buffer: { fif_path : list of (seg_start, seg_end, signal_array (C_seg, T_seg), channel_names) }
         self.buffer: dict = {}
 
@@ -2360,6 +2410,56 @@ class FifReconstructor:
                     hybrid[c, s:e] = span + (R - span[-1])
         return hybrid
 
+    @staticmethod
+    def _infill_annotations(full_mask, info):
+        """Turn the (C, N) sample-resolution infill mask into MNE annotations describing
+        exactly which (channel, time) cells ZUNA reconstructed.
+
+        Returns (annot, fully_infilled_ch_names):
+          - Each contiguous masked span becomes a 'ZUNA1.1_infilled' annotation. The label
+            deliberately does NOT start with 'BAD', so a subsequent ZUNA run will not treat
+            these regions as bad and re-infill already-reconstructed data.
+          - A span shared by EVERY channel is emitted once as a global annotation
+            (ch_names=[] -> applies to all channels); otherwise ch_names lists the exact
+            channels, so channel-specific infills round-trip (see _compute_bad_mask_2d).
+          - A channel masked across the WHOLE recording yields one full-duration annotation
+            and is returned in `fully_infilled_ch_names` so the caller can drop it from
+            info['bads'] (it now carries reconstructed data, so it is no longer "missing").
+        """
+        from collections import defaultdict
+        C, N = full_mask.shape
+        sfreq = float(info["sfreq"])
+        ch_names = list(info["ch_names"])
+        spans = defaultdict(list)          # (start_sample, end_sample) -> [channel idx]
+        fully_infilled = set()
+        for c in range(C):
+            m = full_mask[c]
+            if not m.any():
+                continue
+            if m.all():
+                fully_infilled.add(ch_names[c])
+            d = np.diff(m.astype(np.int8))
+            starts = list(np.where(d == 1)[0] + 1)
+            ends   = list(np.where(d == -1)[0] + 1)
+            if m[0]:
+                starts = [0] + starts
+            if m[-1]:
+                ends = ends + [N]
+            for s, e in zip(starts, ends):
+                spans[(s, e)].append(c)
+
+        onsets, durations, descs, ch_lists = [], [], [], []
+        for (s, e), chs in sorted(spans.items()):
+            onsets.append(s / sfreq)
+            durations.append((e - s) / sfreq)
+            descs.append("ZUNA1.1_infilled")
+            # Empty list = applies to all channels (a global infilled span).
+            ch_lists.append([] if len(chs) == C else [ch_names[c] for c in chs])
+
+        annot = mne.Annotations(onset=onsets, duration=durations, description=descs,
+                                ch_names=ch_lists, orig_time=None)
+        return annot, fully_infilled
+
     def save_all(self):
         from pathlib import Path
         if not self.buffer:
@@ -2409,10 +2509,24 @@ class FifReconstructor:
             # Ensure ends with _raw.fif so MNE doesn't warn
             base = src_name.replace("_raw", "")
 
+            # Describe exactly the cells ZUNA reconstructed (from full_mask) as annotations,
+            # and drop any fully-infilled channel from info['bads'] (it now carries recon data).
+            out_info = info
+            annot = None
+            if self.annotate_infill:
+                annot, fully_infilled = self._infill_annotations(full_mask, info)
+                out_info = info.copy()
+                out_info["bads"] = [b for b in out_info.get("bads", []) if b not in fully_infilled]
+
+            def _write(data, path):
+                raw_out = mne.io.RawArray(data, out_info, verbose="ERROR")
+                if annot is not None and len(annot):
+                    raw_out.set_annotations(annot, verbose="ERROR")
+                raw_out.save(str(path), overwrite=True, verbose="ERROR")
+
             # (1) Pure model output everywhere.
             model_path = self.full_dir / f"{base}_raw.fif"
-            mne.io.RawArray(full_model, info, verbose="ERROR").save(
-                str(model_path), overwrite=True, verbose="ERROR")
+            _write(full_model, model_path)
 
             # Seam-correct the hybrid so infilled spans connect to the surrounding original.
             if self.seam_correct:
@@ -2420,29 +2534,13 @@ class FifReconstructor:
 
             # (2) Hybrid: original on kept cells, model output on dropped cells.
             hybrid_path = self.hybrid_dir / f"{base}_raw.fif"
-            mne.io.RawArray(full_hybrid, info, verbose="ERROR").save(
-                str(hybrid_path), overwrite=True, verbose="ERROR")
+            _write(full_hybrid, hybrid_path)
 
-            # (3) Dropout mask (per channel x TOKEN) so plot_compare_fif can highlight exactly the   #jm v4
-            # cells the model filled in. Stored at token resolution (one column per tf samples) — the
-            # model drops/keeps whole tokens, so this is tf× smaller with no loss. num_fine_time_pts
-            # + n_times travel with it so readers can expand back to samples; ch_names for alignment.
-            mask_path = self.hybrid_dir / f"{base}_mask.npz"
-            tf = self.tf
-            n_full = full_mask.shape[1]
-            n_tok = (n_full + tf - 1) // tf
-            pad = n_tok * tf - n_full
-            fm = full_mask if pad == 0 else np.concatenate(
-                [full_mask, np.zeros((full_mask.shape[0], pad), dtype=bool)], axis=1)
-            mask_tok = fm.reshape(full_mask.shape[0], n_tok, tf).any(axis=2)
-            np.savez_compressed(str(mask_path), mask=mask_tok,
-                                ch_names=np.array(info["ch_names"]),
-                                sfreq=np.float32(info["sfreq"]),
-                                num_fine_time_pts=np.int64(tf),
-                                n_times=np.int64(n_full))
+            # The infilled (channel, time) cells are recorded as ZUNA1.1_infilled annotations on
+            # the output files above (see _infill_annotations), so no separate mask .npz is written.
 
             n_dropped = int(full_mask.sum())
-            print(f"[v4 recon] wrote {model_path.name}, {hybrid_path.name}, {mask_path.name}  "
+            print(f"[v4 recon] wrote {model_path.name}, {hybrid_path.name}  "
                   f"({n_chans} ch, {n_samples_total} samples, {n_dropped} dropped cells)")
 
 

@@ -46,10 +46,13 @@ IMPORT_FIF_BAD_SEGMENTS = True                # use the .fif's own BAD_ annotati
 REPAIR_CHANNELS         = ["Cz"]                # existing channel(s) to reconstruct completely
 ADD_CHANNELS            = ["Fz", "Pz"]          # NEW channels to add + infer at their montage location
 TARGET_CHANNEL_COUNT    = None                  # OR auto-add up to N total channels (far apart), e.g. 40
-BAD_SEGMENTS            = [(5, 6),              # 5-6 s bad on ALL channels
-                           (10, 11, "C3"),       # 10-11 s bad on C3 only
-                           (10, 11, "C4")]       # 10-11 s bad on C4 only   (-> "just for some" channels)
+BAD_SEGMENTS            = None                  # manual (start, stop[, channel]) segments, UNIONed on top of the .fif's BAD_ annotations.
+                                                # Kept None so the reconstruction is driven purely by new.fif's own annotations.
+                                                # Example (note: these OVERRIDE channel-specific annotations in the same window):
+                                                #   [(5, 6), (10, 11, "C3"), (10, 11, "C4")]
 MASK_DIR                = None                  # dir of per-file "<base>_mask.npz" (channel x sample bool)
+SAVE_PREPROCESSED       = True                  # also save the post-preprocessing input (what the model sees) -> OUTPUT_DIR/fif_input_preprocessed/
+BAD_TOKEN_OVERLAP       = 0.5                   # token (0.125 s) marked bad only if >this fraction overlaps a bad span; 0.0 = any overlap (widen out), 0.5 = majority (round tight edges inward)
 
 # ============================================================================= RUN
 if __name__ == "__main__":
@@ -70,4 +73,6 @@ if __name__ == "__main__":
         bad_segments=BAD_SEGMENTS,
         mask_dir=MASK_DIR,
         use_fif_annotations=IMPORT_FIF_BAD_SEGMENTS,
+        save_preprocessed=SAVE_PREPROCESSED,
+        bad_token_overlap=BAD_TOKEN_OVERLAP,
     )

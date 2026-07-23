@@ -1390,6 +1390,7 @@ def evaluate(args: TrainArgs):
                 data_norm=getattr(args.data, "data_norm", 1.0),
                 unmasked_from_original=getattr(args.data, "v4_recon_unmasked_from_original", False),
                 seam_correct=getattr(args.data, "v4_recon_seam_correct", True),
+                annotate_infill=getattr(args.data, "v4_recon_annotate_infill", True),
             )
             print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
 

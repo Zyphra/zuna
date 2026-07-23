@@ -206,6 +206,9 @@ def reconstruct_fif(
     mask_dir: str | None = None,
     bad_segments=None,
     use_fif_annotations: bool = True,
+    annotate_infill: bool = True,
+    save_preprocessed: bool = False,
+    bad_token_overlap: float = 0.0,
     window_sec: float | None = 60,
     diffusion_cfg: float = 1.0,
     sample_steps: int = 50,
@@ -215,13 +218,30 @@ def reconstruct_fif(
     Reads each .fif in `input_dir`, reconstructs the "bad"/selected cells, and writes:
       <output_dir>/full_reconstruction/<base>_raw.fif   model output everywhere
       <output_dir>/hybrid/<base>_raw.fif                original, model only on inferred cells
-      <output_dir>/hybrid/<base>_mask.npz               per (channel, sample) inferred mask
-    plus a full-duration overlay per file in `figures_dir`.
+    plus a full-duration overlay per file in `figures_dir`. The inferred (channel, time) cells are
+    recorded as ZUNA1.1_infilled annotations on both output .fif files (no separate mask .npz). When `save_preprocessed` is True, the
+    fully-preprocessed input (resampled + filtered + montage + info['bads'] + upsampled channels,
+    exactly what the model ingests) is also written to <output_dir>/fif_input_preprocessed/<base>_raw.fif.
 
     The reconstruction mask is the UNION of: the .fif's BAD_ annotations + info['bads'] (automatic),
     `repair_channels` (names), `target_channel_count` (upsampled channels, placed far from existing
     electrodes), `bad_segments` (manual (start, stop[, channel]) tuples), and any per-file masks in
     `mask_dir` (e.g. from a UI). Model weights load from HuggingFace (see eeg_eval Load_from_HF).
+
+    BAD_ annotations may be channel-specific: an MNE annotation with a populated `ch_names` marks
+    that time span bad only on those channels; an empty `ch_names` (the default) marks all channels.
+    Annotation onsets are read on MNE's clock: when the file has an orig_time / first_samp, the
+    absolute onset is converted back to a data-relative sample (first_samp subtracted).
+
+    `bad_token_overlap` controls how a segment maps onto the model's coarse tokens (num_fine_time_pts
+    samples each): 0.0 (default) marks a token bad on ANY overlap (spans widen out to whole tokens);
+    0.5 marks a token only when the majority of it is bad (tight edges round inward, so the infilled
+    region hugs the annotation instead of over-covering by up to one token per side).
+
+    When `annotate_infill` is True (default), the output .fif files carry 'ZUNA1.1_infilled'
+    annotations recording exactly which (channel, time) cells were reconstructed — per-channel where
+    the infill was channel-specific, global where every channel was infilled. A channel infilled for
+    its whole duration gets a full-duration annotation and is dropped from the output info['bads'].
     """
     import sys
     import subprocess
@@ -262,6 +282,9 @@ def reconstruct_fif(
         "data.v4_segment_sec": segment_sec,
         "data.v4_montage": montage,
         "data.v4_use_fif_annotations": "true" if use_fif_annotations else "false",
+        "data.v4_recon_annotate_infill": "true" if annotate_infill else "false",
+        "data.v4_recon_save_preprocessed": "true" if save_preprocessed else "false",
+        "data.v4_bad_token_overlap": bad_token_overlap,
         "diffusion_cfg": diffusion_cfg,
         "diffusion_sample_steps": sample_steps,
     }
