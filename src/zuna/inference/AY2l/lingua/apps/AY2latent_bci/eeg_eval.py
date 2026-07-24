@@ -1311,20 +1311,20 @@ def _warmup_model(model, args, device):
         logger.warning(f"[warmup] skipped due to error: {type(e).__name__}: {e}")
 
 
-def init_model(args: TrainArgs) -> ModelHandle:
+def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelHandle:
     """Phase 1/3: device select + distributed/env setup + build + (HF or local) weight load
     + torch.compile of model.sample/.encoder + warm-up. Runs ONCE; returns a warm ModelHandle.
     MetricLogger / ExitStack live in evaluate(), not here."""
     model = None
     model_param_count = 0
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = device or torch.device("cuda")
     elif torch.backends.mps.is_available():
-        device = torch.device("mps")
+        device = device or torch.device("mps")
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
         os.environ['TORCHDYNAMO_DISABLE'] = "1"
     else:
-        device = torch.device("cpu")
+        device = device or torch.device("cpu")
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
         os.environ['TORCHDYNAMO_DISABLE'] = "1"
 
