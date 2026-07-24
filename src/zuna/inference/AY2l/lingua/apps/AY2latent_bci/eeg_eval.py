@@ -8,7 +8,7 @@
 #
 # 2nd, run something like:
 #   >> CUDA_VISIBLE_DEVICES=1 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
-#   >> CUDA_VISIBLE_DEVICES=4 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml
+#   >> TORCH_LOGS="recompiles" CUDA_VISIBLE_DEVICES=1 python3 apps/AY2latent_bci/eeg_eval.py config=apps/AY2latent_bci/configs/config_bci_eval.yaml  2>&1 | tee /tmp/recompile_zuna.log
 
 
 import numpy as np
@@ -145,6 +145,11 @@ class TrainArgs:
 
     # Nb optimizer steps to take
     steps: int = 1000
+
+    # mark the per-document dim of seq_lens/max_tc dynamic (see _maybe_mark_dynamic_ndoc)
+    # so varying #packed-docs/users does NOT recompile the encoder/decoder + mask builders or
+    # the @torch.compile'd EEGProcessor.process.
+    dynamic_seq_lens: bool = True
 
     data: BCIDatasetArgs = field(default_factory=BCIDatasetArgs)
     optim: OptimArgs = field(default_factory=OptimArgs)
@@ -1211,12 +1216,107 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
 #
 
 
-def evaluate(args: TrainArgs):
-
-    fs = args.data.sample_rate
-    num_t = args.data.seq_len
 
 
+# ============================================================================
+# 3-way split (see serving_refactor_clode.md in the AY2l repo):
+# init_model / init_data_batch / evaluate, called in sequence by main() so the
+# compiled model is built + warmed ONCE and can back many data/eval calls.
+# Zuna specifics preserved: device (cuda/mps/cpu), HuggingFace weight load,
+# wandb forced off, and the V4 .fif reconstructor.
+# ============================================================================
+
+@dataclass
+class ModelHandle:
+    """Warm, compiled model + the distributed context init_model established.
+    `model` is None when LOAD_THE_MODEL is False. `device` is a torch.device."""
+    model: Optional[Any]
+    device: Any
+    world_mesh: Any
+    dp_rank: int
+    dp_degree: int
+    model_param_count: int = 0
+
+
+def _maybe_mark_dynamic_ndoc(t, args):
+    """Mark the per-document dim (dim 0 == number of packed documents/users) of a tensor
+    dynamic, so every compiled graph taking a per-doc tensor recompiles ONCE for any
+    doc-count instead of once per distinct count (fixes 'problem B'). Applies to seq_lens
+    (mask builders + encoder/decoder forward) and max_tc (@torch.compile'd EEGProcessor.process).
+    Gated by args.dynamic_seq_lens; call EACH iter on the LIVE tensor (mark_dynamic is
+    per-tensor, and .to(device) makes a new tensor). Skips size-<=1 dims; never crashes."""
+    if not getattr(args, "dynamic_seq_lens", True):
+        return
+    try:
+        if isinstance(t, torch.Tensor) and t.dim() >= 1 and t.shape[0] > 1:
+            torch._dynamo.mark_dynamic(t, 0)
+    except Exception as e:
+        logger.warning(f"[dyn] mark_dynamic(dim 0) skipped: {e}")
+
+
+def _warmup_model(model, args, device):
+    """Compile the model NOW by running one dummy forward at the fixed packed seqlen, so the
+    first real request doesn't pay the torch.compile cost. Only meaningful on CUDA (zuna only
+    compiles .sample/.encoder there). Inputs are synthesized directly (encoder_input is exactly
+    what model.sample takes: [1,S,dim] fp32; tok_idx is int64 [1,S,k], values irrelevant to the
+    compile guard). fork_rng + no_grad so the randn here does not perturb per-rank RNG state.
+    See the AY2l eeg_eval.py / serving_refactor_clode.md for the full rationale + caveats
+    (fixed length requires args.data.pad_packed_seqlen=True; doc-count handled by mark_dynamic)."""
+    if not LOAD_THE_MODEL or model is None or getattr(device, "type", None) != "cuda":
+        logger.info("[warmup] skipped (model not loaded / not CUDA).")
+        return
+    try:
+        S = int(getattr(args.data, "target_packed_seqlen", args.data.seq_len))
+        if not getattr(args.data, "pad_packed_seqlen", False):
+            logger.warning("[warmup] pad_packed_seqlen=False: real seqlens vary, so this "
+                           "single-length warm-up will NOT prevent recompiles at serve time.")
+        tf = int(args.data.num_fine_time_pts)
+        dim = tf + (3 if getattr(args.data, "cat_chan_xyz_and_eeg", False) else 0)
+        tt = args.model.tok_idx_type
+        if tt is None:
+            k = None
+        elif tt in ("t_coarse", "chan_id", "stack_arange_seqlen"):
+            k = 1
+        elif tt == "{x,y,z,tc}":
+            k = 4
+        elif tt == "{x,y,z,tc,ch}":
+            k = 5
+        else:
+            logger.warning(f"[warmup] unknown tok_idx_type={tt!r}; using tok_idx=None.")
+            k = None
+        sample_steps = int(getattr(args, "diffusion_sample_steps", 50))
+        cfg = float(getattr(args, "diffusion_cfg", 1.0))
+        ndoc = 8
+        base = max(1, S // ndoc)
+        lens = [base] * (ndoc - 1) + [S - base * (ndoc - 1)]
+        lens = [l for l in lens if l > 0]
+
+        t0 = timer()
+        with torch.no_grad(), torch.random.fork_rng(devices=[device]):
+            torch.manual_seed(0)
+            encoder_input = torch.randn(1, S, dim, device=device, dtype=torch.float32)
+            encoder_input[:, ::7, :] = 0.0  # exercise the dropped/padded-token path
+            seq_lens = torch.tensor(lens, device=device, dtype=torch.long)
+            _maybe_mark_dynamic_ndoc(seq_lens, args)
+            tok_idx = None if k is None else torch.zeros(1, S, k, dtype=torch.long)  # CPU long, like real
+            logger.info(f"[warmup] compiling: S={S} dim={dim} k={k} "
+                        f"sample_steps={sample_steps} cfg={cfg} docs={len(lens)}")
+            z, _ = model.sample(encoder_input=encoder_input, seq_lens=seq_lens,
+                                tok_idx=tok_idx, cfg=cfg, sample_steps=sample_steps)
+            model.encoder(token_values=encoder_input, seq_lens=seq_lens, tok_idx=tok_idx)
+            model.encoder(token_values=z, seq_lens=seq_lens, tok_idx=tok_idx)
+        torch.cuda.synchronize()
+        logger.info(f"[warmup] done in {timer() - t0:.1f}s -- model is warm.")
+    except Exception as e:
+        logger.warning(f"[warmup] skipped due to error: {type(e).__name__}: {e}")
+
+
+def init_model(args: TrainArgs) -> ModelHandle:
+    """Phase 1/3: device select + distributed/env setup + build + (HF or local) weight load
+    + torch.compile of model.sample/.encoder + warm-up. Runs ONCE; returns a warm ModelHandle.
+    MetricLogger / ExitStack live in evaluate(), not here."""
+    model = None
+    model_param_count = 0
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -1228,259 +1328,284 @@ def evaluate(args: TrainArgs):
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
         os.environ['TORCHDYNAMO_DISABLE'] = "1"
 
-    with ExitStack() as context_stack:
-        init_signal_handler(set_preemption_flag)  # For handling preemption signals.
-        setup_env(args.env)
+    init_signal_handler(set_preemption_flag)  # For handling preemption signals.
+    setup_env(args.env)
 
-        setup_torch_distributed(args.distributed, device=device)
-        world_mesh = get_device_mesh(args.distributed, device=device)
-        logger.info(f"Starting job: {args.name}")
+    setup_torch_distributed(args.distributed, device=device)
+    world_mesh = get_device_mesh(args.distributed, device=device)
+    logger.info(f"Starting job: {args.name}")
 
-        # build dataloader
-        # need dp world size and rank
-        dp_mesh = world_mesh["dp_replicate"]
-        dp_degree = dp_mesh.size()
-        dp_rank = dp_mesh.get_local_rank()
-        if args.distributed.dp_shard > 1:
-            dp_rank = dp_rank * world_mesh["dp_shard"].size() + world_mesh["dp_shard"].get_local_rank()
-            dp_degree *= world_mesh["dp_shard"].size()
+    # build dataloader
+    # need dp world size and rank
+    dp_mesh = world_mesh["dp_replicate"]
+    dp_degree = dp_mesh.size()
+    dp_rank = dp_mesh.get_local_rank()
+    if args.distributed.dp_shard > 1:
+        dp_rank = dp_rank * world_mesh["dp_shard"].size() + world_mesh["dp_shard"].get_local_rank()
+        dp_degree *= world_mesh["dp_shard"].size()
 
-        logger.info(f"Running on dp rank : {dp_rank}")
-        logger.info(f"Running on dp size : {dp_degree}")
+    logger.info(f"Running on dp rank : {dp_rank}")
+    logger.info(f"Running on dp size : {dp_degree}")
 
-        torch.manual_seed(args.seed)
-        logger.info("Building model")
+    torch.manual_seed(args.seed)
+    logger.info("Building model")
 
-        # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
+    # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
         
-        if LOAD_THE_MODEL:
-            Load_from_HF = True
-            if Load_from_HF:
-                # ===== Load model + weights from HuggingFace (Zyphra/ZUNA) =====
-                # Toggle the `if True` to `if False` to fall through to the local
-                # checkpoint / ema.pt loader in the else branch below.
-                # device selected above (cuda / mps / cpu)
+    if LOAD_THE_MODEL:
+        Load_from_HF = True
+        if Load_from_HF:
+            # ===== Load model + weights from HuggingFace (Zyphra/ZUNA) =====
+            # Toggle the `if True` to `if False` to fall through to the local
+            # checkpoint / ema.pt loader in the else branch below.
+            # device selected above (cuda / mps / cpu)
 
-                def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
-                    config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
-                    with open(config_path, "r") as f:
-                        cfig = json.load(f)
-                    return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
+            def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
+                config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
+                with open(config_path, "r") as f:
+                    cfig = json.load(f)
+                return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
 
-                REPO_ID = "Zyphra/ZUNA1.1"
-                WEIGHTS = "model-00001-of-00001.safetensors"
-                CONFIG  = "config.json"
+            REPO_ID = "Zyphra/ZUNA1.1"
+            WEIGHTS = "model-00001-of-00001.safetensors"
+            CONFIG  = "config.json"
 
-                model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-                weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=False)
-                sd_st_raw = safe_load(weights_path, device="cpu")
+            model_args = load_model_args_from_hf(REPO_ID, CONFIG)
+            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=False)
+            sd_st_raw = safe_load(weights_path, device="cpu")
 
-                # Normalize: strip leading "model." if present
-                sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
+            # Normalize: strip leading "model." if present
+            sd_st = {k.removeprefix("model."): v for k, v in sd_st_raw.items()}
 
-                model = EncoderDecoder(model_args).to(device)
-                sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
-                model.load_state_dict(sd_st_on_dev, strict=True)
-                model.eval()
-
-                if device.type == "cuda":
-                    model.sample = torch.compile(model.sample)
-                    model.encoder = torch.compile(model.encoder)
-            else:
-                with torch.device("meta"):
-                    model = EncoderDecoder(args.model)
-
-                logger.info("Model is built !")
-
-                model_param_count = get_num_params(model)
-
-                if device.type == "cuda":
-                    model.sample = torch.compile(model.sample)  # compiled despite graph breaks from the sampling loop in .sample
-                    model.encoder = torch.compile(model.encoder)
-
-                # Once we shard the model on different gpus we can actually initialize the model
-                # First we create empty tensors of the correct shapes
-                model = model.to_empty(device=device) # Use local device, not cuda:0
-                # Then we init the model. Please make sure this function initializes *ALL* parameters
-                # and buffers, otherwise you will have random values in the unitialized tensors
-                # which will silently fail (give nan gradients for example)
-
-                if args.checkpoint.init_ckpt_path:
-                    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
-                        torch.manual_seed(args.model.seed)
-                        model.init_weights()
-                    check_model_value_range(model, range=10.0, std=1.0)
-                    logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
-                    load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
-                    logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
-                    check_model_value_range(model, range=10.0, std=1.0)
-                else:
-                    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
-                        torch.manual_seed(args.model.seed)
-                        model.init_weights()
-                check_model_value_range(model, range=10.0, std=1.0)
-
-                # log model size
-                logger.info(f"Model size: {model_param_count:,} total parameters")
-
-                if device.type == "cuda":
-                    gpu_memory_monitor = GPUMemoryMonitor("cuda")
-                    logger.info(
-                        f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
-                        f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
-                    )
-                    logger.info(f"GPU memory usage: {gpu_memory_monitor}")
-                else:
-                    logger.info("Running on CPU/MPS")
-
-                # Model weights are fully loaded above via load_from_checkpoint(init_ckpt_path).
-                # The training-resume path (build_optimizer + TrainState + CheckpointManager, which
-                # needs args.checkpoint.path) is not needed for inference and has been removed. 
-                if getattr(args.optim, "use_ema", False):
-                    from apps.AY2latent_bci.ema import EMA
-                    _ema = EMA(model)                                  # scaffold; shadow = current weights
-                    if _ema.maybe_load(args.checkpoint.init_ckpt_path):  # ema.pt sits IN the step dir
-                        _ema.copy_to(model)                            # overwrite weights with EMA (throwaway eval -> safe)
-                        logger.info(f"[EMA] applied {args.checkpoint.init_ckpt_path}/ema.pt to eval model")
-                    else:
-                        logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
-
-
-            gc.disable()
-
-
-            # Make seed unique per GPU/rank by adding rank to base seed
-            rank_seed = args.seed + dp_rank
-            torch.manual_seed(rank_seed)
-            if device.type == "cuda":
-                torch.cuda.manual_seed(rank_seed)
-
-            logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
-            
-            # Also make numpy and random seeds unique per rank
-            np.random.seed(rank_seed)
-            random.seed(rank_seed)
-
+            model = EncoderDecoder(model_args).to(device)
+            sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
+            model.load_state_dict(sd_st_on_dev, strict=True)
             model.eval()
-            # Inference codebase: never touch Weights & Biases. logging.wandb defaults
-            # to a non-None WandbArgs(), which would trigger wandb.init(); force it off so
-            # MetricLogger only writes the local metrics.jsonl. 
-            if getattr(args, "logging", None) is not None:
-                args.logging.wandb = None
-            metric_logger = context_stack.enter_context(
-                MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
+
+            if device.type == "cuda":
+                model.sample = torch.compile(model.sample)
+                model.encoder = torch.compile(model.encoder)
+        else:
+            with torch.device("meta"):
+                model = EncoderDecoder(args.model)
+
+            logger.info("Model is built !")
+
+            model_param_count = get_num_params(model)
+
+            if device.type == "cuda":
+                model.sample = torch.compile(model.sample)  # compiled despite graph breaks from the sampling loop in .sample
+                model.encoder = torch.compile(model.encoder)
+
+            # Once we shard the model on different gpus we can actually initialize the model
+            # First we create empty tensors of the correct shapes
+            model = model.to_empty(device=device) # Use local device, not cuda:0
+            # Then we init the model. Please make sure this function initializes *ALL* parameters
+            # and buffers, otherwise you will have random values in the unitialized tensors
+            # which will silently fail (give nan gradients for example)
+
+            if args.checkpoint.init_ckpt_path:
+                with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+                    torch.manual_seed(args.model.seed)
+                    model.init_weights()
+                check_model_value_range(model, range=10.0, std=1.0)
+                logger.info(f"!!!! Loading initial model from {args.checkpoint.init_ckpt_path} !!!! \n\n")
+                load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+                logger.info("!!!!!!!!!!! Model loaded from checkpoint completed !!!!!!!!!!!")
+                check_model_value_range(model, range=10.0, std=1.0)
+            else:
+                with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+                    torch.manual_seed(args.model.seed)
+                    model.init_weights()
+            check_model_value_range(model, range=10.0, std=1.0)
+
+            # log model size
+            logger.info(f"Model size: {model_param_count:,} total parameters")
+
+            if device.type == "cuda":
+                gpu_memory_monitor = GPUMemoryMonitor("cuda")
+                logger.info(
+                    f"GPU capacity: {gpu_memory_monitor.device_name} ({gpu_memory_monitor.device_index}) "
+                    f"with {gpu_memory_monitor.device_capacity_gib:.2f}GiB memory"
+                )
+                logger.info(f"GPU memory usage: {gpu_memory_monitor}")
+            else:
+                logger.info("Running on CPU/MPS")
+
+            # Model weights are fully loaded above via load_from_checkpoint(init_ckpt_path).
+            # The training-resume path (build_optimizer + TrainState + CheckpointManager, which
+            # needs args.checkpoint.path) is not needed for inference and has been removed. 
+            if getattr(args.optim, "use_ema", False):
+                from apps.AY2latent_bci.ema import EMA
+                _ema = EMA(model)                                  # scaffold; shadow = current weights
+                if _ema.maybe_load(args.checkpoint.init_ckpt_path):  # ema.pt sits IN the step dir
+                    _ema.copy_to(model)                            # overwrite weights with EMA (throwaway eval -> safe)
+                    logger.info(f"[EMA] applied {args.checkpoint.init_ckpt_path}/ema.pt to eval model")
+                else:
+                    logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
+
+
+        gc.disable()
+
+
+        # Make seed unique per GPU/rank by adding rank to base seed
+        rank_seed = args.seed + dp_rank
+        torch.manual_seed(rank_seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed(rank_seed)
+
+        logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
+            
+        # Also make numpy and random seeds unique per rank
+        np.random.seed(rank_seed)
+        random.seed(rank_seed)
+
+        model.eval()
+
+    if LOAD_THE_MODEL:
+        for p in model.parameters():
+            p.requires_grad = False # True (False for eval, True for training)
+
+    _warmup_model(model, args, device)
+
+    return ModelHandle(model=model, device=device,
+                       world_mesh=world_mesh, dp_rank=dp_rank, dp_degree=dp_degree,
+                       model_param_count=model_param_count)
+
+
+def init_data_batch(args: TrainArgs, handle: ModelHandle):
+    """Phase 2/3: build the (offline) data source, the V4 .fif reconstructor (if enabled),
+    and the EEGProcessor. Returns (data_loader, batch_iterator, data_processor, v4_reconstructor).
+    Offline only -- at serve time call this externally on a pool of submitted requests treated
+    like an offline dataset. Per-batch process()/.to(device)/tok_idx stay in evaluate()'s loop."""
+    dp_rank = handle.dp_rank
+    device = handle.device
+    print("Entering create dataloader on rank", dp_rank)
+    data_loader = create_dataloader_v2(args.data, args.seed, dp_rank)
+    print("Finishing create dataloader on rank", dp_rank)
+
+
+    # V4 .fif save-out: buffer per-segment model output, stitch to continuous .fif.
+    v4_reconstructor = None
+    if getattr(args.data, "use_v4", False) and getattr(args.data, "v4_recon_save_fif", False):
+        _recon_out = getattr(args.data, "v4_recon_out_dir", None) or args.dump_dir
+        v4_reconstructor = FifReconstructor(
+            output_dir=_recon_out,
+            raw_info_registry=data_loader.dataset.raw_info_registry,
+            fill_only_masked=args.data.v4_recon_fill_only_masked,
+            num_fine_time_pts=args.data.num_fine_time_pts,
+            data_norm=getattr(args.data, "data_norm", 1.0),
+            unmasked_from_original=getattr(args.data, "v4_recon_unmasked_from_original", False),
+            seam_correct=getattr(args.data, "v4_recon_seam_correct", True),
+            annotate_infill=getattr(args.data, "v4_recon_annotate_infill", True),
         )
+        print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
+
+    epoch = 0 # if using nonlocal epoch
+    def make_batch_iterator(dataloader, data_args):  # Use with IterableDataset.
+        """
+        Moving sequence packing into Dataset/Dataloader/Collator. Too slow when done here.
+        """
+        nonlocal epoch
+        print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
+
+        eeg_sig_norm = data_args.data_norm # normalization factor for eeg signal.
+        eeg_sig_clip = data_args.data_clip # clipping factor for eeg signal.
+
+        while True:
+            epoch += 1
+            logger.info(f"Starting epoch: {epoch}")
+            for idx,batch in enumerate(dataloader):
 
 
+                eeg_signal = batch['eeg_signal']
 
-        print("Entering create dataloader on rank", dp_rank)
-        data_loader = create_dataloader_v2(args.data, args.seed, dp_rank)
-        print("Finishing create dataloader on rank", dp_rank)
+                eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
 
+                if eeg_sig_clip is not None:
+                    print(f"Clipping input at +/-{eeg_sig_clip}")
+                    eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip) # 
 
-        # V4 .fif save-out: buffer per-segment model output, stitch to continuous .fif.
-        v4_reconstructor = None
-        if getattr(args.data, "use_v4", False) and getattr(args.data, "v4_recon_save_fif", False):
-            _recon_out = getattr(args.data, "v4_recon_out_dir", None) or args.dump_dir
-            v4_reconstructor = FifReconstructor(
-                output_dir=_recon_out,
-                raw_info_registry=data_loader.dataset.raw_info_registry,
-                fill_only_masked=args.data.v4_recon_fill_only_masked,
-                num_fine_time_pts=args.data.num_fine_time_pts,
-                data_norm=getattr(args.data, "data_norm", 1.0),
-                unmasked_from_original=getattr(args.data, "v4_recon_unmasked_from_original", False),
-                seam_correct=getattr(args.data, "v4_recon_seam_correct", True),
-                annotate_infill=getattr(args.data, "v4_recon_annotate_infill", True),
-            )
-            print(f"[v4 recon] enabled -> {_recon_out} (full_reconstruction/ + hybrid/)")
+                yielded = {
+                    'eeg_signal': eeg_signal, # pass out the clipped and normalized eeg signal.
+                    'chan_pos': batch['chan_pos'],
+                    'chan_pos_discrete': batch['chan_pos_discrete'],
+                    'chan_id': batch['chan_id'],
+                    't_coarse': batch['t_coarse'],
+                    'token_dropout': batch['token_dropout'],
+                    'seq_lens': batch['seq_lens'],
+                    'max_tc': batch['max_tc'],
+                    'pad_mask': batch['pad_mask'],
+                    'idx': batch['ids'],
+                    'dataset_id': batch['dataset_id'],
+                }
+                # Pass V4 reconstruction metadata through (no-op for V2/V3/B2).
+                for _k in ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
+                           'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
+                           'v4_channel_names', 'v4_sfreq', 'v4_raw_info',
+                           'v4_unfiltered_volts', 'v4_step_times'):
+                    if _k in batch:
+                        yielded[_k] = batch[_k]
+                yield yielded
 
-        epoch = 0 # if using nonlocal epoch
-        def make_batch_iterator(dataloader, data_args):  # Use with IterableDataset.
-            """
-            Moving sequence packing into Dataset/Dataloader/Collator. Too slow when done here.
-            """
-            nonlocal epoch
-            print("Creating batch iterator of dataloader with length", len(dataloader), "and dataset of length", len(dataloader.dataset))
+            print("Finished epoch", epoch)
+            # V4 is single-pass inference — stop after one full walk of the .fif files.
+            if getattr(data_args, "use_v4", False):
+                print("[v4] one full pass through all .fif files complete — stopping iterator")
+                return
 
-            eeg_sig_norm = data_args.data_norm # normalization factor for eeg signal.
-            eeg_sig_clip = data_args.data_clip # clipping factor for eeg signal.
+    batch_iterator = make_batch_iterator(data_loader, args.data)
+    print("Entering create batch iterator on rank", dp_rank)
 
-            while True:
-                epoch += 1
-                logger.info(f"Starting epoch: {epoch}")
-                for idx,batch in enumerate(dataloader):
+    # fixed-eval: plot/score the SAME frozen samples that back the training
+    # curve. Load the identical on-disk pool the training run built (keyed by
+    # data_dir/seed/N), take the first `plot_num_batches`, and seed the sampler
+    # per GLOBAL pool index so each reconstruction is byte-identical to training.
+    # See eval_harness.py. NOTE: for coherence the training run (or a
+    # pre-build) should create the pool file first; if it is missing here, this
+    # single process builds it from its own (world_size=1) data stream.
+    if getattr(args.data, "fixed_eval", False):
+        from apps.AY2latent_bci.eval_harness import (
+            build_or_load_fixed_eval_set, sample_noise_seed, fixed_eval_cache_path,
+        )
+        _pool = build_or_load_fixed_eval_set(args.data, args.seed, get_is_master())
+        _subset = _pool[: args.data.plot_num_batches]
+        logger.info(f"[fixed-eval] eeg_eval: plotting/scoring {len(_subset)}/{len(_pool)} "
+                    f"frozen samples from {fixed_eval_cache_path(args.data, args.seed)}")
 
+        def _frozen_batch_iter(subset, base_seed):
+            for gi, b in enumerate(subset):
+                torch.manual_seed(sample_noise_seed(base_seed, gi))  # process()+sample() noise
+                yield {k: v for k, v in b.items()}   # shallow copy; loop's .pop() won't mutate the cache
+        batch_iterator = _frozen_batch_iter(_subset, args.data.eval_noise_seed)
 
-                    eeg_signal = batch['eeg_signal']
+    data_processor = EEGProcessor(args.data).to(device)
 
-                    eeg_signal = eeg_signal/eeg_sig_norm # Divide by eeg_sig_norm to normalize the data and change its STD.
-
-                    if eeg_sig_clip is not None:
-                        print(f"Clipping input at +/-{eeg_sig_clip}")
-                        eeg_signal = eeg_signal.clamp(min=-eeg_sig_clip, max=eeg_sig_clip) # 
-
-                    yielded = {
-                        'eeg_signal': eeg_signal, # pass out the clipped and normalized eeg signal.
-                        'chan_pos': batch['chan_pos'],
-                        'chan_pos_discrete': batch['chan_pos_discrete'],
-                        'chan_id': batch['chan_id'],
-                        't_coarse': batch['t_coarse'],
-                        'token_dropout': batch['token_dropout'],
-                        'seq_lens': batch['seq_lens'],
-                        'max_tc': batch['max_tc'],
-                        'pad_mask': batch['pad_mask'],
-                        'idx': batch['ids'],
-                        'dataset_id': batch['dataset_id'],
-                    }
-                    # Pass V4 reconstruction metadata through (no-op for V2/V3/B2).
-                    for _k in ('v4_seg_mean', 'v4_seg_std', 'v4_avg_ref_offset',
-                               'v4_fif_path', 'v4_seg_start', 'v4_seg_end',
-                               'v4_channel_names', 'v4_sfreq', 'v4_raw_info',
-                               'v4_unfiltered_volts', 'v4_step_times'):
-                        if _k in batch:
-                            yielded[_k] = batch[_k]
-                    yield yielded
-
-                print("Finished epoch", epoch)
-                # V4 is single-pass inference — stop after one full walk of the .fif files.
-                if getattr(data_args, "use_v4", False):
-                    print("[v4] one full pass through all .fif files complete — stopping iterator")
-                    return
-
-        batch_iterator = make_batch_iterator(data_loader, args.data)
-        print("Entering create batch iterator on rank", dp_rank)
-
-        # fixed-eval: plot/score the SAME frozen samples that back the training
-        # curve. Load the identical on-disk pool the training run built (keyed by
-        # data_dir/seed/N), take the first `plot_num_batches`, and seed the sampler
-        # per GLOBAL pool index so each reconstruction is byte-identical to training.
-        # See eval_harness.py. NOTE: for coherence the training run (or a
-        # pre-build) should create the pool file first; if it is missing here, this
-        # single process builds it from its own (world_size=1) data stream.
-        if getattr(args.data, "fixed_eval", False):
-            from apps.AY2latent_bci.eval_harness import (
-                build_or_load_fixed_eval_set, sample_noise_seed, fixed_eval_cache_path,
-            )
-            _pool = build_or_load_fixed_eval_set(args.data, args.seed, get_is_master())
-            _subset = _pool[: args.data.plot_num_batches]
-            logger.info(f"[fixed-eval] eeg_eval: plotting/scoring {len(_subset)}/{len(_pool)} "
-                        f"frozen samples from {fixed_eval_cache_path(args.data, args.seed)}")
-
-            def _frozen_batch_iter(subset, base_seed):
-                for gi, b in enumerate(subset):
-                    torch.manual_seed(sample_noise_seed(base_seed, gi))  # process()+sample() noise
-                    yield {k: v for k, v in b.items()}   # shallow copy; loop's .pop() won't mutate the cache
-            batch_iterator = _frozen_batch_iter(_subset, args.data.eval_noise_seed)
-
-        #make sure all model parameters require gradients
-        if LOAD_THE_MODEL:
-            for p in model.parameters():
-                p.requires_grad = False # True (False for eval, True for training)
-
-        data_processor = EEGProcessor(args.data).to(device)
+    return data_loader, batch_iterator, data_processor, v4_reconstructor
 
 
+def evaluate(args: TrainArgs, handle: ModelHandle, src):
+    """Phase 3/3: the eval loop over prepared data, using the already-warm model. `handle` from
+    init_model(); `src` == (data_loader, batch_iterator, data_processor, v4_reconstructor) from
+    init_data_batch(). Metrics + plotting + V4 recon still live here (see serving_refactor_clode.md
+    'Follow-ups' for the lean infer_step extraction)."""
+    fs = args.data.sample_rate
+    num_t = args.data.seq_len
 
+    model = handle.model
+    device = handle.device
+    dp_rank = handle.dp_rank
+    world_mesh = handle.world_mesh
+    data_loader, batch_iterator, data_processor, v4_reconstructor = src
+
+    with ExitStack() as context_stack:
+        # Inference codebase: never touch Weights & Biases (see original note).
+        if getattr(args, "logging", None) is not None:
+            args.logging.wandb = None
+        metric_logger = context_stack.enter_context(
+            MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
+        )
+        torch_profiler = None
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         #
         # (2). Here, run EEG data through autoencoder model and compare model input with model output
@@ -1585,10 +1710,17 @@ def evaluate(args: TrainArgs):
             v4_meta = {k: batch.pop(k) for k in v4_meta_keys if k in batch}
             batch.pop('v4_step_times', None)
             v4_token_dropout = batch.get('token_dropout', None)
-            with torch.no_grad(): 
-                batch = data_processor.process(**batch)                             #  > option 3. 
-            
+            # process() is @torch.compile'd and takes per-doc tensors
+            # (seq_lens, max_tc); mark their doc-count dim dynamic BEFORE the call.
+            _maybe_mark_dynamic_ndoc(batch['seq_lens'], args)
+            _maybe_mark_dynamic_ndoc(batch['max_tc'], args)
+            with torch.no_grad():
+                batch = data_processor.process(**batch)                             #  > option 3.
+
             batch = {k: v.to(device, non_blocking=(device.type == "cuda")) for k, v in batch.items()}
+            # .to(device) made fresh tensors -> re-mark the cuda seq_lens
+            # that enters the model (encoder/decoder/mask graphs).
+            _maybe_mark_dynamic_ndoc(batch['seq_lens'], args)
             if v4_reconstructor is not None:
                 batch.update(v4_meta)   # re-attach non-tensor recon metadata
                 if v4_token_dropout is not None:
@@ -1829,12 +1961,12 @@ def evaluate(args: TrainArgs):
                 plot_unwrapped_signals(model_signal_input_unwrapped, 
                                        model_signal_output_unwrapped, 
                                        eeg_signal_unwrapped, 
-                                       NMSE_samp_EEG_sig, #MSE_samp_EEG_sig, 
+                                       NMSE_samp_EEG_sig, 
                                        PCC_samp_EEG_sig,
                                        #
                                        model_position_input_unwrapped, 
                                        model_position_output_unwrapped, 
-                                       NMSE_samp_EEG_pos, #MSE_samp_EEG_pos,
+                                       NMSE_samp_EEG_pos, 
                                        #
                                        fft_signal_input_unwrapped, 
                                        fft_signal_output_unwrapped,
@@ -1844,7 +1976,7 @@ def evaluate(args: TrainArgs):
                                        #
                                        latent_data_unwrapped,
                                        latent_recon_unwrapped,
-                                       NMSE_samp_latent, #MSE_samp_latent,
+                                       NMSE_samp_latent, 
                                        #
                                        fs,
                                        freqs,
@@ -2080,9 +2212,12 @@ def main():
     cfig = OmegaConf.merge(default_cfig, file_cfig, cli_args)
     cfig = OmegaConf.to_object(cfig)
 
-
-
-    evaluate(cfig)
+    # 3-way split: build+warm the model once, prepare data, then run the loop.
+    # For serving, init_model() can be called once and reused across many
+    # init_data_batch()/evaluate() calls on different pools of submitted requests.
+    handle = init_model(cfig)
+    src = init_data_batch(cfig, handle)
+    evaluate(cfig, handle, src)
 
 
 if __name__ == "__main__":
