@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import gc
 import json
 from huggingface_hub import hf_hub_download
+from timeit import default_timer as timer
 from safetensors.torch import load_file as safe_load
 import logging
 import os
@@ -1228,13 +1229,19 @@ def plot_unwrapped_signals(model_signal_input_unwrapped,
 
 @dataclass
 class ModelHandle:
-    """Warm, compiled model + the distributed context init_model established.
-    `model` is None when LOAD_THE_MODEL is False. `device` is a torch.device."""
+    """Warm, compiled model + the distributed context it was built in.
+    `model` is None when LOAD_THE_MODEL is False. `device` is a torch.device.
+
+    The distributed fields default to a single-process context, so a caller that built
+    its model with build_model() rather than init_model() can construct one directly:
+    `ModelHandle(model=model, device=device)`. Downstream only .model, .device and
+    .dp_rank are read (init_data_batch/evaluate); world_mesh and dp_degree are carried
+    for informational use."""
     model: Optional[Any]
     device: Any
-    world_mesh: Any
-    dp_rank: int
-    dp_degree: int
+    world_mesh: Any = None
+    dp_rank: int = 0
+    dp_degree: int = 1
     model_param_count: int = 0
 
 
@@ -1311,22 +1318,25 @@ def _warmup_model(model, args, device):
         logger.warning(f"[warmup] skipped due to error: {type(e).__name__}: {e}")
 
 
-def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelHandle:
-    """Phase 1/3: device select + distributed/env setup + build + (HF or local) weight load
-    + torch.compile of model.sample/.encoder + warm-up. Runs ONCE; returns a warm ModelHandle.
-    MetricLogger / ExitStack live in evaluate(), not here."""
-    model = None
-    model_param_count = 0
+def resolve_device(device: Optional[torch.device] = None) -> torch.device:
+    """cuda > mps > cpu, honoring an explicitly requested `device`. zuna only
+    torch.compile's on cuda, so dynamo is disabled when no cuda is available."""
     if torch.cuda.is_available():
-        device = device or torch.device("cuda")
+        return device or torch.device("cuda")
     elif torch.backends.mps.is_available():
-        device = device or torch.device("mps")
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
         os.environ['TORCHDYNAMO_DISABLE'] = "1"
+        return device or torch.device("mps")
     else:
-        device = device or torch.device("cpu")
         os.environ['TORCH_COMPILE_DISABLE'] = "1"
         os.environ['TORCHDYNAMO_DISABLE'] = "1"
+        return device or torch.device("cpu")
+
+
+def init_job_context(args: TrainArgs, device: Optional[torch.device] = None):
+    """The batch-job prologue: preemption signal handler, env setup, torch.distributed +
+    device mesh, dp rank/degree. Returns (device, world_mesh, dp_rank, dp_degree)."""
+    device = resolve_device(device)
 
     init_signal_handler(set_preemption_flag)  # For handling preemption signals.
     setup_env(args.env)
@@ -1347,6 +1357,37 @@ def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelH
     logger.info(f"Running on dp rank : {dp_rank}")
     logger.info(f"Running on dp size : {dp_degree}")
 
+    return device, world_mesh, dp_rank, dp_degree
+
+
+def seed_everything(args: TrainArgs, dp_rank: int, device: torch.device) -> None:
+    """Give each GPU/rank its own torch/numpy/random stream."""
+    rank_seed = args.seed + dp_rank
+    torch.manual_seed(rank_seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(rank_seed)
+
+    logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
+
+    # Also make numpy and random seeds unique per rank
+    np.random.seed(rank_seed)
+    random.seed(rank_seed)
+
+
+def load_model(args: TrainArgs, device: Optional[torch.device] = None,
+               warmup: bool = True, hf_token=None):
+    """Build + (HF or local) weight load + torch.compile of model.sample/.encoder +
+    warm-up. Returns (model, model_param_count); `model` is None when LOAD_THE_MODEL
+    is False.
+
+    No process-global side effects. No torch.distributed, no signal handler, no
+    setup_env(), no gc.disable(), no per-rank re-seeding. Unlike init_model() this
+    is safe to call once per device inside one long-lived process.
+    """
+    device = resolve_device(device)
+    model = None
+    model_param_count = 0
+
     torch.manual_seed(args.seed)
     logger.info("Building model")
 
@@ -1360,8 +1401,18 @@ def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelH
             # checkpoint / ema.pt loader in the else branch below.
             # device selected above (cuda / mps / cpu)
 
+            def _hf_get(repo_id: str, filename: str) -> str:
+                """Download a repo file, falling back to the local HF cache when the host
+                is offline or unauthenticated but the file was fetched on a prior run."""
+                try:
+                    return hf_hub_download(repo_id=repo_id, filename=filename, token=hf_token)
+                except Exception as e:
+                    logger.warning(f"[hf] {filename}: {type(e).__name__}: {e} -- trying local cache")
+                    return hf_hub_download(repo_id=repo_id, filename=filename,
+                                           token=hf_token, local_files_only=True)
+
             def load_model_args_from_hf(repo_id: str, config_filename: str = "config.json") -> DecoderTransformerArgs:
-                config_path = hf_hub_download(repo_id=repo_id, filename=config_filename)
+                config_path = _hf_get(repo_id, config_filename)
                 with open(config_path, "r") as f:
                     cfig = json.load(f)
                 return dataclass_from_dict(DecoderTransformerArgs, cfig["model"])
@@ -1371,7 +1422,7 @@ def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelH
             CONFIG  = "config.json"
 
             model_args = load_model_args_from_hf(REPO_ID, CONFIG)
-            weights_path = hf_hub_download(repo_id=REPO_ID, filename=WEIGHTS, token=False)
+            weights_path = _hf_get(REPO_ID, WEIGHTS)
             sd_st_raw = safe_load(weights_path, device="cpu")
 
             # Normalize: strip leading "model." if present
@@ -1381,6 +1432,8 @@ def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelH
             sd_st_on_dev = {k: v.to(device) for k, v in sd_st.items()}
             model.load_state_dict(sd_st_on_dev, strict=True)
             model.eval()
+
+            model_param_count = get_num_params(model)
 
             if device.type == "cuda":
                 model.sample = torch.compile(model.sample)
@@ -1445,28 +1498,33 @@ def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelH
                     logger.warning(f"[EMA] use_ema set but no ema.pt in {args.checkpoint.init_ckpt_path}; using raw weights")
 
 
-        gc.disable()
-
-
-        # Make seed unique per GPU/rank by adding rank to base seed
-        rank_seed = args.seed + dp_rank
-        torch.manual_seed(rank_seed)
-        if device.type == "cuda":
-            torch.cuda.manual_seed(rank_seed)
-
-        logger.info(f"Setting torch seed to {rank_seed} for rank {dp_rank}")
-            
-        # Also make numpy and random seeds unique per rank
-        np.random.seed(rank_seed)
-        random.seed(rank_seed)
-
-        model.eval()
 
     if LOAD_THE_MODEL:
+        model.eval()
+
         for p in model.parameters():
             p.requires_grad = False # True (False for eval, True for training)
 
-    _warmup_model(model, args, device)
+    if warmup:
+        _warmup_model(model, args, device)
+
+    return model, model_param_count
+
+
+def init_model(args: TrainArgs, device: Optional[torch.device] = None) -> ModelHandle:
+    """Phase 1/3: device select + distributed/env setup + build + (HF or local) weight load
+    + torch.compile of model.sample/.encoder + warm-up. Runs ONCE; returns a warm ModelHandle.
+    MetricLogger / ExitStack live in evaluate(), not here.
+
+    This is init_job_context() + load_model(), i.e. it takes over the process the way a
+    batch job may."""
+    device, world_mesh, dp_rank, dp_degree = init_job_context(args, device)
+
+    model, model_param_count = load_model(args, device)
+
+    if LOAD_THE_MODEL:
+        gc.disable()
+        seed_everything(args, dp_rank, device)
 
     return ModelHandle(model=model, device=device,
                        world_mesh=world_mesh, dp_rank=dp_rank, dp_degree=dp_degree,
