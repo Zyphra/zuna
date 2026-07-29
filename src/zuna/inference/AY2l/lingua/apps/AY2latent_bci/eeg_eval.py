@@ -1389,7 +1389,7 @@ def load_model(args: TrainArgs, device: Optional[torch.device] = None,
     model_param_count = 0
 
     torch.manual_seed(args.seed)
-    logger.info("Building model")
+    logger.info("Loading model")
 
     # Initializing Model in meta device allows us to initialize models much bigger than 1 gpu's memory
         
