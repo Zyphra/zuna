@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/zuna11_thumbnail.png" alt="ZUNA1.1 — Thought to Text" width="100%">
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/zuna11_thumbnail.png" alt="ZUNA1.1 — Thought to Text" width="100%">
 </p>
 
 # ZUNA1.1: A Flexible EEG Foundation Model
 
-[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA1.1-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA1.1) [![PyPI](https://img.shields.io/pypi/v/zuna?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/)  [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![HuggingFace ZUNA](https://img.shields.io/badge/HuggingFace-ZUNA1.1-FFD21E?logo=huggingface&logoColor=black&labelColor=555555)](https://huggingface.co/Zyphra/ZUNA1.1) [![PyPI](https://img.shields.io/pypi/v/zuna?label=pypi&logo=pypi&logoColor=white)](https://pypi.org/project/zuna/)  [![Join our Discord](https://img.shields.io/discord/1304567558682443806?label=Join%20our%20Discord&logo=discord&logoColor=black)](https://discord.gg/ZF7BCgjAcC) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/Zyphra/zuna/blob/main/LICENSE)
 
 **ZUNA1.1** is Zyphra's open foundation model for EEG. It reconstructs noisy or missing channels, denoises recordings, and upsamples sparse electrode layouts to denser ones. Because it conditions on each electrode's **3D scalp coordinates** rather than a fixed channel list, it works on essentially any montage, from a 4-channel Muse headband to a 256-channel research cap, without retraining, and can even generate signals at electrode locations that were never recorded.
 
@@ -31,7 +31,7 @@ ZUNA1.1 keeps the architecture of the original [ZUNA1](https://huggingface.co/Zy
 ## Architecture
 
 <p align="center">
-  <img src="assets/zuna11_eeg_architecture_dark.png" alt="ZUNA1.1 architecture" width="100%"><br>
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/zuna11_eeg_architecture_dark.png" alt="ZUNA1.1 architecture" width="100%"><br>
   <em>ZUNA1.1 is a transformer encoder–decoder diffusion autoencoder trained to reconstruct masked EEG channels. The main changes from ZUNA1 improve training stability (e.g. additional normalization layers).</em>
 </p>
 
@@ -47,7 +47,7 @@ ZUNA1.1 was trained on a mixture of **four channel-dropout schemes**, each captu
 - **Random-uniform:** missing values scattered across individual points (transient, localized noise like a muscle twitch).
 
 <p align="center">
-  <img src="assets/dropout_schemes_schematic_dark.png" alt="ZUNA1.1 dropout schemes" width="100%"><br>
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/dropout_schemes_schematic_dark.png" alt="ZUNA1.1 dropout schemes" width="100%"><br>
   <em>ZUNA1.1's dropout schemes are far more diverse than ZUNA1, which dropped entire channels over all time. Training across this mixture lets ZUNA1.1 handle almost arbitrary reconstructions across space and time.</em>
 </p>
 
@@ -56,19 +56,19 @@ ZUNA1.1 was trained on a mixture of **four channel-dropout schemes**, each captu
 Adding this flexibility comes at no obvious cost in reconstruction quality. On held-out evaluations, ZUNA1.1 reaches better or essentially the same NMSE as ZUNA1, and both clearly outperform classical spherical-spline interpolation — the gap widening as more channels go missing, where spline interpolation (which only assumes spatial smoothness) breaks down.
 
 <p align="center">
-  <img src="assets/zuna11_reconstruction_dropout_curves_dark.png" alt="Reconstruction accuracy as channels drop" width="100%"><br>
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/zuna11_reconstruction_dropout_curves_dark.png" alt="Reconstruction accuracy as channels drop" width="100%"><br>
   <em>Reconstruction NMSE vs channel-dropout rate across four datasets — ZUNA1.1 vs ZUNA1 vs MNE spherical-spline interpolation. Lower is better. (Evaluation restricted to 5 s samples for comparison with ZUNA1.)</em>
 </p>
 
 We also evaluate a more experimentally realistic setup: delete every electrode in one brain region and reconstruct it from the remaining seven regions. ZUNA1.1 leads across regions.
 
 <p align="center">
-  <img src="assets/zuna_zoomed_scale_delta_labels.png" alt="Reconstruction accuracy by brain region (topographic)" width="100%"><br>
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/zuna_zoomed_scale_delta_labels.png" alt="Reconstruction accuracy by brain region (topographic)" width="100%"><br>
   <em>Per-region reconstruction NMSE (topographic view): ZUNA1.1, ZUNA1 (Δ vs ZUNA1.1), and spherical-spline. Lower/greener is better.</em>
 </p>
 
 <p align="center">
-  <img src="assets/region_occlusion_region_error_bars_dataset_average.png" alt="Reconstruction errors by brain region (bar chart)" width="100%"><br>
+  <img src="https://raw.githubusercontent.com/Zyphra/zuna/main/assets/region_occlusion_region_error_bars_dataset_average.png" alt="Reconstruction errors by brain region (bar chart)" width="100%"><br>
   <em>The same per-region errors as a bar chart, averaged across four datasets; error bars show propagated standard deviation. Lower is better.</em>
 </p>
 
