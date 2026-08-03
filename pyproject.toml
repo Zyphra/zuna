@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zuna"
-version = "1.1.4"
+version = "1.1.6"
 description = "Foundation model for EEG reconstruction and interpolation"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = "Apache-2.0"
 authors = [
     {name = "Christopher Warner", email = "chris@zyphra.com"},
@@ -21,25 +21,23 @@ keywords = ["eeg", "foundation-model", "neuroscience", "preprocessing"]
 
 dependencies = [
     "numpy>=1.20.0",
+    "torch>=2.5",
     "scipy>=1.7.0",
     "mne>=1.0.0",
+    "matplotlib",
+    "safetensors",
     "joblib>=1.0.0",
     "omegaconf",
-    "sentencepiece",
-    "tiktoken",
-    "fsspec",
-    "blobfile",
-    "lm-eval",
-    "nvidia-ml-py", 
-    "transformers", 
-    "huggingface-hub", 
-    "einops", 
-    "vector-quantize-pytorch", 
-    "schedulefree", 
-    "boto3", 
-    "python-dotenv",  
-    "wandb",
+    "huggingface-hub",
+    "einops",
+    "python-dotenv",
 ]
+
+[project.optional-dependencies]
+cloud = ["boto3"]
+quantization = ["vector-quantize-pytorch>=1.31.0"]
+text = ["sentencepiece", "tiktoken"]
+training = ["schedulefree", "wandb"]
 
 # Handle import paths so that single pip install -e . exposes zuna, lingua, and apps (embedded AY2l)
 [tool.setuptools.package-dir]

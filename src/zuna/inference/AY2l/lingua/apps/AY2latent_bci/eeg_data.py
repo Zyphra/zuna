@@ -17,7 +17,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-import boto3
 import tempfile
 import logging
 import fnmatch
@@ -2913,6 +2912,13 @@ class EEGDataset_b2(IterableDataset):
             raise ValueError("B2 configuration incomplete. Must provide: b2_bucket_name, b2_endpoint_url, b2_access_key_id, b2_secret_access_key")
         
         # Initialize boto3 S3 client for B2
+        try:
+            import boto3
+        except ImportError as error:
+            raise ImportError(
+                "Backblaze B2 support requires the 'cloud' extra: "
+                "pip install 'zuna[cloud]'"
+            ) from error
         self.s3_client = boto3.client(
             's3',
             endpoint_url=args.b2_endpoint_url,
@@ -3481,4 +3487,3 @@ def create_dataloader_v2(args: BCIDatasetArgs, seed, rank, timeout=200):
         in_order=False,
         collate_fn=pack_chans_collate_fn
     )
-

@@ -7,7 +7,6 @@ import math
 import logging
 from torch import nn
 from torch.optim import AdamW, lr_scheduler
-from schedulefree import AdamWScheduleFree
 import torch
 logger = logging.getLogger()
 
@@ -239,6 +238,13 @@ def build_optimizer(model: nn.Module, args: OptimArgs, n_steps: int,):
         )
     elif args.optim_cls == "schedulefree":
         logger.info("Using AdamW ScheduleFree optimizer")
+        try:
+            from schedulefree import AdamWScheduleFree
+        except ImportError as error:
+            raise ImportError(
+                "Schedule-free training requires the 'training' extra: "
+                "pip install 'zuna[training]'"
+            ) from error
         optimizer = AdamWScheduleFree(
             params,                      # ### was model.parameters()
             lr=args.lr,

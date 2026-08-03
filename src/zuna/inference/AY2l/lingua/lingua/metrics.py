@@ -13,9 +13,19 @@ import torch
 import torch.nn as nn
 
 from lingua.distributed import get_is_master
-import wandb
 
 logger = logging.getLogger()
+
+
+def _require_wandb():
+    try:
+        import wandb
+    except ImportError as error:
+        raise ImportError(
+            "Weights & Biases logging requires the 'training' extra: "
+            "pip install 'zuna[training]'"
+        ) from error
+    return wandb
 
 
 @dataclass
@@ -66,6 +76,7 @@ class MetricLogger:
             and self.args.logging.wandb is not None
             and get_is_master()
         ):
+            wandb = _require_wandb()
             run = wandb.init(
                 config=asdict(self.args),
                 **asdict(self.args.logging.wandb),
@@ -75,9 +86,10 @@ class MetricLogger:
         if (
             self.args is not None
             and self.args.logging.wandb is not None
-            and (wandb.run is not None)
         ):
-            wandb.log(metrics, step=metrics["global_step"])
+            wandb = _require_wandb()
+            if wandb.run is not None:
+                wandb.log(metrics, step=metrics["global_step"])
 
         metrics.update({"created_at": datetime.now(timezone.utc).isoformat()})
         print(json.dumps(metrics), file=self.jsonl_writer, flush=True)
@@ -185,7 +197,7 @@ class GPUMemoryMonitor:
 def upload_train_to_wandb(
     ckpt_dir, project="lingua", entity="codegen-team", train=True, eval=True
 ):
-    import wandb
+    wandb = _require_wandb()
     from omegaconf import OmegaConf
     import json
     from pathlib import Path

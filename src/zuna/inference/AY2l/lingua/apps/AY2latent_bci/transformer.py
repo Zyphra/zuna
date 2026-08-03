@@ -33,7 +33,6 @@ from lingua.transformer import (
 from .xattn import DecoderBlock, FourierConditioner, DecoderArgs, AdaRMSNorm
 from .conv_stem import CausalConv2DStem
 from .bottlenecks import mmd_imq
-from vector_quantize_pytorch import SimVQ, FSQ
 import functools
 
 def create_causal_mask(seqlen, attn_impl, sliding_window):
@@ -878,12 +877,26 @@ class EncoderTransformer(BaseTransformer):
             self.distill_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
         if "sim" in args.bottleneck_type:
+            try:
+                from vector_quantize_pytorch import SimVQ
+            except ImportError as error:
+                raise ImportError(
+                    "The SimVQ bottleneck requires the 'quantization' extra: "
+                    "pip install 'zuna[quantization]'"
+                ) from error
             self.quantizer = SimVQ(
                 dim = args.encoder_output_dim,
                 codebook_size = args.codebook_size,
                 rotation_trick = True  # use rotation trick from Fifty et al.
             )
         elif "fsq" in args.bottleneck_type:
+            try:
+                from vector_quantize_pytorch import FSQ
+            except ImportError as error:
+                raise ImportError(
+                    "The FSQ bottleneck requires the 'quantization' extra: "
+                    "pip install 'zuna[quantization]'"
+                ) from error
             self.quantizer = FSQ(
                 levels = args.levels
             )
@@ -1639,7 +1652,6 @@ def build_fsdp_grouping_plan(model_args: DecoderTransformerArgs) -> List[Tuple[s
 
 
     return group_plan
-
 
 
 
